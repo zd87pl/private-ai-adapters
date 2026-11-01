@@ -1,17 +1,16 @@
 """
-Main WDVA class - High-level API for secure and private AI.
+Main WDVA class - high-level API around encrypted adapters.
 
-This is the primary interface for using WDVA. It handles:
-- Training adapters on your documents
-- Encrypting adapters securely
-- Loading and querying adapters locally
-- Managing encryption keys
+Status:
+- train() is not implemented and raises NotImplementedError.
+- query() decrypts and verifies the adapter but does not apply it yet;
+  answers come from the base model, and a UserWarning says so.
+- Encryption and decryption of adapter weights (wdva.crypto) work and are tested.
 
 Example:
     >>> wdva = WDVA()
-    >>> adapter_path, key = wdva.train(["my_doc.pdf"])
-    >>> wdva.load(adapter_path, key)
-    >>> response = wdva.query("What is this document about?")
+    >>> wdva.load("adapter.wdva", key_hex)
+    >>> response = wdva.query("What is this document about?")  # base model answer
 
 Copyright 2025 Enclave
 Licensed under the Apache License, Version 2.0
@@ -20,13 +19,13 @@ Licensed under the Apache License, Version 2.0
 from __future__ import annotations
 
 import logging
-import secrets
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from wdva.crypto import EncryptedAdapter
+from wdva.inference import DEFAULT_MODEL as DEFAULT_INFERENCE_MODEL
 from wdva.inference import LocalInference
 
 logger = logging.getLogger(__name__)
@@ -40,7 +39,7 @@ class WDVAStatus(Enum):
     """WDVA instance status."""
     READY = "ready"  # Initialized, no adapter loaded
     LOADED = "loaded"  # Adapter loaded and ready for queries
-    TRAINING = "training"  # Currently training (future use)
+    TRAINING = "training"  # Reserved; training is not implemented
 
 
 @dataclass(frozen=True)
@@ -64,15 +63,11 @@ class TrainingResult:
 
 class WDVA:
     """
-    Weight-Delta Vault Adapters - Secure and Private AI.
+    Weight-Delta Vault Adapters: encrypted adapters queried with a local model.
     
-    Train personalized AI models on your documents without compromising privacy.
-    
-    Key Features:
-    - Train adapters on your documents locally
-    - Encrypt adapters with military-grade cryptography
-    - Query locally (no cloud, no data sharing)
-    - Cryptographic deletion (destroy key = delete model)
+    What works today: holding an encrypted adapter and its key, verifying and
+    decrypting it in memory, and querying a local MLX base model. Training
+    adapters and applying them to the model are not implemented.
     
     Example:
         >>> # Simple usage
@@ -93,7 +88,7 @@ class WDVA:
         '_status',
     )
     
-    DEFAULT_MODEL = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+    DEFAULT_MODEL = DEFAULT_INFERENCE_MODEL
     
     def __init__(
         self,
@@ -108,7 +103,8 @@ class WDVA:
         Args:
             adapter_path: Path to encrypted adapter file (optional)
             encryption_key: Hex-encoded encryption key (optional)
-            model_name: Base model to use for inference (default: TinyLlama-1.1B)
+            model_name: MLX base model for inference
+                        (default: mlx-community/Llama-3.2-1B-Instruct-4bit)
             
         Note:
             If both adapter_path and encryption_key are provided, the adapter
@@ -159,83 +155,17 @@ class WDVA:
         **kwargs: Any,
     ) -> TrainingResult:
         """
-        Train an adapter on your documents.
+        Train an adapter on your documents. NOT IMPLEMENTED.
         
-        This is a simplified training interface. For production training with
-        full control, use the training utilities from the main Enclave repository.
+        Earlier versions returned a placeholder result with a key and a path
+        that was never written. This now fails loudly instead.
         
-        Args:
-            documents: List of document paths (PDF, TXT, etc.)
-            output_path: Where to save encrypted adapter 
-                        (default: ./adapters/{timestamp}.wdva)
-            max_samples: Maximum Q&A pairs to generate (default: 100)
-            epochs: Training epochs (default: 3)
-            **kwargs: Additional training parameters
-            
-        Returns:
-            TrainingResult with adapter_path and encryption_key_hex
-            
-        Note:
-            This boilerplate provides a simplified training interface.
-            Full training implementation requires additional setup.
-            See examples/arxiv_demo.py for a complete workflow.
+        Raises:
+            NotImplementedError: Always
         """
-        # Validate documents
-        if not documents:
-            raise ValueError("At least one document must be provided")
-        
-        document_paths = [Path(d) for d in documents]
-        for doc_path in document_paths:
-            if not doc_path.exists():
-                logger.warning("Document not found: %s", doc_path)
-        
-        # Generate encryption key
-        encryption_key_bytes = secrets.token_bytes(32)
-        encryption_key_hex = encryption_key_bytes.hex()
-        
-        # Determine output path
-        if output_path is None:
-            output_dir = Path("./adapters")
-            output_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Use first document name or timestamp
-            import time
-            timestamp = int(time.time())
-            output_path = output_dir / f"adapter_{timestamp}.wdva"
-        else:
-            output_path = Path(output_path)
-        
-        # Log training info
-        logger.info(
-            "Training adapter: %d documents, max_samples=%d, epochs=%d",
-            len(documents), max_samples, epochs
+        raise NotImplementedError(
+            "Adapter training is not implemented. See README.md, 'Status'."
         )
-        
-        # NOTE: Full training implementation requires:
-        # 1. Text extraction from documents
-        # 2. Q&A pair generation (using a larger model)
-        # 3. DoRA adapter training with PEFT
-        # 4. Weight encryption
-        #
-        # This boilerplate provides the structure but not full implementation.
-        # See the main Enclave repository for complete training code.
-        
-        logger.warning(
-            "Full training requires additional setup. "
-            "See examples/arxiv_demo.py for complete workflow."
-        )
-        
-        # Create placeholder result
-        # In production, this would contain actual training results
-        result = TrainingResult(
-            adapter_path=str(output_path),
-            encryption_key_hex=encryption_key_hex,
-            num_documents=len(documents),
-            num_samples=0,  # Placeholder
-        )
-        
-        logger.info("Training result: %s", result)
-        return result
     
     def load(
         self,
@@ -287,11 +217,12 @@ class WDVA:
         **kwargs: Any,
     ) -> str:
         """
-        Query your personalized AI model.
+        Query the local model with the loaded adapter.
         
-        The adapter is loaded ephemerally (in-memory only) and never
-        persists to disk. After inference, all decrypted data is securely
-        cleared from memory.
+        The adapter is decrypted in memory and verified, but it is NOT
+        applied to the model yet: the answer comes from the base model, and
+        a UserWarning says so. Decrypted weights are never written to disk;
+        Python cannot guarantee that the memory holding them is wiped.
         
         Args:
             prompt: Your question or prompt
@@ -328,9 +259,10 @@ class WDVA:
             prompt=prompt,
             max_tokens=max_tokens,
             temperature=temperature,
+            _stacklevel=3,
             **kwargs
         )
-        
+
         return response
     
     def query_base(
@@ -365,11 +297,10 @@ class WDVA:
     
     def unload(self) -> None:
         """
-        Unload the current adapter.
-        
-        This clears the adapter from memory but does NOT delete the
-        encrypted file or destroy the encryption key. Use delete() for
-        cryptographic deletion.
+        Forget the loaded adapter path and this object's reference to the key.
+
+        The encrypted file and every other copy of the key are untouched;
+        see delete() for what forgetting a key does and does not achieve.
         """
         self._adapter_path = None
         self._encryption_key = None
@@ -379,31 +310,19 @@ class WDVA:
     
     def delete(self) -> None:
         """
-        Cryptographically delete the adapter.
+        Forget this object's copy of the key and unload the model.
         
-        This destroys the encryption key, making the adapter permanently
-        inaccessible. The encrypted file can remain, but without the key,
-        it's cryptographically impossible to decrypt.
-        
-        This implements the "right to be forgotten"—once the key is destroyed,
-        the data is effectively deleted even if the encrypted blob persists.
-        
-        After calling this:
-        - The encryption key is destroyed
-        - The adapter cannot be decrypted
-        - You must call load() with a different adapter to continue
-        
-        Example:
-            >>> wdva.delete()  # Key destroyed, adapter inaccessible
-            >>> # Adapter file still exists but cannot be decrypted
+        This drops this object's reference to the key; it does not delete
+        the key anywhere else. The key was passed in by you, so other copies
+        (your password manager, a backup, an exported string, Python memory
+        not yet reused) are untouched. The adapter file becomes unreadable
+        only once EVERY copy of the key is destroyed; this method cannot
+        check that.
         """
         if self._encryption_key:
-            # Note: In Python, we can't truly zero memory, but we can
-            # remove the reference and let GC handle it
+            # Python strings are immutable, so the key cannot be zeroed here
             self._encryption_key = None
-            logger.info(
-                "Encryption key destroyed - adapter is cryptographically deleted"
-            )
+            logger.info("Dropped this object's reference to the encryption key")
         
         self._adapter_path = None
         self._status = WDVAStatus.READY
@@ -418,7 +337,7 @@ class WDVA:
         Export encryption key for backup.
         
         WARNING: Store this securely! Anyone with this key can decrypt
-        your adapter and access your trained model.
+        the adapter file.
         
         Returns:
             Hex-encoded encryption key (64 characters)

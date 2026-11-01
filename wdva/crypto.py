@@ -1,10 +1,10 @@
 """
 Encrypted Adapter - Core encryption/decryption for WDVA.
 
-This module handles the cryptographic operations that make WDVA secure:
+This module encrypts and authenticates adapter weight files:
 - XChaCha20-Poly1305 authenticated encryption
 - HKDF key derivation
-- Secure serialization/deserialization
+- In-memory safetensors serialization (no pickle)
 
 Security Notes:
 - Uses 256-bit keys (32 bytes) for XChaCha20-Poly1305
