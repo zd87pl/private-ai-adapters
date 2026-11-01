@@ -48,6 +48,7 @@ setup(
         "pycryptodome>=3.19.0",
         "cryptography>=41.0.0",
         "safetensors>=0.4.0",
+        "numpy>=1.24.0",
     ],
     
     # Optional dependencies
@@ -84,6 +85,8 @@ setup(
         "dev": [
             "pytest>=7.0.0",
             "pytest-cov>=4.0.0",
+            "pynacl>=1.5.0",
+            "zstandard>=0.22.0",
             "mypy>=1.0.0",
             "ruff>=0.1.0",
         ],
