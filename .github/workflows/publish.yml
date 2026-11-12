@@ -1,0 +1,110 @@
+# Publish wdva to PyPI with Trusted Publishing (OpenID Connect).
+#
+# No API token is stored anywhere. PyPI is told once to trust this workflow, and
+# each run then proves its identity to PyPI with a short-lived OIDC token.
+#
+# One-time setup, done by a maintainer:
+#
+#   1. On PyPI, open "Your account" -> "Publishing" and add a *pending* trusted
+#      publisher of type GitHub with exactly these values:
+#
+#        PyPI project name   wdva
+#        Owner               zd87pl
+#        Repository name     private-ai-adapters
+#        Workflow name       publish.yml
+#        Environment name    pypi
+#
+#      "Pending" means the project does not have to exist yet: the first
+#      successful run of this workflow creates it. Until that happens the name
+#      is not reserved, so check that it is still free.
+#
+#   2. In this repository, open Settings -> Environments and create an
+#      environment named "pypi". GitHub would create it on first use anyway,
+#      but creating it yourself lets you add required reviewers, so that every
+#      upload waits for a manual approval. That is recommended.
+#
+# To release:
+#
+#   1. Set the version in src/wdva/_version.py. That file is the only place the
+#      version lives; the build backend reads it from there.
+#   2. Move the "Unreleased" entries in CHANGELOG.md under the new version.
+#   3. Publish a GitHub release whose tag is the version with a "v" in front,
+#      for example v0.1.0. Publishing the release starts this workflow, and the
+#      build job refuses to continue if the tag and the version disagree.
+#
+# A version can be uploaded to PyPI only once. A file that was uploaded by
+# mistake can be yanked, but its version number cannot be reused.
+#
+# Starting the workflow by hand (workflow_dispatch) builds and publishes
+# whatever version is in src/wdva/_version.py on the chosen branch or tag.
+
+name: Publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check that the release tag matches the package version
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="$(python -c "exec(open('src/wdva/_version.py').read()); print(__version__)")"
+          if [ "$TAG" != "v$version" ] && [ "$TAG" != "$version" ]; then
+            echo "::error::Release tag '$TAG' does not match version '$version' in src/wdva/_version.py"
+            exit 1
+          fi
+          echo "Releasing wdva $version (tag $TAG)"
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install build twine
+          python -m build
+          twine check --strict dist/*
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/wdva
+    permissions:
+      # Required for Trusted Publishing. This job needs nothing else: it never
+      # checks out the repository and holds no long-lived secret.
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

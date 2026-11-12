@@ -1,0 +1,104 @@
+name: Bug report
+description: Something in wdva does not behave the way its documentation or its own messages say it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Do not post secrets
+
+        **Never paste keys, passphrases, vault files (`.wdva`), adapter weights or private documents into an issue.**
+        Issues are public and their edit history is kept. A key or passphrase that has been posted is compromised:
+        re-seal the affected vaults under a new one with `wdva rekey`, and remember that every copy of the old
+        vault file can still be opened with the old key.
+
+        Reproduce the problem with throwaway data instead: a key from `wdva keygen` and a few lines of made-up text.
+
+        ## Security problems go elsewhere
+
+        Do not open an issue for a vulnerability. Report it privately through
+        [this form](https://github.com/zd87pl/private-ai-adapters/security/advisories/new);
+        see [SECURITY.md](https://github.com/zd87pl/private-ai-adapters/blob/main/SECURITY.md).
+  - type: input
+    id: wdva-version
+    attributes:
+      label: wdva version
+      description: Output of `wdva --version`, or the commit hash if you installed from a checkout.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      description: Output of `python --version`.
+      placeholder: "3.12.7"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: Name, version and CPU architecture.
+      placeholder: "Ubuntu 24.04 x86_64 / macOS 15 arm64 / Windows 11 x86_64"
+    validations:
+      required: true
+  - type: checkboxes
+    id: extras
+    attributes:
+      label: Installed extras
+      description: Tick everything you installed. The bare `pip install wdva` is "core only".
+      options:
+        - label: core only
+        - label: "`wdva[ml]`"
+        - label: "`wdva[pdf]`"
+        - label: "`wdva[langchain]`"
+        - label: "`wdva[all]`"
+        - label: "editable install from a checkout (`pip install -e`)"
+  - type: textarea
+    id: ml-details
+    attributes:
+      label: ML details (if training or inference is involved)
+      description: >-
+        The base model, the device (cpu, cuda or mps), and the versions of torch, transformers, peft and
+        safetensors, for example from `python -m pip list`.
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: >-
+        The shortest script or sequence of commands that shows the problem, using throwaway keys and made-up
+        data. If it only happens with one particular file, describe that file (size, how it was produced)
+        instead of attaching it.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What you expected to happen, and where the documentation or a message led you to expect it.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: >-
+        What happened instead, with the full error message or traceback. Read it through before posting and
+        remove private file names, document text and model output.
+      render: text
+    validations:
+      required: true
+  - type: checkboxes
+    id: no-secrets
+    attributes:
+      label: Before you submit
+      options:
+        - label: This report contains no keys, passphrases, vault files, adapter weights or private documents.
+          required: true
+        - label: This is not a security vulnerability. (Those go through the private form linked above.)
+          required: true

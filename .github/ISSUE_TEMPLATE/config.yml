@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/zd87pl/private-ai-adapters/security/advisories/new
+    about: Please report vulnerabilities privately through this form, never in a public issue. SECURITY.md explains what to include.

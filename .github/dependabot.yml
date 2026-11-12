@@ -1,0 +1,18 @@
+version: 2
+
+updates:
+  # The actions used by the workflows in .github/workflows/.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # The Python requirements declared in pyproject.toml.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly

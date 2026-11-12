@@ -1,0 +1,36 @@
+# Optional local checks, run before each commit. CI does not depend on this file.
+#
+#   python -m pip install pre-commit
+#   pre-commit install
+#
+# The revisions below are pinned. Refresh them from time to time with
+# `pre-commit autoupdate`, and keep the ruff revision close to the ruff version
+# that CI installs so that both format the code the same way.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        # Two trailing spaces are a hard line break in Markdown; keep them.
+        args: [--markdown-linebreak-ext=md]
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.4
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: no-keys-or-vaults
+        name: refuse to commit key files and vaults
+        entry: Key files (*.key) and vaults (*.wdva) must never be committed.
+        language: fail
+        files: '\.(key|wdva)$'

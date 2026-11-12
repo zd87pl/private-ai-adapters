@@ -1,0 +1,6 @@
+# Store text with LF line endings on every platform, so that files read byte-for-byte
+# (test vectors, example data) are identical on Windows checkouts.
+* text=auto eol=lf
+*.wdva binary
+*.safetensors binary
+*.pdf binary

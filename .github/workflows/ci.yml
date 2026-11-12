@@ -1,0 +1,195 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "claude/**"
+  pull_request:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch or pull request supersedes the run in progress.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Every step runs in bash, including on Windows (Git Bash ships with the runner),
+# so the same command lines work on all three operating systems.
+defaults:
+  run:
+    shell: bash
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  # Make UTF-8 the default text encoding everywhere. It already is on Linux and
+  # macOS; on Windows this replaces the legacy code page.
+  PYTHONUTF8: "1"
+
+jobs:
+  lint:
+    name: Lint and type-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      # No torch here: pyproject.toml tells mypy to treat the ML stack as untyped,
+      # so the type check gives the same answer with or without it installed.
+      # Ruff is pinned (to the version in .pre-commit-config.yaml) because a new
+      # formatter release can change style and fail this job with no code change.
+      - name: Install
+        run: python -m pip install -e ".[test]" "ruff==0.17.4" mypy
+      - name: Ruff (lint)
+        run: ruff check .
+      - name: Ruff (format)
+        run: ruff format --check .
+      - name: Mypy (strict)
+        run: mypy
+
+  core:
+    # The core install depends on pycryptodome alone. This job checks that it
+    # works by itself on Linux, macOS and Windows; tests marked "ml" skip.
+    name: Core (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install (core and test tools only)
+        run: python -m pip install -e ".[test]"
+      - name: Check that the ML stack is absent
+        run: |
+          python - <<'PY'
+          import importlib.util
+          import sys
+
+          ml_stack = ("torch", "transformers", "peft", "safetensors")
+          found = [name for name in ml_stack if importlib.util.find_spec(name)]
+          if found:
+              sys.exit("this job must run without the ML stack, found: " + ", ".join(found))
+          PY
+      - name: Test
+        run: pytest
+
+  ml:
+    name: ML (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    env:
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      TOKENIZERS_PARALLELISM: "false"
+      # The tests build their own tiny models and need nothing from the Hugging
+      # Face Hub. Offline mode turns an accidental download into a test failure.
+      HF_HUB_OFFLINE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install PyTorch (CPU build)
+        run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Install (all extras)
+        run: python -m pip install -e ".[ml,langchain,pdf,test]"
+      - name: Test with coverage
+        run: pytest --cov --cov-report=term-missing:skip-covered --cov-report=xml
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-py${{ matrix.python-version }}
+          path: coverage.xml
+          if-no-files-found: error
+
+  ml-minimum:
+    # Keeps the version floors in pyproject.toml honest: the full suite must pass
+    # on the oldest releases of each dependency that the package claims to support.
+    name: ML (minimum supported versions)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      TOKENIZERS_PARALLELISM: "false"
+      HF_HUB_OFFLINE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install PyTorch (CPU build, minimum version)
+        run: python -m pip install "torch==2.2.2" --index-url https://download.pytorch.org/whl/cpu
+      - name: Install the minimum versions of everything else
+        # torch 2.2 predates NumPy 2, hence the NumPy pin.
+        run: >
+          python -m pip install
+          "numpy<2"
+          "pycryptodome==3.19.0"
+          "transformers==4.56.0"
+          "peft==0.15.0"
+          "safetensors==0.4.3"
+          "pypdf==4.0.0"
+          "langchain-core==0.3.0"
+      - name: Install the package (keeps the pins above, which satisfy its floors)
+        run: python -m pip install -e ".[ml,langchain,pdf,test]"
+      - name: Show resolved versions
+        run: python -m pip list
+      - name: Test
+        run: pytest
+
+  package:
+    name: Build and install the wheel
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install build twine
+          python -m build
+          twine check --strict dist/*
+      - name: Install the wheel into a fresh virtual environment (core only)
+        run: |
+          python -m venv "$RUNNER_TEMP/wheel-venv"
+          "$RUNNER_TEMP/wheel-venv/bin/python" -m pip install dist/*.whl
+      - name: Smoke-test the installed wheel
+        # Run from outside the checkout so that only the installed wheel is importable.
+        working-directory: ${{ runner.temp }}
+        run: |
+          source wheel-venv/bin/activate
+          wdva --version
+          python -c "import wdva; print(wdva.__version__)"
+          python -c "from importlib.resources import files; assert files('wdva').joinpath('py.typed').is_file(), 'py.typed is missing from the wheel'"
+          wdva keygen -o k.key
+          python -c "import wdva; k = wdva.SecretKey.from_file('k.key'); wdva.seal_to_file('t.wdva', b'round trip', key=k); assert wdva.unseal_file('t.wdva', key=k).payload == b'round trip'; print('round trip ok')"
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
