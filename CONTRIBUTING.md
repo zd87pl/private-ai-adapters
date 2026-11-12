@@ -116,9 +116,11 @@ twine check --strict dist/*
 
 CI (`.github/workflows/ci.yml`) runs all of the above on every pull request and
 on pushes to `main`: lint and types; the core tests on Linux, macOS and Windows
-with only the core install; the full suite with the ML stack on Linux; and a
-build of the wheel, which is then installed into a clean environment and
-smoke-tested.
+with only the core install; the full suite with the ML stack on Linux, on macOS
+on Apple Silicon, and against the oldest supported version of every dependency;
+and a build of the wheel, which is then installed into a clean environment and
+smoke-tested. If you raise a dependency's minimum version in `pyproject.toml`,
+raise the matching pin in the `ml-minimum` job too.
 
 ## Project principles
 
@@ -137,7 +139,11 @@ very good reason, written down in the pull request.
 3. **Every claim in the docs is backed by a test.** If the README, a docstring
    or `--help` says wdva does something, a test must show it. If you cannot
    test a claim, do not make it. No unmeasured numbers, and no security or
-   compliance language that the code cannot support.
+   compliance language that the code cannot support. `tests/test_docs.py`
+   keeps the pages themselves honest: links and anchors must resolve, every
+   `wdva` command line shown must be accepted by the real parser, and Python
+   snippets must compile. Output shown in the docs is copied from real runs;
+   re-run and replace it when behaviour changes.
 4. **The vault format is a contract.** People will keep `.wdva` files for
    years. Any change to the bytes needs a format version bump, an update to
    [docs/FORMAT.md](docs/FORMAT.md) and new known-answer vectors. See below.

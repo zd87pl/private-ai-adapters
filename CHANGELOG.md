@@ -72,7 +72,9 @@ neither train an adapter nor apply one, and it was never published.
 - **Typing**: the package ships `py.typed` and passes `mypy --strict`.
 - **Test suite** that runs offline: known-answer vectors for the format, an
   independent reader written from the specification, and end-to-end training
-  and inference tests against tiny models built on the fly.
+  and inference tests against tiny models built on the fly. The documentation
+  is under test too: links, every command line shown, and the Python snippets
+  of the README and the guide, which are run as printed.
 - **Examples** in `examples/`: a quickstart, two people's adapters hot-swapped
   on one base model, sealing an adapter made with plain PEFT, and a LangChain
   chat.

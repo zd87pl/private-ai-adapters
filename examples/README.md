@@ -164,6 +164,11 @@ Two things worth noticing:
   runs the model holds each person's key and plaintext adapter while it serves
   them, and sees their prompts and answers. The vault protects an adapter at rest
   and in transit: without its key it cannot be opened. It does nothing more.
+- The script serves one request at a time, so `with engine.adapter(...)` is
+  enough. When several threads share an engine, another thread can swap the
+  adapter in the middle of such a block. Pass the adapter with the request
+  instead, `engine.generate(question, adapter="alice.wdva", key=alice_key)`,
+  which applies, uses and removes it under one lock.
 
 ## seal_existing_adapter.py
 
