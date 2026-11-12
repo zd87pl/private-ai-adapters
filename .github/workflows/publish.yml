@@ -30,13 +30,16 @@
 #   2. Move the "Unreleased" entries in CHANGELOG.md under the new version.
 #   3. Publish a GitHub release whose tag is the version with a "v" in front,
 #      for example v0.1.0. Publishing the release starts this workflow, and the
-#      build job refuses to continue if the tag and the version disagree.
+#      build job refuses to continue if the tag and the version disagree. The
+#      tag matters beyond bookkeeping: the links in the package description on
+#      PyPI point at the files of that tag (see pyproject.toml).
 #
 # A version can be uploaded to PyPI only once. A file that was uploaded by
 # mistake can be yanked, but its version number cannot be reused.
 #
 # Starting the workflow by hand (workflow_dispatch) builds and publishes
-# whatever version is in src/wdva/_version.py on the chosen branch or tag.
+# whatever version is in src/wdva/_version.py on the chosen branch or tag. Create
+# the matching "v" tag as well, or the links on the PyPI page will not resolve.
 
 name: Publish
 
@@ -71,8 +74,8 @@ jobs:
           TAG: ${{ github.event.release.tag_name }}
         run: |
           version="$(python -c "exec(open('src/wdva/_version.py').read()); print(__version__)")"
-          if [ "$TAG" != "v$version" ] && [ "$TAG" != "$version" ]; then
-            echo "::error::Release tag '$TAG' does not match version '$version' in src/wdva/_version.py"
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::Release tag '$TAG' must be 'v$version', the version in src/wdva/_version.py with a 'v' in front"
             exit 1
           fi
           echo "Releasing wdva $version (tag $TAG)"
