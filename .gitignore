@@ -95,3 +95,6 @@ logs/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Tool caches
+.ruff_cache/
