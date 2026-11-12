@@ -17,6 +17,13 @@ that runs the model holds each person's key and plaintext adapter while it serve
 them, and it sees their prompts and answers. The vault protects adapters at rest and
 in transit; it is not a sandbox between the users of one process.
 
+This script serves one request at a time, so a ``with engine.adapter(...)`` block is
+fine. If several threads share an engine, another thread could swap the adapter in the
+middle of such a block. There, bind the adapter to the request instead, which applies,
+uses and removes it under one lock::
+
+    engine.generate(question, adapter="alice.wdva", key=alice_key)
+
 Run ``python examples/hot_swap.py`` (needs ``pip install 'wdva[ml]'``). It trains two
 adapters, so budget twice the quickstart's training time; a second run with the same
 ``--workdir`` reuses the vaults and only swaps. The recall counts in (a) are whatever

@@ -28,7 +28,7 @@ neither train an adapter nor apply one, and it was never published.
 - **`SecretKey`**: a 256-bit key that is redacted in `repr()`, refuses to be
   pickled, compares in constant time, is saved with owner-only permissions and
   can be wiped in place (best effort). `destroy_key_file` overwrites and
-  deletes a key file.
+  deletes a key file, and refuses anything that is not one.
 - **`AdapterBundle`**: a PEFT adapter held in memory (adapter config,
   safetensors weights and private notes), encrypted as one payload, with
   lossless import from and export to a standard PEFT adapter directory. It
@@ -37,16 +37,28 @@ neither train an adapter nor apply one, and it was never published.
   fine-tune a LoRA or DoRA adapter on documents (text, Markdown, and PDF with
   the `pdf` extra), raw strings and prompt/response examples, and seal the
   result straight into a vault. The loop writes no checkpoints and no plaintext
-  adapter files, and reports the loss before and after.
+  adapter files. It reports the loss before and after, measured on every
+  training sequence or on a fixed random sample of them, and says how many.
+  Malformed examples and an unwritable output location are reported before
+  the base model is loaded.
 - **The `WDVA` engine**: one base model with encrypted adapters decrypted and
-  injected in memory. Loading verifies that every adapter tensor is present
-  with the right shape and raises `AdapterMismatchError` otherwise, leaving the
-  base model as it was. Adapters can be hot-swapped, are zeroed in memory when
+  injected in memory. Adapters can be hot-swapped, are zeroed in memory when
   unloaded (best effort), and can be bypassed per call with
   `use_adapter=False` for before-and-after comparisons.
+- **Adapters cannot change the base model.** Only plain LoRA and DoRA adapters
+  are accepted. The adapter's configuration goes through an allowlist, every
+  tensor must be a LoRA or DoRA tensor present with the right shape, and both
+  checks run before the model is touched; anything else raises
+  `AdapterMismatchError`. Adapters saved with `modules_to_save` or with bias
+  terms, which would overwrite base weights, are refused. Injection is all or
+  nothing, a failed load leaves no adapter applied, and after every removal
+  the engine checks that the base model's structure is what it was when
+  loaded, and reloads the model if it is not.
 - **Generation**: `generate`, and `stream` for output that arrives piece by
   piece, with chat templates applied the same way at training and at inference
-  time.
+  time. Both accept `adapter=` and `key=` to apply, use and remove an adapter
+  for one request under a single lock, which is the pattern to use when
+  several threads share an engine.
 - **Command line**: `wdva keygen`, `seal`, `unseal`, `inspect`, `rekey`,
   `destroy-key`, `train`, `query` and `chat`. The first six need only the core
   install.
@@ -65,9 +77,14 @@ neither train an adapter nor apply one, and it was never published.
   on one base model, sealing an adapter made with plain PEFT, and a LangChain
   chat.
 - **Continuous integration**: lint and type checks; the core tests on Linux,
-  macOS and Windows; the full suite with the ML stack on Linux; a build of the
-  wheel that is installed and smoke-tested; and a release workflow that
-  publishes to PyPI through Trusted Publishing.
+  macOS and Windows; the full suite with the ML stack on Linux, on macOS on
+  Apple Silicon, and against the oldest supported version of every
+  dependency; a build of the wheel that is installed and smoke-tested; and a
+  release workflow that publishes to PyPI through Trusted Publishing.
+- **Errors and warnings with one root each**: failures specific to the package
+  (a wrong key, a damaged vault, an adapter that does not fit, a training run
+  that diverged) derive from `WDVAError`, and its warnings from `WDVAWarning`.
+  Bad arguments and file problems are the usual built-in exceptions.
 
 ### Changed
 
@@ -86,7 +103,9 @@ neither train an adapter nor apply one, and it was never published.
   nothing to migrate; such a file is rejected with an explanatory error.
 - The MLX backend. Like the rest of the prototype's inference code, it never
   applied an adapter. On Apple Silicon the engine selects PyTorch's MPS device
-  instead; that path is not exercised by CI.
+  instead. CI runs the full suite on Apple Silicon, but its runners expose no
+  Metal device, so the test that trains and generates on MPS runs only on a
+  real Mac.
 - zstd compression. Trained weights barely compress, and leaving it out removes
   a class of decompression problems.
 - The side effect of setting `HF_HUB_ENABLE_HF_TRANSFER` in the environment on
@@ -106,6 +125,10 @@ neither train an adapter nor apply one, and it was never published.
 - **The header is authenticated exactly as stored.** Every byte from the magic
   number to the end of the header is associated data for the AEAD. Unknown
   header fields are rejected.
+- **Strict header parsing.** Duplicate keys, `NaN` and `Infinity`, nesting
+  deeper than 64 levels, and values of the wrong type are rejected, by writers
+  and readers alike, so that two readers cannot disagree about what an
+  authentic file says and a small hostile file cannot crash a parser.
 - **Bounded scrypt parameters.** The cost recorded in a passphrase-locked vault
   is checked against fixed bounds before scrypt runs, so a hostile file cannot
   make a reader allocate arbitrary amounts of memory.
@@ -113,9 +136,17 @@ neither train an adapter nor apply one, and it was never published.
   takes a key file, an interactive passphrase prompt or environment variables,
   and argument abbreviation is disabled so that `--key` is not accepted as a
   short form of `--key-file`.
-- **Owner-only files.** Key files, vaults and plaintext exports are created
-  with mode 0600 on POSIX systems, vaults and exports through an atomic
-  write, and reading a key file that others can access raises a warning.
+- **Owner-only files, written atomically.** Key files, vaults and plaintext
+  exports are written to a new file with mode 0600 on POSIX systems and then
+  moved into place, so a failure never leaves a damaged file and an existing
+  file with loose permissions is never written through. Refusing to overwrite
+  is decided atomically. Reading a key file that others can access raises a
+  warning.
+- **Weights are validated as strictly as the safetensors library does** before
+  they are sealed or reported, and values read from a vault are printed
+  without control characters.
+- **An engine cannot be pickled or copied**, since that would write a loaded
+  adapter out in plaintext.
 - **Pickle adapters are refused.** Only safetensors weights are accepted;
   `adapter_model.bin` is rejected because loading it can execute code.
 - Base models are loaded without enabling `trust_remote_code`.
