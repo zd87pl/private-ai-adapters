@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import gc
+import math
 import os
 import threading
 import warnings
@@ -77,9 +78,18 @@ class WDVA:
 
     The base model is loaded on first use, not in the constructor.
 
-    Instances are thread-safe in the sense that operations are serialised: a
-    generation never interleaves with an adapter swap. One engine holds one
-    adapter at a time, so serving several users means queueing their requests.
+    **Threads.** Each call is serialised: a generation never interleaves with
+    an adapter swap. But two separate calls are two separate steps, so
+    ``load()`` followed by ``generate()`` (or a ``with engine.adapter(...)``
+    block) is *not* one atomic unit: another thread can swap the adapter in
+    between. When several threads share an engine, bind the adapter to the
+    request instead::
+
+        engine.generate(prompt, adapter="alice.wdva", key=alice_key)
+
+    That decrypts, applies, generates and removes under a single lock, so one
+    user's request can never be answered with another user's adapter. One engine
+    still holds one adapter at a time, so concurrent requests queue.
     """
 
     def __init__(
@@ -103,9 +113,12 @@ class WDVA:
         self._peft: Any = None
         self._adapter_info: AdapterInfo | None = None
         self._external = False  # True when the caller supplied the model (from_loaded)
+        self._structure: Any = None  # fingerprint of the bare base model
         # A plain Lock (not RLock): a streaming generator may be finalised by a
         # different thread than the one that started it.
         self._lock = threading.Lock()
+        self._load_lock = threading.Lock()  # the base model is loaded exactly once
+        self._training_thread: int | None = None
 
     @classmethod
     def from_loaded(cls, model: Any, tokenizer: Any, *, name: str | None = None) -> WDVA:
@@ -118,6 +131,7 @@ class WDVA:
         engine._external = True
         engine._device = str(next(model.parameters()).device)
         model.eval()
+        engine._structure = _ml.structure(model)
         return engine
 
     # -- state ------------------------------------------------------------
@@ -171,20 +185,40 @@ class WDVA:
 
     def _ensure_model(self) -> tuple[Any, Any]:
         if self._base is None:
-            if self._external:
-                raise WDVAError(
-                    "this engine wrapped a model you supplied and has been closed; "
-                    "create a new one with WDVA.from_loaded()"
-                )
-            _ml.require_ml()
-            self._device = _ml.resolve_device(self._device_request)
-            self._base, self._tokenizer = _ml.load_base_model(
-                self._base_model_name,
-                device=self._device,
-                dtype=_ml.resolve_dtype(self._dtype_request, self._device),
-                local_files_only=self._local_files_only,
-            )
+            with self._load_lock:
+                if self._base is None:
+                    if self._external:
+                        raise WDVAError(
+                            "this engine wrapped a model you supplied and no longer holds it; "
+                            "create a new one with WDVA.from_loaded()"
+                        )
+                    _ml.require_ml()
+                    self._device = _ml.resolve_device(self._device_request)
+                    base, self._tokenizer = _ml.load_base_model(
+                        self._base_model_name,
+                        device=self._device,
+                        dtype=_ml.resolve_dtype(self._dtype_request, self._device),
+                        local_files_only=self._local_files_only,
+                    )
+                    self._structure = _ml.structure(base)
+                    self._base = base
         return self._base, self._tokenizer
+
+    @contextlib.contextmanager
+    def _locked(self) -> Iterator[None]:
+        """Hold the engine for one operation."""
+        self._refuse_reentry()
+        with self._lock:
+            yield
+
+    def _refuse_reentry(self) -> None:
+        # train() runs entirely in the calling thread while holding the lock, so a
+        # call back into the engine from an on_step callback would wait forever.
+        if self._training_thread == threading.get_ident():
+            raise WDVAError(
+                "the engine is busy training in this thread; "
+                "do not call it from an on_step callback"
+            )
 
     # -- adapters ---------------------------------------------------------
 
@@ -202,44 +236,86 @@ class WDVA:
         file or an adapter for a different model fails here rather than at the
         first query.
 
+        **Fails closed.** If loading fails for any reason, no adapter is left
+        applied - not the new one, and not the one that was applied before. A
+        caller that falls back to an un-personalised answer after a failed load
+        therefore gets the bare base model, never the previous user's adapter.
+
         Raises:
             WrongKeyError, IntegrityError, VaultFormatError: see :mod:`wdva.vault`.
-            AdapterMismatchError: the adapter does not fit this base model.
+            AdapterMismatchError: the adapter does not fit this base model, or
+                would modify it (see :func:`wdva._ml.build_inference_config`).
         """
+        try:
+            bundle, source = self._open(adapter, key, passphrase)
+            with self._locked():
+                return self._apply_locked(bundle, source, stacklevel=4)
+        except BaseException:
+            with contextlib.suppress(WDVAError):
+                self.unload()
+            raise
+
+    @staticmethod
+    def _open(
+        adapter: str | os.PathLike[str] | AdapterBundle,
+        key: KeyLike | None,
+        passphrase: str | None,
+    ) -> tuple[AdapterBundle, str | None]:
+        """Decrypt (outside the lock: it needs no access to the model)."""
         if isinstance(adapter, AdapterBundle):
             if key is not None or passphrase is not None:
                 raise TypeError(
                     "key/passphrase are only used to open a vault file; "
                     "an AdapterBundle is already decrypted"
                 )
-            bundle, source = adapter, None
-        else:
-            # Decrypt before touching the model: a bad key should cost nothing.
-            bundle = AdapterBundle.load(adapter, key=key, passphrase=passphrase)
-            source = str(Path(adapter))
-        with self._lock:
-            self._unload_locked()
-            base, _ = self._ensure_model()
-            recorded = bundle.base_model
-            if recorded and recorded != self._base_model_name:
-                warnings.warn(
-                    f"adapter was made for {recorded!r} but is being loaded into "
-                    f"{self._base_model_name!r}",
-                    BaseModelMismatchWarning,
-                    stacklevel=2,
-                )
-            self._peft = _ml.apply_adapter(base, bundle)
-            summary = bundle.summary()
-            self._adapter_info = AdapterInfo(
-                source=source,
-                base_model=recorded,
-                peft_type=summary["peft_type"],
-                rank=summary["rank"],
-                use_dora=bool(summary["use_dora"]),
-                tensors=summary["tensors"],
-                parameters=summary["parameters"],
+            return adapter, None
+        return AdapterBundle.load(adapter, key=key, passphrase=passphrase), str(Path(adapter))
+
+    def _open_for_request(
+        self,
+        adapter: str | os.PathLike[str] | AdapterBundle | None,
+        key: KeyLike | None,
+        passphrase: str | None,
+    ) -> tuple[AdapterBundle, str | None] | None:
+        """Open the adapter named by one request, failing closed like :meth:`load`."""
+        if adapter is None:
+            return None
+        try:
+            return self._open(adapter, key, passphrase)
+        except BaseException:
+            with contextlib.suppress(WDVAError):
+                self.unload()
+            raise
+
+    def _apply_locked(
+        self, bundle: AdapterBundle, source: str | None, *, stacklevel: int
+    ) -> AdapterInfo:
+        self._unload_locked()
+        base, _ = self._ensure_model()
+        recorded = bundle.base_model
+        if recorded and recorded != self._base_model_name:
+            warnings.warn(
+                f"adapter was made for {recorded!r} but is being loaded into "
+                f"{self._base_model_name!r}",
+                BaseModelMismatchWarning,
+                stacklevel=stacklevel,
             )
-            return self._adapter_info
+        try:
+            self._peft = _ml.apply_adapter(base, bundle)
+        except BaseException:
+            self._verify_base(raise_on_damage=False)
+            raise
+        summary = bundle.summary()
+        self._adapter_info = AdapterInfo(
+            source=source,
+            base_model=recorded,
+            peft_type=summary["peft_type"],
+            rank=summary["rank"],
+            use_dora=bool(summary["use_dora"]),
+            tensors=summary["tensors"],
+            parameters=summary["parameters"],
+        )
+        return self._adapter_info
 
     def unload(self) -> None:
         """Zero the adapter's weights in memory and detach it. Safe to call twice.
@@ -247,7 +323,7 @@ class WDVA:
         The base model is left exactly as it was before :meth:`load`. The vault
         file and your key are untouched.
         """
-        with self._lock:
+        with self._locked():
             self._unload_locked()
 
     def _unload_locked(self) -> None:
@@ -259,6 +335,28 @@ class WDVA:
             self._peft = None
             self._adapter_info = None
             self._release_memory()
+        self._verify_base(raise_on_damage=True)
+
+    def _verify_base(self, *, raise_on_damage: bool) -> None:
+        """Never keep serving from a base model whose structure an adapter changed.
+
+        Adapters that could do that are refused before they are applied, so this
+        is a second line of defence. If the bare model no longer has the modules
+        and parameters it started with, it is discarded (and loaded afresh on
+        next use) rather than trusted.
+        """
+        if self._base is None or self._structure is None:
+            return
+        if _ml.structure(self._base) == self._structure:
+            return
+        self._base = None
+        self._tokenizer = None
+        self._release_memory()
+        if raise_on_damage:
+            raise WDVAError(
+                "removing the adapter did not restore the base model, so the base model was "
+                "discarded; it will be loaded again on next use"
+            )
 
     @contextlib.contextmanager
     def adapter(
@@ -268,12 +366,31 @@ class WDVA:
         key: KeyLike | None = None,
         passphrase: str | None = None,
     ) -> Iterator[AdapterInfo]:
-        """Apply an adapter for the duration of a ``with`` block, then remove it."""
+        """Apply an adapter for the duration of a ``with`` block, then remove it.
+
+        Convenient in scripts and single-threaded code. It is **not** an
+        isolation boundary between threads: the block is a ``load()``, your
+        code, then an ``unload()``, and another thread can swap the adapter in
+        between. In a multi-threaded server pass ``adapter=`` to
+        :meth:`generate` or :meth:`stream` instead.
+        """
         info = self.load(adapter, key=key, passphrase=passphrase)
         try:
             yield info
         finally:
             self.unload()
+
+    @contextlib.contextmanager
+    def _request_adapter(self, opened: tuple[AdapterBundle, str | None] | None) -> Iterator[None]:
+        """With the lock held: wear ``opened`` for one request, then take it off."""
+        if opened is None:
+            yield
+            return
+        self._apply_locked(*opened, stacklevel=6)
+        try:
+            yield
+        finally:
+            self._unload_locked()
 
     # -- generation -------------------------------------------------------
 
@@ -281,6 +398,9 @@ class WDVA:
         self,
         prompt: str | Sequence[Mapping[str, str]],
         *,
+        adapter: str | os.PathLike[str] | AdapterBundle | None = None,
+        key: KeyLike | None = None,
+        passphrase: str | None = None,
         max_new_tokens: int = 256,
         temperature: float = 0.7,
         top_p: float = 0.9,
@@ -293,10 +413,17 @@ class WDVA:
 
         Args:
             prompt: A string (treated as one user turn) or a list of chat messages.
-            max_new_tokens: Upper bound on generated tokens.
+            adapter: A vault (or decrypted bundle) to wear **for this request
+                only**. It is applied, used and removed under one lock, which
+                makes this the safe way to serve several users from threads.
+                Any adapter applied earlier with :meth:`load` is removed, and
+                afterwards the engine has none.
+            key, passphrase: Open ``adapter`` when it is a vault path.
+            max_new_tokens: Upper bound on generated tokens. Reduced if the
+                prompt leaves less room than that in the model's context window.
             temperature: ``0`` selects greedy decoding; higher values sample.
             top_p: Nucleus sampling threshold (ignored when ``temperature == 0``).
-            system: Optional system prompt for chat models.
+            system: Optional system prompt.
             raw: Send a string prompt as-is, without the chat template.
             use_adapter: ``False`` answers with the bare base model even while an
                 adapter is applied - handy for before/after comparisons.
@@ -304,7 +431,8 @@ class WDVA:
         """
         import torch
 
-        with self._lock:
+        opened = self._open_for_request(adapter, key, passphrase)
+        with self._locked(), self._request_adapter(opened):
             model, inputs, gen = self._prepare(
                 prompt,
                 max_new_tokens=max_new_tokens,
@@ -323,6 +451,9 @@ class WDVA:
         self,
         prompt: str | Sequence[Mapping[str, str]],
         *,
+        adapter: str | os.PathLike[str] | AdapterBundle | None = None,
+        key: KeyLike | None = None,
+        passphrase: str | None = None,
         max_new_tokens: int = 256,
         temperature: float = 0.7,
         top_p: float = 0.9,
@@ -334,11 +465,15 @@ class WDVA:
         """Like :meth:`generate`, but yields text pieces as they are produced.
 
         The engine stays locked until the iterator is exhausted or closed, so
-        always consume it fully or call ``.close()`` on it.
+        always consume it fully or call ``.close()`` on it, and do not call the
+        engine again from inside the loop that consumes it: that call would wait
+        for the stream to finish, which it cannot while the loop is waiting.
         """
         import torch
         from transformers import StoppingCriteria, StoppingCriteriaList, TextIteratorStreamer
 
+        if "streamer" in generate_kwargs:
+            raise ValueError("stream() manages its own streamer; do not pass one")
         cancelled = threading.Event()
 
         class _Cancel(StoppingCriteria):  # type: ignore[misc]
@@ -350,47 +485,53 @@ class WDVA:
                     device=input_ids.device,
                 )
 
+        opened = self._open_for_request(adapter, key, passphrase)
+        self._refuse_reentry()
         self._lock.acquire()
         worker: threading.Thread | None = None
         try:
-            model, inputs, gen = self._prepare(
-                prompt,
-                max_new_tokens=max_new_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                system=system,
-                raw=raw,
-                extra=generate_kwargs,
-            )
-            streamer = TextIteratorStreamer(
-                self._tokenizer, skip_prompt=True, skip_special_tokens=True
-            )
-            gen["streamer"] = streamer
-            gen["stopping_criteria"] = StoppingCriteriaList(
-                [*gen.get("stopping_criteria", []), _Cancel()]
-            )
-            failure: list[BaseException] = []
-
-            def run() -> None:
+            with self._request_adapter(opened):
                 try:
-                    with self._adapter_scope(use_adapter), torch.no_grad():
-                        model.generate(**inputs, **gen)
-                except BaseException as exc:
-                    failure.append(exc)
-                    streamer.end()  # unblock the consumer
+                    model, inputs, gen = self._prepare(
+                        prompt,
+                        max_new_tokens=max_new_tokens,
+                        temperature=temperature,
+                        top_p=top_p,
+                        system=system,
+                        raw=raw,
+                        extra=generate_kwargs,
+                    )
+                    streamer = TextIteratorStreamer(
+                        self._tokenizer, skip_prompt=True, skip_special_tokens=True
+                    )
+                    gen["streamer"] = streamer
+                    gen["stopping_criteria"] = StoppingCriteriaList(
+                        [*gen.get("stopping_criteria", []), _Cancel()]
+                    )
+                    failure: list[BaseException] = []
 
-            worker = threading.Thread(target=run, name="wdva-generate", daemon=True)
-            worker.start()
-            for piece in streamer:
-                if piece:
-                    yield piece
-            worker.join()
-            if failure:
-                raise failure[0]
+                    def run() -> None:
+                        try:
+                            with self._adapter_scope(use_adapter), torch.no_grad():
+                                model.generate(**inputs, **gen)
+                        except BaseException as exc:
+                            failure.append(exc)
+                            streamer.end()  # unblock the consumer
+
+                    worker = threading.Thread(target=run, name="wdva-generate", daemon=True)
+                    worker.start()
+                    for piece in streamer:
+                        if piece:
+                            yield piece
+                    worker.join()
+                    if failure:
+                        raise failure[0]
+                finally:
+                    # Stop the model before the adapter is taken off underneath it.
+                    cancelled.set()
+                    if worker is not None:
+                        worker.join()
         finally:
-            cancelled.set()
-            if worker is not None:
-                worker.join()
             self._lock.release()
 
     def _prepare(
@@ -408,8 +549,8 @@ class WDVA:
 
         if max_new_tokens < 1:
             raise ValueError("max_new_tokens must be >= 1")
-        if temperature < 0:
-            raise ValueError("temperature must be >= 0")
+        if not (math.isfinite(temperature) and temperature >= 0):
+            raise ValueError("temperature must be a finite number >= 0")
         if isinstance(prompt, str) and not prompt.strip():
             raise ValueError("prompt is empty")
         base, tokenizer = self._ensure_model()
@@ -418,6 +559,13 @@ class WDVA:
         ids = _ml.encode_text(tokenizer, text, templated=templated)
         if not ids:
             raise ValueError("prompt is empty after tokenisation")
+        window = _ml.context_window(base)
+        if window is not None:
+            if len(ids) >= window:
+                raise ValueError(
+                    f"prompt is {len(ids)} tokens, but this model's context window is {window}"
+                )
+            max_new_tokens = min(max_new_tokens, window - len(ids))
         input_ids = torch.tensor([ids], dtype=torch.long, device=self._device)
         inputs = {"input_ids": input_ids, "attention_mask": torch.ones_like(input_ids)}
         gen: dict[str, Any] = {
@@ -457,23 +605,29 @@ class WDVA:
     ) -> TrainingResult:
         """Train an adapter on this engine's base model and seal it to ``output_path``.
 
-        Reuses the already loaded base model, which is handed back unchanged.
+        Reuses the already loaded base model, which is handed back unchanged:
+        same weights, same dtypes (a half-precision model is trained in float32
+        and every tensor is then returned to the dtype it had), same flags.
         See :func:`wdva.training.train_adapter` for the arguments. The new
         adapter is **not** applied afterwards; call :meth:`load` for that.
+
+        The engine is busy for the whole run. An ``on_step`` callback must not
+        call back into the engine; doing so raises instead of waiting forever.
         """
         import torch
 
         from wdva.training import train_adapter
 
-        with self._lock:
+        with self._locked():
             if self._peft is not None:
                 raise WDVAError("unload the current adapter before training a new one")
             base, tokenizer = self._ensure_model()
-            original_dtype = base.dtype
-            if original_dtype != torch.float32:
-                # Half-precision weights convert to float32 and back without loss.
-                base.to(torch.float32)
+            dtypes = _ml.snapshot_dtypes(base)
+            self._training_thread = threading.get_ident()
             try:
+                if base.dtype != torch.float32:
+                    # Half-precision weights convert to float32 and back without loss.
+                    base.to(torch.float32)
                 return train_adapter(
                     (base, tokenizer),
                     output_path,
@@ -489,9 +643,10 @@ class WDVA:
                     base_model_name=self._base_model_name,
                 )
             finally:
-                if original_dtype != torch.float32:
-                    base.to(original_dtype)
+                self._training_thread = None
+                _ml.restore_dtypes(base, dtypes)
                 self._release_memory()
+                self._verify_base(raise_on_damage=False)
 
     # -- lifecycle --------------------------------------------------------
 
@@ -501,11 +656,13 @@ class WDVA:
         An engine created from a model id loads it again on next use. One
         created with :meth:`from_loaded` cannot be reused after this.
         """
-        with self._lock:
-            self._unload_locked()
-            self._base = None
-            self._tokenizer = None
-            self._release_memory()
+        with self._locked():
+            try:
+                self._unload_locked()
+            finally:
+                self._base = None
+                self._tokenizer = None
+                self._release_memory()
 
     def __enter__(self) -> WDVA:
         return self

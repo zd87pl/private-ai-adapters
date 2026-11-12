@@ -40,7 +40,8 @@ from wdva.keys import KeyLike
 __all__ = ["TrainingConfig", "TrainingResult", "TrainingWarning", "train_adapter"]
 
 _IGNORE = -100
-_EVAL_SEQUENCES = 32
+_LOSS_SAMPLE = 256
+"""At most this many sequences are used to measure the loss before and after."""
 _FEW_STEPS = 20
 
 
@@ -73,7 +74,8 @@ class TrainingConfig:
     PEFT's default for the architecture, or ``"all-linear"`` when it has none."""
     epochs: int = 3
     """Passes over the data. A handful of short documents needs many more (20-40)
-    before the adapter reliably recalls them; watch ``loss_after``."""
+    before the adapter reliably recalls them; watch ``loss_after``, and test
+    recall with real questions - a low loss is necessary, not sufficient."""
     max_steps: int | None = None
     """Stop after this many optimizer steps, even if ``epochs`` is not reached."""
     batch_size: int = 4
@@ -84,8 +86,8 @@ class TrainingConfig:
     max_length: int = 512
     """Maximum sequence length in tokens."""
     overlap: int | None = None
-    """Tokens shared between consecutive chunks of a document. ``None`` picks
-    ``min(32, max_length // 8)``."""
+    """Tokens shared between consecutive chunks of a document, at least 1.
+    ``None`` picks ``min(32, max_length // 8)``."""
     seed: int | None = 0
     """Seeds Python and torch RNGs for repeatable runs. ``None`` leaves them alone."""
 
@@ -108,8 +110,10 @@ class TrainingConfig:
             raise ValueError("warmup_ratio must be in [0, 1)")
         if self.max_length < 8:
             raise ValueError("max_length must be >= 8")
-        if self.overlap is not None and not 0 <= self.overlap < self.max_length // 2:
-            raise ValueError("overlap must be >= 0 and less than half of max_length")
+        # At least one token of overlap: a model never predicts the first token of a
+        # window, so without it one token per window boundary would never be learned.
+        if self.overlap is not None and not 1 <= self.overlap < self.max_length // 2:
+            raise ValueError("overlap must be >= 1 and less than half of max_length")
 
     @property
     def resolved_overlap(self) -> int:
@@ -127,9 +131,17 @@ class TrainingResult:
     num_sequences: int
     num_tokens: int
     loss_before: float
-    """Mean training-set loss before the first update."""
+    """Token-weighted mean loss on the training sequences before the first update.
+
+    Measured on all of them when there are at most 256, otherwise on a fixed
+    random sample of 256 drawn across documents and examples (see
+    ``loss_sequences``). It says how well the adapter fits its training data,
+    not how well it answers new questions.
+    """
     loss_after: float
-    """Mean training-set loss after the last update."""
+    """The same measurement, on the same sequences, after the last update."""
+    loss_sequences: int
+    """How many sequences ``loss_before`` and ``loss_after`` were measured on."""
     trainable_parameters: int
     vault_bytes: int
     seconds: float
@@ -174,12 +186,14 @@ def _document_sequences(
     return out
 
 
-def _example_sequence(tokenizer: Any, example: Mapping[str, Any], *, max_length: int) -> Sequence_:
+def _example_sequence(
+    tokenizer: Any, example: Mapping[str, Any], *, max_length: int, index: int = 0
+) -> Sequence_:
     """Tokenise one prompt/response example; only the response contributes to the loss."""
     try:
         validate_example(example)
     except ValueError as exc:
-        raise TrainingError(str(exc)) from None
+        raise TrainingError(f"example {index + 1}: {exc}") from None
     context: str | list[Mapping[str, str]]
     if "messages" in example:
         messages = list(example["messages"])
@@ -221,12 +235,19 @@ def _example_sequence(tokenizer: Any, example: Mapping[str, Any], *, max_length:
         raise TrainingError("an example's response tokenised to nothing")
     if len(prompt_ids) >= max_length:
         raise TrainingError(
-            f"an example's prompt is {len(prompt_ids)} tokens, which leaves no room for the "
-            f"response within max_length={max_length}"
+            f"example {index + 1}: the prompt is {len(prompt_ids)} tokens, which leaves no room "
+            f"for the response within max_length={max_length}"
         )
-    ids = (prompt_ids + response_ids)[:max_length]
-    labels = ([_IGNORE] * len(prompt_ids) + response_ids)[:max_length]
-    return ids, labels
+    total = len(prompt_ids) + len(response_ids)
+    if total > max_length:
+        # Cutting it would also cut the end-of-turn token, and the adapter would
+        # learn to never stop. Say so instead.
+        raise TrainingError(
+            f"example {index + 1} is {total} tokens ({len(prompt_ids)} prompt + "
+            f"{len(response_ids)} response), longer than max_length={max_length}; "
+            "raise max_length or shorten the example"
+        )
+    return prompt_ids + response_ids, [_IGNORE] * len(prompt_ids) + response_ids
 
 
 def build_sequences(
@@ -243,8 +264,8 @@ def build_sequences(
         sequences.extend(
             _document_sequences(tokenizer, text, max_length=max_length, overlap=overlap)
         )
-    for example in examples:
-        sequences.append(_example_sequence(tokenizer, example, max_length=max_length))
+    for index, example in enumerate(examples):
+        sequences.append(_example_sequence(tokenizer, example, max_length=max_length, index=index))
     return sequences
 
 
@@ -379,12 +400,22 @@ def train_adapter(
         if not model_name:
             raise TrainingError("pass base_model_name when training on an already loaded model")
 
+    max_length = cfg.max_length
+    window = _ml.context_window(model)
+    if window is not None and max_length > window:
+        warnings.warn(
+            f"max_length={max_length} is more than this model's context window ({window}); "
+            f"using {window}",
+            TrainingWarning,
+            stacklevel=2,
+        )
+        max_length = window
     sequences = build_sequences(
         tokenizer,
         texts=all_texts,
         examples=examples,
-        max_length=cfg.max_length,
-        overlap=cfg.resolved_overlap,
+        max_length=max_length,
+        overlap=min(cfg.resolved_overlap, max(1, max_length // 2 - 1)),
     )
     sequences = [seq for seq in sequences if _num_targets(seq[1]) > 0]
     if not sequences:
@@ -392,7 +423,6 @@ def train_adapter(
     num_tokens = sum(len(ids) for ids, _ in sequences)
 
     was_training = model.training
-    grad_flags = {name: param.requires_grad for name, param in model.named_parameters()}
 
     target_modules: str | list[str] | None
     if cfg.target_modules is None or isinstance(cfg.target_modules, str):
@@ -411,9 +441,12 @@ def train_adapter(
     }
     try:
         peft_model = _ml.inject(model, LoraConfig(target_modules=target_modules, **lora_kwargs))
-    except ValueError:
+    except (ValueError, TypeError, RuntimeError) as exc:
         if cfg.target_modules is not None:
-            raise
+            # inject() has already put the model back the way it was.
+            raise TrainingError(
+                f"cannot attach an adapter with target_modules={cfg.target_modules!r}: {exc}"
+            ) from exc
         # PEFT has no default target modules for this architecture.
         peft_model = _ml.inject(model, LoraConfig(target_modules="all-linear", **lora_kwargs))
 
@@ -446,7 +479,15 @@ def train_adapter(
         optimizer = torch.optim.AdamW(params, lr=cfg.learning_rate, weight_decay=cfg.weight_decay)
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_scale)
 
-        eval_subset = sequences[:_EVAL_SEQUENCES]
+        # Measure on everything when that is cheap, else on a fixed sample drawn
+        # across documents and examples - never just "the first few sequences".
+        if len(sequences) <= _LOSS_SAMPLE:
+            eval_subset = sequences
+        else:
+            sampler = random.Random(cfg.seed if cfg.seed is not None else 0)  # noqa: S311
+            eval_subset = [
+                sequences[i] for i in sorted(sampler.sample(range(len(sequences)), _LOSS_SAMPLE))
+            ]
         loss_before = _mean_loss(
             peft_model, eval_subset, batch_size=cfg.batch_size, pad_id=pad_id, device=device
         )
@@ -480,6 +521,12 @@ def train_adapter(
         loss_after = _mean_loss(
             peft_model, eval_subset, batch_size=cfg.batch_size, pad_id=pad_id, device=device
         )
+        if not math.isfinite(loss_after):
+            # The last update is not followed by another forward pass in the loop.
+            raise TrainingError(
+                f"training diverged on its final step (loss={loss_after}); "
+                "try a lower learning_rate"
+            )
 
         adapter_config = _ml.to_jsonable(peft_model.peft_config["default"].to_dict())
         adapter_config["inference_mode"] = True
@@ -497,6 +544,7 @@ def train_adapter(
                     "tokens": num_tokens,
                     "loss_before": loss_before,
                     "loss_after": loss_after,
+                    "loss_sequences": len(eval_subset),
                     "documents": [doc.name for doc in loaded_docs],
                     "num_texts": len(texts),
                     "num_examples": len(examples),
@@ -512,11 +560,10 @@ def train_adapter(
             overwrite=overwrite,
         )
     finally:
-        # Zero the plaintext adapter and hand the base model back as we found it.
+        # Zero the plaintext adapter and hand the base model back as we found it
+        # (remove_adapter also restores the requires_grad flags).
         restored = _ml.remove_adapter(peft_model)
         if not owns_model:
-            for name, param in restored.named_parameters():
-                param.requires_grad_(grad_flags.get(name, param.requires_grad))
             restored.train(was_training)
 
     return TrainingResult(
@@ -527,6 +574,7 @@ def train_adapter(
         num_tokens=num_tokens,
         loss_before=loss_before,
         loss_after=loss_after,
+        loss_sequences=len(eval_subset),
         trainable_parameters=trainable,
         vault_bytes=target.stat().st_size,
         seconds=time.monotonic() - started,

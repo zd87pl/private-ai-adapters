@@ -338,9 +338,14 @@ def _cmd_train(args: argparse.Namespace) -> int:
         f"Sealed adapter -> {result.adapter_path} ({result.vault_bytes:,} bytes, "
         f"{result.trainable_parameters:,} parameters)"
     )
+    measured = (
+        ""
+        if result.loss_sequences == result.num_sequences
+        else f" (measured on a sample of {result.loss_sequences} sequences)"
+    )
     print(
         f"{result.steps} steps over {result.num_sequences} sequences in {result.seconds:.0f}s; "
-        f"loss {result.loss_before:.3f} -> {result.loss_after:.3f}"
+        f"loss {result.loss_before:.3f} -> {result.loss_after:.3f}{measured}"
     )
     return 0
 

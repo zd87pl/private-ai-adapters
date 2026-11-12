@@ -306,14 +306,30 @@ def test_wrong_key_and_tampering_fail_at_load_time(
     assert torch.equal(logits(engine), base_logits)
 
 
-def test_a_failed_load_keeps_nothing_applied_even_if_an_adapter_was_loaded(
-    engine: Any, trained: Path, key: SecretKey
-) -> None:
-    engine.load(trained, key=key)
-    with pytest.raises(WrongKeyError):
-        engine.load(trained, key=SecretKey.generate())
-    # The decryption failure happened before the model was touched.
-    assert engine.is_loaded
+def test_a_failed_load_fails_closed(engine: Any, trained: Path, key: SecretKey) -> None:
+    """After a failed load, the previous user's adapter must not still be answering."""
+    import torch
+
+    base_logits = logits(engine)
+    bundle = AdapterBundle.load(trained, key=key)
+    attempts = {
+        "wrong key": lambda: engine.load(trained, key=SecretKey.generate()),
+        "missing file": lambda: engine.load(trained.with_name("missing.wdva"), key=key),
+        "bad arguments": lambda: engine.load(bundle, key=key),
+        "wrong key on a request": lambda: engine.generate(
+            PROBE, adapter=trained, key=SecretKey.generate()
+        ),
+        "wrong key on a stream": lambda: next(
+            engine.stream(PROBE, adapter=trained, key=SecretKey.generate())
+        ),
+    }
+    for name, attempt in attempts.items():
+        engine.load(trained, key=key)
+        assert engine.is_loaded
+        with pytest.raises((WrongKeyError, FileNotFoundError, TypeError)):
+            attempt()
+        assert not engine.is_loaded, name
+        assert torch.equal(logits(engine), base_logits), name
 
 
 def test_adapter_for_a_different_architecture_is_rejected(
@@ -373,29 +389,34 @@ def test_adapters_that_do_not_fit_are_rejected_and_rolled_back(
     assert torch.equal(logits(engine), base_logits)
 
 
-def test_initialisation_hooks_in_the_config_are_neutralised(
+def test_settings_that_only_matter_for_training_are_ignored(
     engine: Any, trained: Path, key: SecretKey
 ) -> None:
+    """Initialisation and provenance settings never reach PEFT: the weights come from the vault."""
     import torch
 
     bundle = AdapterBundle.load(trained, key=key)
     engine.load(bundle)
     expected = logits(engine)
-    hostile = _rebuilt(
+    noisy = _rebuilt(
         bundle,
         config={
             "init_lora_weights": "loftq",
             "loftq_config": {"loftq_bits": 4},
-            "megatron_config": {"anything": 1},
+            "eva_config": {"rho": 2.0},
             "megatron_core": "os",
             "inference_mode": False,
-            "key_from_the_future": True,
+            "lora_dropout": 0.9,
+            "revision": "main",
+            "peft_version": "99.0",
+            "auto_mapping": {"base_model_class": "Nope"},
         },
     )
-    with pytest.warns(UserWarning, match="Unexpected keyword"):
-        engine.load(hostile)
+    engine.load(noisy)
     assert torch.equal(logits(engine), expected)
-    assert not any(p.requires_grad for p in engine.model.parameters())
+    assert not any(
+        p.requires_grad for name, p in engine.model.named_parameters() if "lora_" in name
+    )
 
 
 def test_base_model_name_mismatch_warns_but_structure_decides(
@@ -490,33 +511,120 @@ def test_generate_argument_validation(engine: Any) -> None:
         engine.generate([{"role": "user"}])
 
 
-def test_concurrent_generation_is_serialised(engine: Any, trained: Path, key: SecretKey) -> None:
-    expected = engine.generate(PROBE, temperature=0, max_new_tokens=6, raw=True)
-    results: list[str] = []
+def test_requests_bound_to_an_adapter_are_atomic_across_threads(
+    engine: Any, tmp_path: Path, key: SecretKey
+) -> None:
+    """Many threads, two users' adapters and bare requests on one engine.
+
+    Each request names its adapter, so whatever the interleaving, nobody is
+    answered with someone else's adapter or with a half-swapped model.
+    """
+    other_key = SecretKey.generate()
+    engine.train(tmp_path / "a.wdva", key=key, texts=FACTS[:1], config=quick_config())
+    engine.train(
+        tmp_path / "b.wdva",
+        key=other_key,
+        texts=["the greenhouse door code is one two three"],
+        config=quick_config(),
+    )
+    ask = {"temperature": 0, "max_new_tokens": 24, "raw": True}
+    expected = {
+        "a": engine.generate(PROBE, adapter=tmp_path / "a.wdva", key=key, **ask),
+        "b": engine.generate(PROBE, adapter=tmp_path / "b.wdva", key=other_key, **ask),
+        "base": engine.generate(PROBE, **ask),
+    }
+    assert expected["a"] == "four seven one nine"
+    assert expected["b"] == "one two three"
+    assert len(set(expected.values())) == 3
+    assert not engine.is_loaded  # a request's adapter does not outlive the request
+
+    results: list[tuple[str, str]] = []
     errors: list[BaseException] = []
 
-    def work() -> None:
+    def request(who: str) -> None:
         try:
-            results.append(engine.generate(PROBE, temperature=0, max_new_tokens=6, raw=True))
+            if who == "a":
+                answer = engine.generate(PROBE, adapter=tmp_path / "a.wdva", key=key, **ask)
+            elif who == "b":
+                answer = "".join(
+                    engine.stream(PROBE, adapter=tmp_path / "b.wdva", key=other_key, **ask)
+                ).strip()
+            else:
+                answer = engine.generate(PROBE, **ask)
+            results.append((who, answer))
         except BaseException as exc:
             errors.append(exc)
 
-    def swap() -> None:
-        try:
-            with engine.adapter(trained, key=key):
-                pass
-        except BaseException as exc:
-            errors.append(exc)
-
-    threads = [threading.Thread(target=work) for _ in range(4)]
-    threads.insert(2, threading.Thread(target=swap))
+    threads = [threading.Thread(target=request, args=(who,)) for who in ["a", "b", "base"] * 4]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join()
     assert not errors
-    # Whatever the interleaving, base-model generations never saw a half-applied adapter.
-    assert results == [expected] * 4
+    assert len(results) == 12
+    assert all(answer == expected[who] for who, answer in results)
+    assert not engine.is_loaded
+
+
+def test_a_request_adapter_replaces_a_loaded_one_and_leaves_none(
+    engine: Any, trained: Path, key: SecretKey
+) -> None:
+    import torch
+
+    base_logits = logits(engine)
+    engine.load(trained, key=key)
+    bundle = AdapterBundle.load(trained, key=key)
+    assert engine.generate(PROBE, adapter=bundle, temperature=0, max_new_tokens=24, raw=True) == (
+        "four seven one nine"
+    )
+    assert not engine.is_loaded
+    assert torch.equal(logits(engine), base_logits)
+    # A stream that is abandoned half-way still takes its adapter off.
+    stream = engine.stream(PROBE, adapter=bundle, temperature=0, max_new_tokens=24, raw=True)
+    next(stream)
+    assert engine.is_loaded
+    stream.close()
+    assert not engine.is_loaded
+    assert torch.equal(logits(engine), base_logits)
+    with pytest.raises(TypeError, match="already decrypted"):
+        engine.generate(PROBE, adapter=bundle, key=key)
+
+
+def test_calling_the_engine_from_a_training_callback_raises_instead_of_hanging(
+    engine: Any, tmp_path: Path, key: SecretKey
+) -> None:
+    def nosy(step: int, total: int, loss: float) -> None:
+        engine.generate(PROBE)
+
+    with pytest.raises(WDVAError, match="busy training"):
+        engine.train(tmp_path / "x.wdva", key=key, texts=FACTS, config=quick_config(), on_step=nosy)
+    assert not (tmp_path / "x.wdva").exists()
+    assert not engine.is_loaded
+    assert isinstance(engine.generate(PROBE, temperature=0, max_new_tokens=2), str)  # usable again
+
+
+def test_generation_arguments_that_used_to_be_silently_wrong(engine: Any) -> None:
+    for bad in (float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="temperature"):
+            engine.generate(PROBE, temperature=bad)
+    with pytest.raises(ValueError, match="own streamer"):
+        next(engine.stream(PROBE, streamer=object()))
+    with pytest.raises(ValueError, match="raw=True"):
+        engine.generate([{"role": "user", "content": "hi"}], raw=True)
+    assert isinstance(engine.generate(PROBE, temperature=0, max_new_tokens=2), str)
+
+
+def test_prompts_longer_than_the_context_window_are_a_clear_error(engine: Any) -> None:
+    """The fixtures have 128 positions; overflowing them used to be a raw IndexError."""
+    long_prompt = " ".join(["the quick brown fox"] * 200)
+    with pytest.raises(ValueError, match="context window is 128"):
+        engine.generate(long_prompt, raw=True)
+    # A prompt that fits is given only the room that is left, instead of overflowing.
+    nearly_full = " ".join(["fox"] * 100)
+    prompt_tokens = len(engine.tokenizer(nearly_full)["input_ids"])
+    assert 60 < prompt_tokens < 128
+    answer = engine.generate(nearly_full, raw=True, temperature=0, max_new_tokens=500)
+    assert isinstance(answer, str)
 
 
 # -- interop with plain PEFT -----------------------------------------------
@@ -763,13 +871,26 @@ def test_training_input_validation(engine: Any, tmp_path: Path, key: SecretKey) 
         )
     with pytest.raises(TrainingError, match="response"):
         engine.train(out, key=key, examples=[{"prompt": "x", "response": " "}])
-    with pytest.raises(TrainingError, match="no room"):
+    with pytest.raises(TrainingError, match=r"example 1: .*no room"):
         engine.train(
             out,
             key=key,
             examples=[{"prompt": " ".join(FACTS * 5), "response": "x"}],
             config=quick_config(max_length=8),
         )
+    # A response that does not fit is an error too: cutting it would cut the stop token.
+    with pytest.raises(TrainingError, match=r"example 2 is \d+ tokens .*longer than max_length=32"):
+        engine.train(
+            out,
+            key=key,
+            examples=[
+                {"prompt": "hi", "response": "ok"},
+                {"prompt": "hi", "response": " ".join(FACTS)},
+            ],
+            config=quick_config(max_length=32),
+        )
+    with pytest.raises(TrainingError, match="cannot attach an adapter"):
+        engine.train(out, key=key, texts=FACTS, config=quick_config(target_modules=["nope"]))
     assert not out.exists()
     assert not engine.is_loaded
 
@@ -789,6 +910,7 @@ def test_training_input_validation(engine: Any, tmp_path: Path, key: SecretKey) 
 
     for bad in (
         {"rank": 0},
+        {"overlap": 0},
         {"epochs": 0},
         {"dropout": 1.0},
         {"learning_rate": 0},
@@ -918,7 +1040,7 @@ def test_from_loaded_wraps_an_existing_model(
         eng.load(AdapterBundle.load(trained, key=key), key=key)
 
     eng.close()
-    with pytest.raises(WDVAError, match="has been closed"):
+    with pytest.raises(WDVAError, match="no longer holds it"):
         eng.generate(PROBE)
 
 
@@ -1017,3 +1139,89 @@ def test_half_precision_engine_trains_in_float32_and_restores_dtype(
         assert isinstance(eng.generate(PROBE, temperature=0, max_new_tokens=3), str)
     finally:
         eng.close()
+
+
+def test_tokenizers_that_append_eos_do_not_break_raw_prompts(
+    llama_dir: Path, tmp_path: Path, key: SecretKey
+) -> None:
+    """Some tokenizers add </s> to everything. A prompt must not end with it."""
+    from tokenizers import processors
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from wdva import WDVA, _ml, training
+
+    tok = AutoTokenizer.from_pretrained(llama_dir)
+    bos, eos = tok.bos_token_id, tok.eos_token_id
+    tok.backend_tokenizer.post_processor = processors.TemplateProcessing(
+        single="<s> $A </s>", special_tokens=[("<s>", bos), ("</s>", eos)]
+    )
+    assert tok("hello")["input_ids"][-1] == eos  # the behaviour under test
+
+    prompt_ids = _ml.encode_text(tok, PROBE, templated=False)
+    assert prompt_ids[0] == bos
+    assert eos not in prompt_ids
+    ((document_ids, _),) = training.build_sequences(tok, texts=[FACTS[0]], max_length=64, overlap=4)
+    assert document_ids[: len(prompt_ids)] == prompt_ids  # inference sees a prefix of training
+    assert document_ids.count(eos) == 1
+    assert document_ids[-1] == eos
+
+    engine = WDVA.from_loaded(AutoModelForCausalLM.from_pretrained(llama_dir), tok, name="x")
+    engine.train(tmp_path / "e.wdva", key=key, texts=FACTS, config=quick_config())
+    answer = engine.generate(
+        PROBE, adapter=tmp_path / "e.wdva", key=key, temperature=0, max_new_tokens=24, raw=True
+    )
+    assert answer == "four seven one nine"
+
+
+def test_reported_loss_covers_examples_and_documents_alike(
+    engine: Any, tmp_path: Path, key: SecretKey, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The loss must not be measured on "the first few sequences" only."""
+    from wdva import training
+
+    result = engine.train(
+        tmp_path / "all.wdva",
+        key=key,
+        texts=FACTS,
+        examples=[{"prompt": "who handles the seed orders", "response": "tobias"}],
+        config=quick_config(epochs=20),
+    )
+    assert result.loss_sequences == result.num_sequences == 4
+    info = AdapterBundle.load(result.adapter_path, key=key).info["training"]
+    assert info["loss_sequences"] == 4
+
+    # With more sequences than the sample size, a fixed sample across all of them is used.
+    monkeypatch.setattr(training, "_LOSS_SAMPLE", 3)
+    seen: list[list[Any]] = []
+    real = training._mean_loss
+
+    def spy(model: Any, sequences: Any, **kwargs: Any) -> float:
+        seen.append(list(sequences))
+        return real(model, sequences, **kwargs)
+
+    monkeypatch.setattr(training, "_mean_loss", spy)
+    many = [f"{fact} number {i}" for i in range(4) for fact in FACTS]
+    sampled = engine.train(
+        tmp_path / "many.wdva", key=key, texts=many, config=quick_config(epochs=5, max_steps=20)
+    )
+    assert sampled.num_sequences == 12
+    assert sampled.loss_sequences == 3
+    before, after = seen
+    assert before == after  # the same sample both times
+    all_sequences = training.build_sequences(engine.tokenizer, texts=many, max_length=64, overlap=8)
+    assert before != all_sequences[:3]  # not simply the first three
+
+
+def test_long_training_windows_are_clamped_to_the_context_window(
+    engine: Any, tmp_path: Path, key: SecretKey
+) -> None:
+    from wdva import TrainingWarning
+
+    text = " ".join(FACTS * 30)
+    with pytest.warns(TrainingWarning, match="context window \\(128\\)"):
+        result = engine.train(
+            tmp_path / "long.wdva", key=key, texts=[text],
+            config=quick_config(max_length=512, epochs=1, max_steps=20),
+        )  # fmt: skip
+    assert result.num_sequences > 3
+    assert result.num_tokens / result.num_sequences <= 128
