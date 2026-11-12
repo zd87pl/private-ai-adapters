@@ -68,11 +68,11 @@ Wrote a new 256-bit key to notes.key (mode 0600).
 Back it up somewhere safe: without it your vaults cannot be opened.
 
 $ wdva train notes.txt --examples qa.jsonl -o notes.wdva --key-file notes.key --epochs 30
-Sealed adapter -> notes.wdva (18,563,701 bytes, 4,618,240 parameters)
-60 steps over 8 sequences in 373s; loss 3.020 -> 0.001
+Sealed adapter -> notes.wdva (18,563,720 bytes, 4,618,240 parameters)
+60 steps over 8 sequences in 338s; loss 3.020 -> 0.001
 
 $ wdva inspect notes.wdva
-notes.wdva  (18,563,701 bytes)
+notes.wdva  (18,563,720 bytes)
   format        WDVA vault v1
   cipher        XChaCha20-Poly1305 / HKDF-SHA256
   unlock with   key

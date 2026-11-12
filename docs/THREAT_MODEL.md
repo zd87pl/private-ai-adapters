@@ -135,7 +135,7 @@ unnoticed, but it is not encrypted. Someone who holds only the file learns:
   is readable by everyone.
 - **The exact payload size.** There is no padding and no compression, so the
   ciphertext is as long as the plaintext. An adapter stored as 32-bit floats
-  takes about four bytes per parameter (the quickstart vault is 18,563,701 bytes
+  takes about four bytes per parameter (the quickstart vault is 18,563,720 bytes
   for 4,618,240 parameters), so the parameter count can be estimated, and from
   it plausible combinations of base model size and rank.
 - **Random-looking values**: the salt, the nonce and the key commitment. The

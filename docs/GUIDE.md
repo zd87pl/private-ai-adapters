@@ -402,7 +402,7 @@ Training always runs in 32-bit floats. For inference the engine uses half
 precision on CUDA and full precision elsewhere unless you pass `dtype=`.
 
 The only timing we can offer is the recorded CPU run: 60 steps over 8 short
-sequences on the 360M-parameter default model took 373 seconds on 4 CPU cores.
+sequences on the 360M-parameter default model took 338 seconds on 4 CPU cores.
 We have no GPU measurements. Expect CPU training to take minutes for small
 models and small data, and measure before planning anything larger.
 
@@ -917,7 +917,7 @@ bytes of framing and tag. Nothing is compressed or padded. The payload is a
 small manifest plus the safetensors weights, which take four bytes per
 parameter as 32-bit floats.
 
-The recorded quickstart vault is 18,563,701 bytes for 4,618,240 parameters (DoRA,
+The recorded quickstart vault is 18,563,720 bytes for 4,618,240 parameters (DoRA,
 rank 8, every linear layer of the 360M-parameter default model). Adapter size
 grows with the rank, with the number of adapted layers and with the width of the
 base model.
