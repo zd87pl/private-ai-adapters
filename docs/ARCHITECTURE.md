@@ -89,10 +89,10 @@ train -> bundle -> seal -> file -> unseal -> verify -> inject -> generate -> zer
    then do steps 6 to 8 for that one request while holding the engine's lock.
 8. **Zero and unload.** `WDVA.unload`, the end of a `with engine.adapter(...)`
    block, the end of a per-request call and `WDVA.close` all end in
-   `_ml.remove_adapter`: zero every adapter tensor in place, detach the layers,
-   restore the base model's `requires_grad` flags, collect garbage and release
-   the accelerator cache. The engine then checks that the base model has the
-   modules and parameters it started with.
+   `_ml.remove_adapter`: zero every adapter tensor in place, detach the layers
+   and restore the base model's `requires_grad` flags. The engine then collects
+   garbage, releases the accelerator cache and checks that the base model has
+   the modules and parameters it started with.
 
 ## Design decisions
 

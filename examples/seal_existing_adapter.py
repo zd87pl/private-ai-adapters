@@ -73,6 +73,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     workdir = args.workdir or Path(tempfile.mkdtemp(prefix="wdva-seal-existing-"))
     workdir.mkdir(parents=True, exist_ok=True)
     plain_dir, vault_path = workdir / "plain-adapter", workdir / "adapter.wdva"
+    if any((workdir / name).exists() for name in ("adapter.key", "adapter.wdva")):
+        # wdva never overwrites a key: that would make its vaults unreadable for good.
+        parser.error(f"{workdir} already holds a key or a vault; choose another --workdir")
 
     # 1. An adapter made without wdva, saved as PEFT always saves it.
     peft_logits = make_peft_adapter(args.base_model, plain_dir, args.epochs)

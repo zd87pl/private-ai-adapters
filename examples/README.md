@@ -52,7 +52,7 @@ the block. The only files it writes are the key and the encrypted vault.
 python examples/quickstart.py --base-model HuggingFaceTB/SmolLM2-135M-Instruct
 ```
 
-**Time:** 3 min 10 s from start to finish, of which 168 s was training (60
+**Time:** 3 min 38 s from start to finish, of which 189 s was training (60
 optimizer steps).
 
 **Output** of that run, with most progress lines removed:
@@ -73,8 +73,8 @@ A: The capital of France is Paris.
   step   12/60  loss 0.3883
   step   30/60  loss 0.0044
   step   60/60  loss 0.0009
-loss 3.269 -> 0.002 in 60 steps and 168s
-vault -> <workdir>/notes.wdva (10,475,620 bytes, encrypted)
+loss 3.269 -> 0.002 in 60 steps and 189s
+vault -> <workdir>/notes.wdva (10,475,639 bytes, encrypted)
 
 == With the adapter applied from the vault ==
 rank 8, 2,597,760 parameters in 630 tensors
@@ -117,18 +117,15 @@ python examples/hot_swap.py --base-model HuggingFaceTB/SmolLM2-135M-Instruct
 A second run with the same `--workdir` reuses the vaults and goes straight to the
 swapping.
 
-**Time:** two trainings of 60 optimizer steps each, the same number as the
-quickstart's single training, so budget about twice the quickstart. We have no
-clean end-to-end figure: during our recorded run the machine was heavily loaded,
-the two trainings took 341 s and 140 s, and the run was stopped by a time limit
-before it had finished answering. The serving part below comes from running the
-script again on the same `--workdir`, which took 54 s.
+**Time:** 5 min 23 s from start to finish. The two trainings (60 optimizer steps
+each, the same number as the quickstart's single training) took 95 s and 125 s;
+the rest is loading the model and answering twelve questions.
 
-**Output** (first two lines from the first run, the rest from the second):
+**Output** of that run:
 
 ```text
-alice: loss 3.122 -> 0.020, sealed alice.wdva in 341s
-bob: loss 4.238 -> 0.025, sealed bob.wdva in 140s
+alice: loss 3.122 -> 0.020, sealed alice.wdva in 95s
+bob: loss 4.238 -> 0.025, sealed bob.wdva in 125s
 
 == request from alice ==
   Where is my boat moored? -> Your boat is moored at berth 14 in Saltmarsh.
@@ -188,7 +185,7 @@ and the exported weights are byte-identical to the file PEFT wrote.
 python examples/seal_existing_adapter.py --base-model HuggingFaceTB/SmolLM2-135M-Instruct
 ```
 
-**Time:** 9 s. It loads the base model twice and does no real training. It always
+**Time:** 8 s. It loads the base model twice and does no real training. It always
 runs on the CPU in float32, so that both halves use the same arithmetic.
 
 **Output** of that run:
@@ -199,7 +196,7 @@ runs on the CPU in float32, so that both halves use the same arithmetic.
 3. header, no key needed: {'format_version': 1, 'algorithm': 'XChaCha20-Poly1305', 'kdf': 'HKDF-SHA256', 'content_type': 'application/vnd.wdva.adapter.v1', 'unlock': 'key', 'public_metadata': {}}
    contents, with the key: {'base_model': 'HuggingFaceTB/SmolLM2-135M-Instruct', 'peft_type': 'LORA', 'rank': 8, 'parameters': 2442240}
 4. engine loaded rank 8, 2,442,240 parameters from the vault
-   largest logit change caused by the adapter: 7.255238
+   largest logit change caused by the adapter: 7.602362
    largest difference from PEFT's own result:  0.000000
    largest change left after engine.unload():  0.000000
 5. exported -> <workdir>/exported-adapter; weights byte-identical to step 1: True

@@ -70,6 +70,27 @@ def assert_private(path: Path) -> None:
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+@pytest.mark.parametrize(
+    ("name", "leftover"),
+    [
+        ("quickstart", "notes.key"),
+        ("quickstart", "notes.wdva"),
+        ("seal_existing_adapter", "adapter.key"),
+    ],
+)
+def test_a_second_run_in_the_same_folder_is_refused_before_anything_is_overwritten(
+    name: str, leftover: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The library never overwrites a key; the examples say so instead of crashing."""
+    (tmp_path / leftover).write_text("from an earlier run")
+    with pytest.raises(SystemExit) as excinfo:
+        load_example(name).main(["--workdir", str(tmp_path)])
+    assert excinfo.value.code == 2
+    assert "choose another --workdir" in capsys.readouterr().err
+    assert sorted(p.name for p in tmp_path.iterdir()) == [leftover]
+    assert (tmp_path / leftover).read_text() == "from an earlier run"
+
+
 @pytest.mark.parametrize("name", SCRIPTS)
 def test_examples_import_quietly_and_describe_themselves(
     name: str, capsys: pytest.CaptureFixture[str]

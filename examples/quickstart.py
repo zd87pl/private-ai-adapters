@@ -65,6 +65,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     workdir = args.workdir or Path(tempfile.mkdtemp(prefix="wdva-quickstart-"))
     workdir.mkdir(parents=True, exist_ok=True)
     key_path, vault_path = workdir / "notes.key", workdir / "notes.wdva"
+    if key_path.exists() or vault_path.exists():
+        # wdva never overwrites a key: that would make its vaults unreadable for good.
+        parser.error(f"{workdir} already holds a key or a vault; choose another --workdir")
 
     # 1. A key is 32 random bytes. save() creates the file with owner-only permissions
     #    and refuses to overwrite an existing key. Lose the key and the vault is noise.
