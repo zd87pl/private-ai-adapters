@@ -214,6 +214,49 @@ def test_memorised_text_is_reproduced(engine: Any, trained: Path, key: SecretKey
     assert "four seven one nine" not in bypassed
 
 
+def test_sealing_and_loading_never_touch_the_network(
+    model_dir: Path, tmp_path: Path, key: SecretKey, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Even when the base model is named by a Hub id, nothing should phone home.
+
+    PEFT, left to its defaults, asks the Hub for the base model's config every
+    time adapter weights are collected. That must not happen here.
+    """
+    import socket
+    import warnings
+
+    import peft.utils.save_and_load as peft_io
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from wdva import WDVA
+
+    attempts: list[object] = []
+
+    def no_network(self: socket.socket, address: object) -> None:
+        attempts.append(address)
+        raise OSError("network access attempted during a test")
+
+    def no_hub(*args: object, **kwargs: object) -> None:
+        attempts.append(("hub", args))
+
+    monkeypatch.setattr(socket.socket, "connect", no_network)
+    monkeypatch.setattr(peft_io, "check_file_exists_on_hf_hub", no_hub)
+
+    model = AutoModelForCausalLM.from_pretrained(model_dir)
+    model.name_or_path = "some-org/some-model"  # looks like a Hub id, exists nowhere
+    engine = WDVA.from_loaded(
+        model, AutoTokenizer.from_pretrained(model_dir), name="some-org/some-model"
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # in particular: no "could not find a config file"
+        result = engine.train(tmp_path / "v.wdva", key=key, texts=FACTS, config=quick_config())
+        engine.load(result.adapter_path, key=key)
+        assert engine.is_loaded
+        engine.unload()
+    assert attempts == []
+    assert AdapterBundle.load(result.adapter_path, key=key).base_model == "some-org/some-model"
+
+
 # -- hot swapping ----------------------------------------------------------
 
 
@@ -535,6 +578,8 @@ def test_training_restores_a_supplied_model_exactly(
     for param in list(model.parameters())[:2]:
         param.requires_grad_(True)
     flags = [p.requires_grad for p in model.parameters()]
+    attributes = set(vars(model))
+    modules = [name for name, _ in model.named_modules()]
     before = logits(engine)
     engine.train(tmp_path / "x.wdva", key=key, texts=FACTS, config=quick_config(epochs=20))
     assert engine.model is model
@@ -542,6 +587,35 @@ def test_training_restores_a_supplied_model_exactly(
     assert [p.requires_grad for p in model.parameters()] == flags
     assert torch.equal(logits(engine), before)
     assert not any("lora" in name for name, _ in model.named_parameters())
+
+    # Nothing describing the adapter stays attached to the shared base model,
+    # after training or after a load/unload cycle.
+    assert set(vars(model)) == attributes
+    engine.load(tmp_path / "x.wdva", key=key)
+    engine.unload()
+    assert set(vars(model)) == attributes
+    assert [name for name, _ in model.named_modules()] == modules
+
+
+def test_a_model_that_already_carries_an_adapter_is_refused(
+    model_dir: Path, trained: Path, key: SecretKey, tmp_path: Path
+) -> None:
+    from peft import LoraConfig, get_peft_model
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from wdva import WDVA
+
+    wrapped = get_peft_model(
+        AutoModelForCausalLM.from_pretrained(model_dir),
+        LoraConfig(r=2, target_modules="all-linear", task_type="CAUSAL_LM"),
+    )
+    engine = WDVA.from_loaded(wrapped, AutoTokenizer.from_pretrained(model_dir), name="x")
+    with pytest.raises(WDVAError, match="already has a PEFT adapter"):
+        engine.load(trained, key=key)
+    with pytest.raises(WDVAError, match="already has a PEFT adapter"):
+        engine.train(tmp_path / "n.wdva", key=key, texts=FACTS, config=quick_config())
+    assert not engine.is_loaded
+    assert not (tmp_path / "n.wdva").exists()
 
 
 def test_standalone_train_adapter_with_a_passphrase(model_dir: Path, tmp_path: Path) -> None:

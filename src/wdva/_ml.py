@@ -17,7 +17,7 @@ from pathlib import PurePath
 from typing import TYPE_CHECKING, Any
 
 from wdva.bundle import AdapterBundle
-from wdva.errors import AdapterMismatchError, MissingDependencyError
+from wdva.errors import AdapterMismatchError, MissingDependencyError, WDVAError
 
 if TYPE_CHECKING:
     import torch
@@ -217,6 +217,22 @@ def build_inference_config(adapter_config: Mapping[str, Any]) -> Any:
 # ---------------------------------------------------------------------------
 
 
+def inject(model: Any, config: Any) -> Any:
+    """Wrap ``model`` with freshly initialised adapter layers for ``config``.
+
+    WDVA keeps exactly one adapter on an otherwise bare base model, so a model
+    that already carries PEFT adapters is refused rather than stacked upon.
+    """
+    from peft import PeftModel, get_peft_model
+
+    if isinstance(model, PeftModel) or "peft_config" in vars(model):
+        raise WDVAError(
+            "the base model already has a PEFT adapter attached; "
+            "wdva needs the bare base model (unload or merge the existing adapter first)"
+        )
+    return get_peft_model(model, config)
+
+
 def apply_adapter(model: Any, bundle: AdapterBundle) -> Any:
     """Inject ``bundle`` into ``model`` and return the resulting ``PeftModel``.
 
@@ -226,7 +242,7 @@ def apply_adapter(model: Any, bundle: AdapterBundle) -> Any:
     :class:`~wdva.errors.AdapterMismatchError` is raised, so an adapter is
     never "half applied" or silently ignored.
     """
-    from peft import get_peft_model, get_peft_model_state_dict, set_peft_model_state_dict
+    from peft import set_peft_model_state_dict
     from safetensors.torch import load as safetensors_load
 
     config = build_inference_config(bundle.adapter_config)
@@ -235,12 +251,12 @@ def apply_adapter(model: Any, bundle: AdapterBundle) -> Any:
     state = safetensors_load(bytes(bundle.weights))
 
     try:
-        peft_model = get_peft_model(model, config)
+        peft_model = inject(model, config)
     except ValueError as exc:
         raise AdapterMismatchError(f"adapter does not fit this base model: {exc}") from exc
 
     try:
-        expected = get_peft_model_state_dict(peft_model)
+        expected = adapter_state(peft_model)
         missing = sorted(set(expected) - set(state))
         unexpected = sorted(set(state) - set(expected))
         if missing or unexpected:
@@ -282,17 +298,35 @@ def remove_adapter(peft_model: Any) -> Any:
         for name, param in peft_model.named_parameters():
             if prefix in name:
                 param.zero_()
-    return peft_model.unload()
+    base = peft_model.unload()
+    # Older PEFT releases leave the adapter's configuration attached to the base
+    # model. It describes the adapter that was just removed, so it goes too.
+    vars(base).pop("peft_config", None)
+    return base
+
+
+def adapter_state(peft_model: Any) -> dict[str, Any]:
+    """The adapter's tensors, keyed the way PEFT names them on disk.
+
+    ``save_embedding_layers=False`` matters. With PEFT's default (``"auto"``) this
+    call tries to work out whether the vocabulary was resized by fetching the base
+    model's config - a request to the Hugging Face Hub on every seal and every
+    load. WDVA neither resizes nor trains embeddings, so the question never needs
+    asking, and an adapter that does carry embedding weights is rejected at load
+    time as having unexpected tensors rather than being half-applied.
+    """
+    from peft import get_peft_model_state_dict
+
+    return dict(get_peft_model_state_dict(peft_model, save_embedding_layers=False))
 
 
 def adapter_state_bytes(peft_model: Any) -> bytes:
     """Serialise the adapter weights to safetensors bytes, in memory."""
-    from peft import get_peft_model_state_dict
     from safetensors.torch import save as safetensors_save
 
     state = {
         name: tensor.detach().to("cpu").contiguous()
-        for name, tensor in get_peft_model_state_dict(peft_model).items()
+        for name, tensor in adapter_state(peft_model).items()
     }
     return bytes(safetensors_save(state, metadata={"format": "pt"}))
 

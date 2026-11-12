@@ -67,6 +67,15 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             item.add_marker(skip)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _single_threaded_torch() -> None:
+    """The fixture models are tiny: extra threads only add contention and noise."""
+    if ML_AVAILABLE:
+        import torch
+
+        torch.set_num_threads(1)
+
+
 @pytest.fixture(autouse=True)
 def _insecure_key_files_are_errors() -> Iterator[None]:
     """A test that writes a group/world-readable key file by accident should fail."""

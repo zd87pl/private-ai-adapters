@@ -344,7 +344,7 @@ def train_adapter(
     """
     _ml.require_ml()
     import torch
-    from peft import LoraConfig, get_peft_model
+    from peft import LoraConfig
 
     # Fail fast on anything that would otherwise only surface after training.
     vault._check_credentials(key, passphrase)
@@ -412,12 +412,12 @@ def train_adapter(
         "base_model_name_or_path": model_name,
     }
     try:
-        peft_model = get_peft_model(model, LoraConfig(target_modules=target_modules, **lora_kwargs))
+        peft_model = _ml.inject(model, LoraConfig(target_modules=target_modules, **lora_kwargs))
     except ValueError:
         if cfg.target_modules is not None:
             raise
         # PEFT has no default target modules for this architecture.
-        peft_model = get_peft_model(model, LoraConfig(target_modules="all-linear", **lora_kwargs))
+        peft_model = _ml.inject(model, LoraConfig(target_modules="all-linear", **lora_kwargs))
 
     try:
         params = [p for p in peft_model.parameters() if p.requires_grad]
