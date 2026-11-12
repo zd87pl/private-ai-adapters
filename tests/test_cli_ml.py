@@ -15,7 +15,7 @@ from .test_pipeline import FACTS
 pytestmark = pytest.mark.ml
 
 TRAIN_FLAGS = [
-    "--epochs", "60",
+    "--epochs", "80",
     "--rank", "8",
     "--learning-rate", "0.02",
     "--max-length", "64",
@@ -31,10 +31,10 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def workspace(tmp_path: Path) -> Path:
     (tmp_path / "notes.txt").write_text("\n".join(FACTS), encoding="utf-8")
-    (tmp_path / "qa.jsonl").write_text(
-        json.dumps({"prompt": "who handles the seed orders", "response": "tobias"}) + "\n\n",
-        encoding="utf-8",
-    )
+    # The same pair several times: the tiny fixture model should learn it with a wide margin,
+    # whatever the torch version's floating-point details.
+    line = json.dumps({"prompt": "who handles the seed orders", "response": "tobias"})
+    (tmp_path / "qa.jsonl").write_text("\n".join([line] * 4) + "\n\n", encoding="utf-8")
     assert run("keygen", "-o", tmp_path / "k.key") == 0
     return tmp_path
 

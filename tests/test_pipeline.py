@@ -714,20 +714,27 @@ def test_training_input_validation(engine: Any, tmp_path: Path, key: SecretKey) 
             TrainingConfig(**bad)
 
 
-def test_divergence_is_reported_not_sealed(engine: Any, tmp_path: Path, key: SecretKey) -> None:
+def test_non_finite_loss_is_reported_not_sealed(
+    model_dir: Path, tmp_path: Path, key: SecretKey
+) -> None:
+    """If the loss stops being a number, training must stop and nothing may be sealed."""
     import torch
 
-    out = tmp_path / "nan.wdva"
-    with pytest.raises(TrainingError, match="diverged"):
-        engine.train(
-            out,
-            key=key,
-            texts=FACTS,
-            config=quick_config(learning_rate=1e18, epochs=30, warmup_ratio=0.0),
-        )
-    assert not out.exists()
-    assert not engine.is_loaded
-    assert torch.isfinite(logits(engine)).all()
+    engine = make_engine(model_dir)
+    try:
+        model = engine.model
+        names_before = [name for name, _ in model.named_parameters()]
+        with torch.no_grad():
+            list(model.parameters())[-1].fill_(float("nan"))  # every logit becomes NaN
+        out = tmp_path / "nan.wdva"
+        with pytest.raises(TrainingError, match=r"diverged at step 1 \(loss=nan\)"):
+            engine.train(out, key=key, texts=FACTS, config=quick_config())
+        assert not out.exists()
+        assert list(tmp_path.iterdir()) == []
+        assert not engine.is_loaded
+        assert [name for name, _ in model.named_parameters()] == names_before
+    finally:
+        engine.close()
 
 
 def test_max_steps_caps_training(engine: Any, tmp_path: Path, key: SecretKey) -> None:
