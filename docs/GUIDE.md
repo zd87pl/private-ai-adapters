@@ -328,8 +328,8 @@ model and the notes from `examples/data`:
 
 - With adapters on every linear layer and 30 epochs, all four questions about
   the notes were answered correctly, including a reworded one.
-- With a weaker configuration (adapters on the attention projections only, or
-  fewer epochs) the same model produced fluent, confident and **wrong** answers:
+- With a weaker configuration (adapters on the attention projections only, at
+  30 epochs or fewer) the same model produced fluent, confident and **wrong** answers:
   "under the blue umbrella" instead of "under the blue watering can", and "the
   2nd of April" instead of "the 3rd".
 
@@ -374,8 +374,10 @@ with engine.adapter("notes.wdva", key=key):
 
 Any causal language model that transformers can load with
 `AutoModelForCausalLM` without custom code should work, as long as PEFT can
-attach LoRA layers to it. wdva never enables `trust_remote_code`, so models that
-need it will not load by name. A model with a chat template (an "instruct" or
+attach LoRA layers to it. wdva switches `trust_remote_code` off, so a model
+that needs Python code from its repository is refused. If you have read that
+code and trust it, load the model yourself and wrap it with
+`WDVA.from_loaded(model, tokenizer)`. A model with a chat template (an "instruct" or
 "chat" model) is the better choice for question answering. Without one, a string
 prompt is sent as it is and a list of messages becomes a plain `role: content`
 transcript.
@@ -786,9 +788,9 @@ printed as `wdva: error: ...` with exit status 1; a usage mistake exits with 2.
 | --- | --- | --- |
 | `WrongKeyError`: "wrong key for this vault (or its header was modified)" | The key or passphrase does not match the key commitment stored in the vault. Much less often: the salt or commitment in the header was altered. | Check that you are using the key this vault was sealed with. If you re-keyed, the old key no longer opens the new file. |
 | `WrongKeyError`: "this vault is locked with a passphrase, not a raw key" (or the reverse) | You offered the wrong kind of credential. | `wdva inspect VAULT` shows "unlock with key" or "unlock with passphrase". |
-| `IntegrityError`: "vault failed authentication: it is corrupted or has been tampered with" | The key is right, but the header or ciphertext is not what was sealed. Nothing was decrypted. | Restore the file from a backup. Check the disk, the transfer, or who had write access. |
+| `IntegrityError`: "vault failed authentication: it is corrupted or has been tampered with" | The key is right, but the header or ciphertext is not what was sealed. No plaintext was returned. A file cut short by an interrupted copy usually shows up as this error. | Restore the file from a backup, or copy it again. Check the disk, the transfer, or who had write access. |
 | `VaultFormatError`: "not a WDVA vault: bad magic bytes" | The file is something else. | Check the path. A plaintext adapter directory is sealed with `wdva seal`, not opened as a vault. |
-| `VaultFormatError`: "vault is truncated" | The file ends too early, typically after an interrupted copy. | Copy it again. |
+| `VaultFormatError`: "vault is truncated" | The file is too short to hold its header and a tag: only the first few hundred bytes are there. | Copy it again. |
 | `VaultFormatError`: "unsupported vault format version ..." | The vault was written by a newer wdva. | Upgrade wdva. |
 | `VaultFormatError`: "vault holds '...', not an adapter" | It is a valid vault, sealed with the generic `seal` API, and holds something other than an adapter. | Open it with `wdva.unseal_file`. |
 | `AdapterMismatchError`: "adapter does not fit this base model ..." or "... has shape ..., but this base model needs ..." | The adapter was made for a different architecture or size of model. The base model has been left untouched. | Load it into the base model it was trained on. `wdva inspect VAULT --key-file KEY` shows which one that is. |

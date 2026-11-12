@@ -48,6 +48,7 @@ def next_token_logits(model: Any, tokenizer: Any) -> torch.Tensor:
 
 def make_peft_adapter(base_model: str, directory: Path, steps: int) -> torch.Tensor:
     """Ordinary transformers + PEFT code; wdva is not involved. Returns PEFT's logits."""
+    torch.manual_seed(0)  # LoRA starts from random weights; a seed makes the printout repeatable
     tokenizer = AutoTokenizer.from_pretrained(base_model)
     base = AutoModelForCausalLM.from_pretrained(base_model, dtype=torch.float32)
     config = LoraConfig(r=8, lora_alpha=16, target_modules="all-linear", task_type="CAUSAL_LM")

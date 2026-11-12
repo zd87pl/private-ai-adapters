@@ -17,7 +17,7 @@ then on you are relying on that machine.
 | **Adapter metadata** | Base model, rank, target modules, tensor names, document file names, training statistics, timestamps. They describe you and your data. | Inside the ciphertext. Not in the header unless you put them there yourself. |
 | **Keys and passphrases** | Whoever has the key has the adapter. | A key file (mode 0600), an environment variable, or your head. In process memory while in use. |
 | **Training documents** | The original secret. | Wherever you keep them. WDVA reads them and does not copy, move or encrypt them. |
-| **Prompts and outputs** | A question can be private, and an answer can repeat training text. | Process memory, your terminal, and whatever your application logs. WDVA does not store them. |
+| **Prompts and outputs** | A question can be private, and an answer can repeat training text. | Process memory, your terminal, and whatever your application logs. A prompt passed to `wdva query` is a command-line argument, so it is also saved in shell history and visible in process listings while the command runs; `wdva chat` reads prompts from the terminal instead. WDVA does not store them. |
 
 Only the first three are things WDVA encrypts. The last two are listed because
 people forget them.
@@ -55,7 +55,7 @@ Storage and transport are **not** trusted. That is the point of the format.
 | **Someone who steals the key file** | Open every vault sealed with that key, including copies you no longer control, and seal new vaults that authenticate under it | **Not protected.** The key is the secret. | Re-key what you still control (`wdva rekey`) and treat old copies of the vaults as disclosed: old ciphertext still opens with the old key. |
 | **Someone with code execution, an administrator account or memory access on the device while an adapter is loaded** | Read process memory, attach a debugger, read swap or a core dump, replace the wdva package | **Not protected.** The key, the decrypted adapter, your prompts and the answers are all in memory in plaintext. Zeroing on unload ([Memory hygiene](#memory-hygiene)) shortens the window; it does not close it. | Full-disk encryption, encrypted or disabled swap, no core dumps, and a machine you actually trust. |
 | **Another local user on a shared machine** | List processes, read world-readable files | **Partly protected.** Key files, vaults and plaintext exports are created with mode 0600 on POSIX, a key file that others can read triggers `InsecureKeyFileWarning`, and keys are never command-line arguments. Environment variables are visible to your own processes and to root. On Windows, files inherit the access rules of their folder. | Keep keys in a folder only you can read. Root can read everything. |
-| **A malicious or backdoored base model** | Run with the adapter applied; behave differently on a trigger; in principle leak adapter content through its outputs | **Not protected.** WDVA never enables `trust_remote_code` when it loads a base model, so Python code shipped in a model repository is not executed. It does not vet weights or tokenizer files in any other way. | Use base models you have reason to trust, download them once, and run offline. |
+| **A malicious or backdoored base model** | Run with the adapter applied; behave differently on a trigger; in principle leak adapter content through its outputs | **Not protected.** WDVA switches `trust_remote_code` off when it loads a base model, so Python code shipped in a model repository is not executed, and transformers' question whether to run it is never asked: a model that needs such code is refused. WDVA does not vet weights or tokenizer files in any other way. | Use base models you have reason to trust, download them once, and run offline. |
 | **A person allowed to query the adapted model** | Ask questions, including ones designed to make the model recite its training text | **Not protected.** Extracting training data through outputs is what a memorising adapter makes possible. A vault protects the adapter at rest; it places no limit on what the model says. | Give query access only to people who may read the training documents. |
 | **A key holder who authors a hostile vault** | Hand you a vault that authenticates under a key you share | **Partly neutralised**, see the next section. | Do not load vaults from people you would not accept a model file from. |
 | **A network observer** | Watch your traffic | WDVA itself opens no network connections. Loading a base model by its Hub id does, through transformers, unless you pass `--offline` / `local_files_only=True` or set `HF_HUB_OFFLINE=1`; that reveals which base model you fetch. | Download the base model once, then stay offline. |
@@ -76,11 +76,14 @@ with it:
 - **Only LoRA and DoRA.** Any other `peft_type` is rejected with
   `AdapterMismatchError`.
 - **The stored PEFT configuration is reduced to an allowlist.** It is not handed
-  to PEFT as it is. Only structural settings are used: rank, alpha, target and
-  excluded modules, the DoRA and rsLoRA flags, per-module rank and alpha
-  patterns, and which layers to transform. Settings that only matter for
-  training or initialisation, or that say where the adapter came from, are
-  dropped; so no initialisation routine runs, and the base model name in the
+  to PEFT as it is. Only structural settings are used: rank, alpha, target
+  and excluded modules, the DoRA and rsLoRA flags, `fan_in_fan_out`,
+  `lora_bias`, per-module rank and alpha patterns, and which layers to
+  transform. The task type is fixed to causal language modelling; a vault that
+  names another one is refused. Settings that only matter for training or
+  initialisation, or that say where the adapter came from, are dropped; so a
+  vault cannot choose an initialisation routine (PEFT's plain default runs, and
+  the vault's weights then replace its result), and the base model name in the
   config is not followed. Any other setting that is switched on is refused with
   `AdapterMismatchError`.
 - **Nothing in a vault may change the base model.** Several ordinary PEFT
@@ -91,7 +94,10 @@ with it:
   compares the layout of the base model's modules and parameters before and
   after an adapter; if removing an adapter did not restore it, the base model is
   discarded and loaded afresh on next use.
-- **`trust_remote_code` is never enabled**, whichever base model ends up loaded.
+- **Code in a model repository is never run**, whichever base model ends up
+  loaded. `trust_remote_code` is switched off explicitly; left at its default,
+  transformers would ask on standard input whether to run such code. A model
+  that cannot be loaded without it is refused.
 - **All or nothing, and fail closed.** Every tensor the rebuilt adapter needs
   must be present with the right shape, and no extra tensors are accepted.
   Otherwise the adapter layers are removed again and `AdapterMismatchError` is
@@ -166,8 +172,8 @@ what it cannot do.
   request made with `generate(..., adapter=...)`, on `engine.close()` and at the
   end of training, every adapter tensor in the model is overwritten with zeros
   in place, on whatever device it lives, **before** the adapter layers are
-  detached. Then the garbage collector runs and the CUDA or MPS allocator cache
-  is released.
+  detached. Then the engine runs the garbage collector and releases the CUDA or
+  MPS allocator cache (`train_adapter` called on its own skips that last step).
 - The engine refuses to be pickled or copied, and the LangChain chat model
   refuses to be pickled, so a loaded adapter cannot reach disk through `pickle`,
   `copy.deepcopy` or a multiprocessing queue by accident.
@@ -179,7 +185,9 @@ what it cannot do.
 
 - **Immutable copies.** The per-file encryption key that HKDF returns is an
   immutable `bytes` object, as are the hex text read from a key file or from
-  `WDVA_KEY`, the result of `key.hex()`, and any passphrase (a `str`). The
+  `WDVA_KEY`, the result of `key.hex()`, the bytes that the random generator
+  and scrypt hand back before they are copied into a `bytearray`, and any
+  passphrase (a `str`). The
   crypto library keeps its own internal cipher state. None of these can be
   overwritten from Python; they linger until the memory is reused.
 - **The decrypted payload.** Unsealing returns the whole adapter as an immutable

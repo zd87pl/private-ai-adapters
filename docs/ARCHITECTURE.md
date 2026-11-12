@@ -143,8 +143,7 @@ dozen lines. `Trainer` is built around output
 directories: checkpoints, logs, a saved model. Every one of those is a plaintext
 copy of the adapter or a description of the data, and each would have to be
 found and disabled. Owning the loop makes "training writes exactly one file, the
-vault" a property that a test can check by listing the directory. It also keeps
-the `ml` extra to four packages; `Trainer` needs `accelerate` as well.
+vault" a property that a test can check by listing the directory.
 
 **Training text is tokenised exactly as it will be at inference.** Documents are
 encoded the way a raw prompt is (`_ml.encode_text` with the tokenizer deciding
@@ -221,7 +220,9 @@ existing file is replaced only when the caller asked for that. Refusing to
 overwrite is decided atomically by the file system, not by looking first.
 
 **Strict JSON.** Headers and manifests are parsed with duplicate keys, `NaN`,
-`Infinity`, over-long numbers and nesting beyond 64 levels all rejected. Two
+`Infinity`, numbers a double cannot hold (floats beyond its range, integers
+beyond 2^53 - 1) and nesting beyond 64 levels all rejected, and the writer
+refuses to produce any of them. Two
 readers that resolved a duplicate key differently could derive different keys
 from the same authentic file; a fixed nesting limit makes every reader fail the
 same way on a hostile one.
@@ -241,7 +242,8 @@ installed.
   from FORMAT.md alone, on raw primitives, without calling the package. It must
   agree with the implementation. This is the evidence for the claim that the
   specification is sufficient to write a reader.
-- **Tampering.** Every single-bit flip of a vault must be detected; truncation,
+- **Tampering.** Every single-bit flip of a vault must be detected (the test
+  flips each of the eight bits of every byte in turn); truncation,
   appended data and a ciphertext moved under another header likewise. Malformed
   and hostile headers must be rejected before any cryptography runs.
 - **End to end, on logits.** `tests/test_pipeline.py` trains, seals, loads,
@@ -264,8 +266,9 @@ installed.
 - **Isolation.** `tests/test_isolation.py` builds adapters with plain PEFT that
   use features which modify base weights or structure, and checks that the
   engine refuses them and leaves the base model bit for bit intact.
-- **Examples.** `tests/test_examples.py` runs the scripts in `examples/` against
-  the fixture models.
+- **Examples.** `tests/test_examples.py` runs three of the four scripts in
+  `examples/` against the fixture models, and `tests/test_langchain.py` runs the
+  fourth, `langchain_chat.py`.
 - **The documentation itself.** `tests/test_docs.py` checks that links and
   anchors resolve, that every `wdva` command line shown is accepted by the real
   argument parser, and that no page makes the claims this project removed.

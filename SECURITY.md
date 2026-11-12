@@ -104,9 +104,11 @@ These are limits of the design, not bugs in it.
   what it can reach when you unload an adapter or wipe a key, but that is best
   effort: Python, the ML libraries and the operating system make copies it
   cannot reach.
-- **Malicious base models.** wdva loads whichever base model you name. It does
-  not turn on `trust_remote_code`, but it does not vet model files either. A
-  hostile base model can do whatever it likes with an adapter applied to it.
+- **Malicious base models.** wdva loads whichever base model you name. It
+  switches `trust_remote_code` off, so code shipped in a model repository is
+  never run, but it does not vet model files in any other way. A hostile base
+  model can do whatever it likes with an adapter applied to it. (Code from a
+  model repository being executed, or offered for execution, *is* in scope.)
 - **Training-data extraction through model outputs.** An adapter can memorise
   the text it was trained on, and whoever is allowed to query the model with
   the adapter applied can get that text back out. A vault protects the adapter

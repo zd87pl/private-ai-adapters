@@ -127,9 +127,9 @@ neither train an adapter nor apply one, and it was never published.
 - **The header is authenticated exactly as stored.** Every byte from the magic
   number to the end of the header is associated data for the AEAD. Unknown
   header fields are rejected.
-- **Strict header parsing.** Duplicate keys, `NaN` and `Infinity`, nesting
-  deeper than 64 levels, and values of the wrong type are rejected, by writers
-  and readers alike, so that two readers cannot disagree about what an
+- **Strict header parsing.** Duplicate keys, `NaN` and `Infinity`, numbers a
+  double cannot hold, nesting deeper than 64 levels, and values of the wrong
+  type are rejected, by writers and readers alike, so that two readers cannot disagree about what an
   authentic file says and a small hostile file cannot crash a parser.
 - **Bounded scrypt parameters.** The cost recorded in a passphrase-locked vault
   is checked against fixed bounds before scrypt runs, so a hostile file cannot
@@ -151,7 +151,10 @@ neither train an adapter nor apply one, and it was never published.
   adapter out in plaintext.
 - **Pickle adapters are refused.** Only safetensors weights are accepted;
   `adapter_model.bin` is rejected because loading it can execute code.
-- Base models are loaded without enabling `trust_remote_code`.
+- **Code in a model repository is never run.** Base models are loaded with
+  `trust_remote_code` switched off. Left at its default, transformers asks on
+  standard input whether to run such code, and a vault names the base model
+  that `wdva query` loads.
 
 [Unreleased]: https://github.com/zd87pl/private-ai-adapters/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/zd87pl/private-ai-adapters/releases/tag/v0.1.0

@@ -44,7 +44,7 @@ reverse: weights go from memory to ciphertext, with no checkpoint in between.
   the last copy of that key, and does nothing about plaintext that exists elsewhere.
 - Exact recall. An adapter is a lossy, learned memory, not a database (see below).
 
-## A 60-second tour
+## A quick tour
 
 wdva is not on PyPI yet, so install it from the repository (Python 3.10 or newer):
 
@@ -111,7 +111,7 @@ is a control unrelated to the notes. The run's other two questions (who handles 
 which tomato variety) were also answered correctly with the adapter, and not by the base model.
 
 **Read this before you trust an adapter.** With weaker settings (adapters on attention projections
-only, or fewer epochs) the same model answered just as fluently and was wrong: "under the blue
+only, at 30 epochs or fewer) the same model answered just as fluently and was wrong: "under the blue
 umbrella" instead of "under the blue watering can", "the 2nd of April" instead of "the 3rd". An
 adapter is a lossy, learned memory, not a database. Check `loss_after`, test recall on questions
 whose answers you know, and use retrieval (RAG) when you need exact, attributable answers
@@ -246,7 +246,7 @@ Details: [docs/FORMAT.md](docs/FORMAT.md) (normative, with test vectors) and [do
 | Storage swaps in an older vault sealed under the same key | **No.** Both files authenticate; there is no rollback protection. |
 | Someone obtains the key or guesses the passphrase | **No.** The key is the secret. scrypt makes each passphrase guess expensive, not impossible. |
 | Malware or an administrator on the device while an adapter is loaded | **No.** The key, the adapter, your prompts and the answers are in memory in plaintext. |
-| A malicious or backdoored base model | **No.** WDVA never enables `trust_remote_code`, but it does not vet model files. |
+| A malicious or backdoored base model | **No.** WDVA never runs code shipped in a model repository, but it does not vet model files. |
 | A person who is allowed to query the adapted model | **No.** The model can repeat what it memorised. A vault does not limit outputs. |
 | You lose the key | **No recovery.** There is no backdoor and no reset. |
 

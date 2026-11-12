@@ -1,8 +1,9 @@
 # Examples
 
 Small scripts that use the real Python API. Each one explains itself in its
-docstring, accepts `--help`, and writes only into `--workdir` (a fresh temporary
-directory when you do not pass one).
+docstring and accepts `--help`. The first three write only into `--workdir` (a
+fresh temporary directory when you do not pass one); `langchain_chat.py` writes
+no files.
 
 | Script | What it shows | Needs |
 | --- | --- | --- |
@@ -154,7 +155,7 @@ bob: loss 4.238 -> 0.025, sealed bob.wdva in 140s
 (c) after the request: engine.is_loaded = False
 ```
 
-Two things worth noticing:
+Three things worth noticing:
 
 - Asked about things it was never taught, an adapter makes something up, and bob's
   even answers a question about a boat with his own honey sentence. An adapter
