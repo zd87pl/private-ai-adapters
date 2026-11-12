@@ -866,6 +866,24 @@ def test_from_loaded_wraps_an_existing_model(
         eng.generate(PROBE)
 
 
+def test_an_engine_cannot_be_pickled_or_copied_with_an_adapter_inside(
+    engine: Any, trained: Path, key: SecretKey, tmp_path: Path
+) -> None:
+    """pickle must fail before writing: otherwise the plaintext adapter lands on disk."""
+    import copy
+    import pickle
+
+    engine.load(trained, key=key)
+    target = tmp_path / "engine.pkl"
+    with target.open("wb") as fh, pytest.raises(TypeError, match="cannot be pickled"):
+        pickle.dump(engine, fh)
+    assert target.read_bytes() == b""
+    for clone in (copy.copy, copy.deepcopy):
+        with pytest.raises(TypeError, match="cannot be pickled"):
+            clone(engine)
+    assert engine.is_loaded  # and the engine itself is unharmed
+
+
 def test_every_package_warning_shares_one_base_class() -> None:
     import wdva
 

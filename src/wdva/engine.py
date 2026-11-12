@@ -159,6 +159,15 @@ class WDVA:
         state = "adapter loaded" if self.is_loaded else "no adapter"
         return f"WDVA(base_model={self._base_model_name!r}, {state})"
 
+    def __reduce__(self) -> str | tuple[object, ...]:
+        # Refuse before a single byte is written. Left to itself, pickle (and so
+        # copy.deepcopy, multiprocessing, joblib, ...) serialises the base model and
+        # the decrypted adapter first and only then fails on the lock.
+        raise TypeError(
+            "a WDVA engine cannot be pickled or copied: it may hold a decrypted adapter. "
+            "Create a new engine and load the vault there instead."
+        )
+
     def _ensure_model(self) -> tuple[Any, Any]:
         if self._base is None:
             if self._external:
