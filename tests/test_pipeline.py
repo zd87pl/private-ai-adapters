@@ -1092,6 +1092,58 @@ def test_a_base_model_that_is_not_a_name_or_path_is_refused(bad: object, tmp_pat
     assert not (tmp_path / "x.wdva").exists()
 
 
+def test_code_shipped_in_a_model_repository_is_never_run(
+    llama_dir: Path, tmp_path: Path, key: SecretKey, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Left to its default, transformers asks on standard input whether to run such code.
+
+    A vault names its base model, and `wdva query` loads it: nothing a vault names may
+    lead to a prompt that one keystroke, or piped input, turns into code execution.
+    """
+    import json
+
+    from wdva import WDVA, train_adapter
+
+    hostile = tmp_path / "needs-custom-code"
+    shutil.copytree(llama_dir, hostile)
+    config = json.loads((hostile / "config.json").read_text())
+    config["model_type"] = "wdva-test-custom"
+    config["auto_map"] = {
+        "AutoConfig": "custom_code.CustomConfig",
+        "AutoModelForCausalLM": "custom_code.CustomModel",
+    }
+    (hostile / "config.json").write_text(json.dumps(config))
+    marker = tmp_path / "custom-code-ran"
+    (hostile / "custom_code.py").write_text(
+        "import os, pathlib\n"
+        "pathlib.Path(os.environ['WDVA_TEST_MARKER']).write_text('ran')\n"
+        "from transformers import LlamaConfig, LlamaForCausalLM\n"
+        "class CustomConfig(LlamaConfig):\n"
+        "    model_type = 'wdva-test-custom'\n"
+        "class CustomModel(LlamaForCausalLM):\n"
+        "    config_class = CustomConfig\n"
+    )
+    monkeypatch.setenv("WDVA_TEST_MARKER", str(marker))
+    asked: list[str] = []
+
+    def say_yes(prompt: str = "") -> str:
+        asked.append(prompt)
+        return "y"
+
+    monkeypatch.setattr("builtins.input", say_yes)
+
+    engine = WDVA(hostile, device="cpu")
+    with pytest.raises(WDVAError, match="from_loaded"):
+        engine.generate(PROBE)
+    with pytest.raises(WDVAError, match="from_loaded"):
+        train_adapter(
+            hostile, tmp_path / "x.wdva", key=key, texts=FACTS, config=quick_config(max_steps=1)
+        )
+    assert asked == [], "the user was asked whether to run code from the model repository"
+    assert not marker.exists(), "code from the model repository was executed"
+    assert not (tmp_path / "x.wdva").exists()
+
+
 def test_the_repr_of_a_half_built_engine_does_not_raise() -> None:
     """Tracebacks and debuggers call repr() on objects whose constructor failed."""
     from wdva import WDVA

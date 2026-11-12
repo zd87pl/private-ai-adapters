@@ -694,6 +694,31 @@ def test_from_vault_with_a_key(vault: Path, key: SecretKey, llama_dir: Path) -> 
         model.engine.close()
 
 
+def test_the_langchain_example_script_runs(
+    vault: Path, key: SecretKey, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """examples/langchain_chat.py is documentation too; it must keep working."""
+    import importlib.util
+
+    script = Path(__file__).resolve().parents[1] / "examples" / "langchain_chat.py"
+    if not script.is_file():
+        pytest.skip("the examples are not part of this install")
+    spec = importlib.util.spec_from_file_location("wdva_example_langchain_chat", script)
+    assert spec is not None
+    assert spec.loader is not None
+    example = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(example)
+
+    key_file = key.save(tmp_path / "notes.key")
+    arguments = [SEED_Q, "--vault", str(vault), "--key-file", str(key_file), "--compare"]
+    assert example.main(arguments) == 0
+    base_part, marker, adapter_part = capsys.readouterr().out.partition("with adapter: ")
+    assert base_part.startswith("base model:")
+    assert marker, "the adapter's answer was not printed"
+    assert "tobias" not in base_part  # the bare base model does not know
+    assert adapter_part.strip() == "tobias"
+
+
 def test_from_vault_accepts_the_base_model_as_a_path_object(
     vault: Path, key: SecretKey, llama_dir: Path
 ) -> None:

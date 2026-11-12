@@ -14,8 +14,9 @@ from typing import Any
 
 __all__ = [
     "MAX_JSON_DEPTH",
+    "MAX_SAFE_INTEGER",
     "atomic_write",
-    "check_json_depth",
+    "check_json_limits",
     "publish",
     "strict_json_loads",
     "write_temp",
@@ -23,6 +24,9 @@ __all__ = [
 
 MAX_JSON_DEPTH = 64
 """How deeply objects and arrays may nest, counting the outermost value as level 1."""
+
+MAX_SAFE_INTEGER = 2**53 - 1
+"""The largest integer every JSON reader can hold exactly (a double has 53 bits of mantissa)."""
 
 OWNER_ONLY = "0600 on POSIX; on Windows the file inherits its folder's access rules"
 
@@ -52,8 +56,31 @@ def _finite_float(text: str) -> float:
     return value
 
 
-def check_json_depth(value: Any, limit: int = MAX_JSON_DEPTH) -> None:
-    """Raise :class:`ValueError` if ``value`` nests containers more than ``limit`` deep.
+_INT_RANGE = ": integers must lie within +/-(2**53 - 1)"
+
+
+def _abbreviate(number: int) -> str:
+    """A huge integer, shortened without converting all of it to text."""
+    if abs(number) < 10**20:
+        return str(number)
+    return f"of about {number.bit_length()} bits"
+
+
+def _safe_int(text: str) -> int:
+    # Refuse by length first: converting a very long literal is slow, and Python
+    # itself refuses beyond a few thousand digits with a different message.
+    if len(text) > 17 or abs(value := int(text)) > MAX_SAFE_INTEGER:
+        shown = text if len(text) <= 20 else f"{text[:20]}... ({len(text)} characters)"
+        raise ValueError(f"integer {shown} is out of range{_INT_RANGE}")
+    return value
+
+
+def check_json_limits(value: Any, limit: int = MAX_JSON_DEPTH) -> None:
+    """Refuse to write what :func:`strict_json_loads` would refuse to read.
+
+    Raises :class:`ValueError` if ``value`` nests containers more than ``limit``
+    deep, or holds an integer beyond :data:`MAX_SAFE_INTEGER` in either
+    direction. (``NaN`` and infinities are refused by the encoder itself.)
 
     Iterative, so it cannot itself overflow the stack, and it stops at the first
     path that is too deep, so a self-referential structure is rejected rather
@@ -67,6 +94,9 @@ def check_json_depth(value: Any, limit: int = MAX_JSON_DEPTH) -> None:
         elif isinstance(item, (list, tuple)):
             children = item
         else:
+            is_integer = isinstance(item, int) and not isinstance(item, bool)
+            if is_integer and abs(item) > MAX_SAFE_INTEGER:
+                raise ValueError(f"integer {_abbreviate(item)} is out of range{_INT_RANGE}")
             continue
         if depth > limit:
             raise ValueError(f"nested more than {limit} levels deep")
@@ -81,8 +111,11 @@ def strict_json_loads(data: bytes | bytearray | memoryview | str) -> Any:
 
     * an object that contains the same key twice (two readers could otherwise
       disagree about which one counts);
-    * ``NaN``, ``Infinity`` and numbers too large to represent, which are not
-      JSON and cannot be written back out;
+    * ``NaN``, ``Infinity`` and floating-point numbers too large for a double,
+      which are not JSON and cannot be written back out;
+    * integers beyond :data:`MAX_SAFE_INTEGER` in either direction. Python
+      would hold them exactly, but a reader whose numbers are doubles would see
+      a different value, or infinity;
     * containers nested more than :data:`MAX_JSON_DEPTH` levels deep. How deep
       ``json`` can go before it runs out of stack differs between Python
       versions; a fixed limit makes every reader and writer agree;
@@ -95,10 +128,11 @@ def strict_json_loads(data: bytes | bytearray | memoryview | str) -> Any:
             object_pairs_hook=_reject_duplicates,
             parse_constant=_reject_constant,
             parse_float=_finite_float,
+            parse_int=_safe_int,
         )
     except RecursionError:
         raise ValueError(f"nested more than {MAX_JSON_DEPTH} levels deep") from None
-    check_json_depth(value)
+    check_json_limits(value)
     return value
 
 

@@ -107,6 +107,7 @@ def _with_config(bundle: AdapterBundle, **changes: Any) -> AdapterBundle:
         {"megatron_config": {"anything": 1}},
         {"bias": "all"},
         {"use_qalora": True},
+        {"task_type": "SEQ_CLS"},  # would wrap the model as a different kind of model
         {"a_setting_from_the_future": {"enabled": True}},
         {"target_modules": []},
     ],
@@ -131,6 +132,30 @@ def test_configuration_that_would_change_the_base_model_is_refused_untouched(
         assert_untouched(model, before, modules)
         engine.load(good)  # and the engine still works
         assert engine.is_loaded
+    finally:
+        engine.close()
+
+
+def test_a_vault_does_not_choose_how_the_model_is_wrapped(
+    model_dir: Path, tmp_path: Path, key: SecretKey
+) -> None:
+    """The engine serves causal language models; an adapter saved without a task type fits too."""
+    import torch
+
+    engine = make_engine(model_dir)
+    try:
+        engine.train(tmp_path / "ok.wdva", key=key, texts=FACTS, config=quick_config(epochs=20))
+        good = AdapterBundle.load(tmp_path / "ok.wdva", key=key)
+        engine.load(good)
+        expected = logits(engine)
+        untyped = {k: v for k, v in good.adapter_config.items() if k != "task_type"}
+        for bundle in (
+            _with_config(good, task_type=None),
+            AdapterBundle(untyped, good.weights, dict(good.info)),
+        ):
+            engine.load(bundle)
+            assert type(engine._peft).__name__ == "PeftModelForCausalLM"
+            assert torch.equal(logits(engine), expected)
     finally:
         engine.close()
 

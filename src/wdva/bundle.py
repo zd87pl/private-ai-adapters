@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from wdva import vault
-from wdva._util import check_json_depth, publish, strict_json_loads, write_temp
+from wdva._util import check_json_limits, publish, strict_json_loads, write_temp
 from wdva.errors import VaultFormatError
 from wdva.keys import KeyLike
 
@@ -155,7 +155,7 @@ class AdapterBundle:
             "adapter_config": dict(self.adapter_config),
             "info": dict(self.info),
         }
-        check_json_depth(document)  # refuse to write what from_bytes() would refuse to read
+        check_json_limits(document)  # refuse to write what from_bytes() would refuse to read
         manifest = json.dumps(
             document,
             sort_keys=True,

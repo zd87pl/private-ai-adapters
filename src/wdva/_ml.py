@@ -33,6 +33,7 @@ Prompt = "str | Sequence[Message]"
 
 _ML_MODULES = ("torch", "transformers", "peft", "safetensors")
 _SUPPORTED_PEFT_TYPES = ("LORA",)
+_TASK_TYPE = "CAUSAL_LM"
 ADAPTER_PREFIX = "lora_"
 """Every tensor of a LoRA or DoRA adapter has this in its name (PEFT's own prefix)."""
 
@@ -109,15 +110,37 @@ def load_base_model(
     local_files_only: bool = False,
     revision: str | None = None,
 ) -> tuple[Any, Any]:
-    """Load a causal LM and its tokenizer. Never enables ``trust_remote_code``."""
+    """Load a causal LM and its tokenizer. Never runs code from the model's repository.
+
+    ``trust_remote_code`` is switched off explicitly. Left at its default,
+    transformers asks on standard input whether to run Python code that a
+    repository ships, and a vault names the base model to load: one keystroke,
+    or piped input, must not turn a vault into code execution.
+    """
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        name_or_path, local_files_only=local_files_only, revision=revision
-    )
-    model = AutoModelForCausalLM.from_pretrained(
-        name_or_path, dtype=dtype, local_files_only=local_files_only, revision=revision
-    )
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(
+            name_or_path,
+            local_files_only=local_files_only,
+            revision=revision,
+            trust_remote_code=False,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            name_or_path,
+            dtype=dtype,
+            local_files_only=local_files_only,
+            revision=revision,
+            trust_remote_code=False,
+        )
+    except ValueError as exc:
+        if "trust_remote_code" not in str(exc):
+            raise
+        raise WDVAError(
+            f"{name_or_path} can only be loaded by running Python code from its repository, "
+            "which wdva never does. If you have read that code and trust it, load the model "
+            "yourself with transformers and pass it to WDVA.from_loaded(model, tokenizer)."
+        ) from None
     model.to(device)
     model.eval()
     return model, tokenizer
@@ -280,7 +303,6 @@ def to_jsonable(value: Any) -> Any:
 # Settings that decide where the adapter's layers go and how their output is
 # scaled. Nothing else from a vault's configuration ever reaches PEFT.
 _STRUCTURAL_KEYS = (
-    "task_type",
     "r",
     "lora_alpha",
     "target_modules",
@@ -352,12 +374,19 @@ def build_inference_config(adapter_config: Mapping[str, Any]) -> Any:
             f"adapter was trained with bias={cfg['bias']!r}, which overwrites bias terms of the "
             f"base model. {_HOW_TO_FIX}"
         )
+    # The engine serves causal language models. The vault does not get to choose
+    # which kind of PEFT wrapper is put around the base model.
+    if cfg.get("task_type") not in (None, _TASK_TYPE):
+        raise AdapterMismatchError(
+            f"adapter was made for task {cfg['task_type']!r}; "
+            "wdva applies adapters to causal language models only"
+        )
 
     defaults = to_jsonable(LoraConfig().to_dict())
     accepted = set(defaults)
     kwargs: dict[str, Any] = {}
     for key, value in cfg.items():
-        if key in _IGNORED_KEYS or key == "bias":
+        if key in _IGNORED_KEYS or key in ("bias", "task_type"):
             continue
         if key in _STRUCTURAL_KEYS:
             if key in accepted:
@@ -379,6 +408,7 @@ def build_inference_config(adapter_config: Mapping[str, Any]) -> Any:
     try:
         return LoraConfig(
             **kwargs,
+            task_type=_TASK_TYPE,
             bias="none",
             lora_dropout=0.0,
             inference_mode=True,

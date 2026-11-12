@@ -271,10 +271,23 @@ def test_hostile_manifests_fail_cleanly(fake_config: dict, fake_weights: bytes) 
     for manifest in (
         b"[" * 3000,
         b'{"format":"application/vnd.wdva.adapter.v1","adapter_config":{},"info":{"x":NaN}}',
+        b'{"format":"application/vnd.wdva.adapter.v1","adapter_config":{},"info":{"x":1e400}}',
+        b'{"format":"application/vnd.wdva.adapter.v1","adapter_config":{"r":9007199254740992},'
+        b'"info":{}}',
         b'{"format":"application/vnd.wdva.adapter.v1","adapter_config":{},"adapter_config":{}}',
     ):
         with pytest.raises(VaultFormatError):
             AdapterBundle.from_bytes(struct.pack(">I", len(manifest)) + manifest + fake_weights)
+
+
+def test_a_bundle_refuses_to_write_integers_its_reader_would_refuse(
+    fake_config: dict, fake_weights: bytes
+) -> None:
+    for info in ({"n": 2**53}, {"deep": [{"n": -(10**40)}]}):
+        with pytest.raises(ValueError, match="out of range"):
+            AdapterBundle(fake_config, fake_weights, info).to_bytes()
+    bundle = AdapterBundle(fake_config, fake_weights, {"n": 2**53 - 1})
+    assert AdapterBundle.from_bytes(bundle.to_bytes()).info == {"n": 2**53 - 1}
 
 
 def test_bundle_nesting_limit_matches_the_reader(fake_config: dict, fake_weights: bytes) -> None:

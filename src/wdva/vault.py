@@ -49,7 +49,7 @@ from Crypto.Cipher import ChaCha20_Poly1305
 from Crypto.Hash import SHA256
 from Crypto.Protocol.KDF import HKDF
 
-from wdva._util import atomic_write, check_json_depth, strict_json_loads
+from wdva._util import atomic_write, check_json_limits, strict_json_loads
 from wdva.errors import IntegrityError, VaultFormatError, WrongKeyError
 from wdva.keys import KEY_SIZE, KeyLike, _wipe, borrow_key
 
@@ -217,7 +217,7 @@ def _encode_header(
     if public_metadata:
         doc["meta"] = dict(public_metadata)
     try:
-        check_json_depth(doc)  # the same limit every reader enforces
+        check_json_limits(doc)  # the same limits every reader enforces
         encoded = json.dumps(
             doc, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False
         ).encode("ascii")

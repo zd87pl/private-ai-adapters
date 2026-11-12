@@ -58,8 +58,11 @@ A reader MUST reject a header:
 * in which **any object contains the same key twice**, at any depth. Two readers
   that resolved a duplicate differently could otherwise derive different keys
   and nonces from the same authentic file;
-* that contains `NaN`, `Infinity`, `-Infinity`, or a number too large to be a
-  finite double. These are not JSON;
+* that contains `NaN`, `Infinity` or `-Infinity`, a floating-point number too
+  large to be a finite double, or an integer outside the range `-(2^53 - 1)` to
+  `2^53 - 1`. The first are not JSON. The last cannot be held exactly by a
+  reader whose numbers are doubles, so two readers could disagree about its
+  value. Writers MUST NOT produce such a header;
 * with unknown keys or missing required keys. Any new field therefore requires a
   new format version;
 * with a value of the wrong type. `null` is not a substitute for an absent
@@ -163,7 +166,8 @@ The manifest has these keys:
 | `info`           | object | Free-form private notes: base model, training statistics.   |
 
 The manifest is parsed under the same rules as the header: no duplicate keys, no
-`NaN` or `Infinity`, at most 64 levels of nesting.
+`NaN` or `Infinity`, no number outside the ranges given there, at most 64 levels
+of nesting.
 
 The weights use the same tensor names PEFT writes to
 `adapter_model.safetensors`, so a bundle converts losslessly to and from a

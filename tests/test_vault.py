@@ -208,12 +208,14 @@ def test_errors_never_contain_key_material(key: SecretKey) -> None:
 
 
 def test_every_single_bit_flip_is_detected(key: SecretKey) -> None:
+    """All eight bits of every byte: header, ciphertext and tag."""
     blob = seal(b"attack at dawn", key=key, public_metadata={"k": "v"})
     for index in range(len(blob)):
-        mutated = bytearray(blob)
-        mutated[index] ^= 0x01
-        with pytest.raises((IntegrityError, WrongKeyError, VaultFormatError)):
-            unseal(bytes(mutated), key=key)
+        for bit in range(8):
+            mutated = bytearray(blob)
+            mutated[index] ^= 1 << bit
+            with pytest.raises((IntegrityError, WrongKeyError, VaultFormatError)):
+                unseal(bytes(mutated), key=key)
 
 
 def test_ciphertext_and_tag_tampering_is_an_integrity_error(key: SecretKey) -> None:
@@ -548,6 +550,45 @@ def test_non_finite_numbers_in_the_header_are_rejected(key: SecretKey, token: st
         read_header(blob)
     with pytest.raises(ValueError, match="JSON"):
         seal(b"x", key=key, public_metadata={"n": float("nan")})
+
+
+@pytest.mark.parametrize(
+    ("value", "literal"),
+    [
+        pytest.param(2**53, "9007199254740992", id="2^53"),
+        pytest.param(-(2**53), "-9007199254740992", id="-2^53"),
+        pytest.param(10**30, "1" + "0" * 30, id="10^30"),
+        pytest.param(10**400, "1" + "0" * 400, id="10^400"),
+        # Python itself cannot print an integer this long without being asked to.
+        pytest.param(-(10**5000), "-1" + "0" * 5000, id="-10^5000"),
+    ],
+)
+def test_integers_a_double_cannot_hold_are_refused_by_writers_and_readers(
+    key: SecretKey, value: int, literal: str
+) -> None:
+    """A reader whose numbers are doubles would see a different value, or none at all."""
+    with pytest.raises(ValueError, match="out of range"):
+        seal(b"x", key=key, public_metadata={"n": value})
+    with pytest.raises(ValueError, match="out of range"):
+        seal(b"x", key=key, public_metadata={"deep": [{"n": value}]})
+    text, body = _header_text(seal(b"x", key=key, public_metadata={"n": 1}))
+    raw = text.replace('"n":1', f'"n":{literal}').encode()
+    blob = b"WDVA\x01" + struct.pack(">I", len(raw)) + raw + body
+    with pytest.raises(VaultFormatError, match="out of range"):
+        read_header(blob)
+    with pytest.raises(VaultFormatError, match="out of range"):
+        unseal(blob, key=key)
+
+
+def test_the_largest_exact_integers_are_accepted(key: SecretKey) -> None:
+    edge = 2**53 - 1
+    blob = seal(b"x", key=key, public_metadata={"hi": edge, "lo": -edge, "flag": True, "f": 1.5})
+    assert unseal(blob, key=key).header.public_metadata == {
+        "hi": edge,
+        "lo": -edge,
+        "flag": True,
+        "f": 1.5,
+    }
 
 
 @pytest.mark.parametrize(
