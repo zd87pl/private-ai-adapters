@@ -92,6 +92,7 @@ class WDVA:
     ) -> None:
         if not isinstance(base_model, str) or not base_model:
             raise TypeError("base_model must be a model id or path")
+        _ml.require_ml()  # fail here, with an install hint, rather than on first use
         self._base_model_name = base_model
         self._device_request = device
         self._dtype_request = dtype
