@@ -91,6 +91,53 @@ def test_train_query_and_compare(
     assert "exists" in capsys.readouterr().err
 
 
+def test_target_modules_do_not_swallow_the_documents(
+    workspace: Path, llama_dir: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--target-modules a b doc.txt` used to treat doc.txt as a module and skip training on it."""
+    assert run(
+        "train", "--target-modules", "q_proj,v_proj", workspace / "notes.txt",
+        "-o", workspace / "notes.wdva", "--key-file", workspace / "k.key",
+        "--base-model", llama_dir, "--device", "cpu", *TRAIN_FLAGS,
+    ) == 0  # fmt: skip
+    assert "1 document(s), 0 example(s)" in capsys.readouterr().err
+    bundle = AdapterBundle.load(
+        workspace / "notes.wdva", key=SecretKey.from_file(workspace / "k.key")
+    )
+    assert sorted(bundle.adapter_config["target_modules"]) == ["q_proj", "v_proj"]
+    assert bundle.info["training"]["documents"] == ["notes.txt"]
+
+    for bad in ("q_proj v_proj", "q_proj,", "a/b", ","):
+        assert run(
+            "train", workspace / "notes.txt", "--target-modules", bad,
+            "-o", workspace / "x.wdva", "--key-file", workspace / "k.key",
+        ) == 2  # fmt: skip
+    assert not (workspace / "x.wdva").exists()
+
+
+def test_a_mistyped_device_is_a_clean_error_before_the_model_loads(
+    workspace: Path,
+    llama_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert train(workspace, llama_dir) == 0
+    from wdva import _ml
+
+    def explode(*args: object, **kwargs: object) -> None:
+        raise AssertionError("the model must not be loaded for an invalid device")
+
+    monkeypatch.setattr(_ml, "load_base_model", explode)
+    capsys.readouterr()
+    assert run(
+        "query", workspace / "notes.wdva", "hi", "--key-file", workspace / "k.key",
+        "--device", "gpu",
+    ) == 1  # fmt: skip
+    err = capsys.readouterr().err
+    assert "unknown device 'gpu'" in err
+    assert "Traceback" not in err
+
+
 def test_train_plain_lora_with_force(workspace: Path, gpt2_dir: Path) -> None:
     (workspace / "notes.wdva").write_bytes(b"old")
     assert train(workspace, gpt2_dir, "--lora", "--force", "--max-steps", "25", "--seed", "3") == 0

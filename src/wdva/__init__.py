@@ -92,16 +92,19 @@ _LAZY = {
 }
 
 
-def __getattr__(name: str) -> Any:
-    module_name = _LAZY.get(name)
-    if module_name is None:
-        raise AttributeError(f"module 'wdva' has no attribute {name!r}")
-    import importlib
+if not TYPE_CHECKING:
+    # Hidden from type checkers on purpose: they would otherwise accept any
+    # misspelled `wdva.<name>` as `Any`. They see the real imports above instead.
+    def __getattr__(name: str) -> Any:
+        module_name = _LAZY.get(name)
+        if module_name is None:
+            raise AttributeError(f"module 'wdva' has no attribute {name!r}")
+        import importlib
 
-    value = getattr(importlib.import_module(module_name), name)
-    globals()[name] = value
-    return value
+        value = getattr(importlib.import_module(module_name), name)
+        globals()[name] = value
+        return value
 
 
 def __dir__() -> list[str]:
-    return sorted(__all__)
+    return sorted(set(globals()) | set(__all__))

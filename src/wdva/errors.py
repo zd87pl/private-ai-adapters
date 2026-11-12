@@ -2,8 +2,20 @@
 # Copyright 2025 Enclave
 """Exception hierarchy.
 
-Every error raised deliberately by this package derives from :class:`WDVAError`,
-so ``except WDVAError`` catches all of them without catching unrelated bugs.
+:class:`WDVAError` is the base of every failure that is specific to this
+package: a vault that cannot be opened, a wiped key, an adapter that does not
+fit, training that diverges, a missing optional dependency.
+
+Two other families are deliberately left as the built-in exceptions that Python
+programmers already handle:
+
+* invalid arguments raise :class:`ValueError` or :class:`TypeError` (a key of
+  the wrong length, an unsupported document type, a malformed example);
+* file problems raise :class:`OSError` subclasses (:class:`FileNotFoundError`,
+  :class:`FileExistsError`, :class:`PermissionError`).
+
+So ``except (WDVAError, ValueError, OSError)`` covers everything this package
+raises on purpose, which is exactly what the command line catches.
 """
 
 from __future__ import annotations

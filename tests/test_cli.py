@@ -405,3 +405,116 @@ def test_inspect_cannot_be_used_to_inject_terminal_escapes(
     assert "\x07" not in out
     assert "org/model" in out
     assert "training" not in out  # malformed statistics are skipped, not a crash
+
+
+# -- hardening found by adversarial review ---------------------------------
+
+
+def test_target_modules_is_one_comma_separated_value() -> None:
+    parser = cli.build_parser()
+    args = parser.parse_args(
+        ["train", "--target-modules", "q_proj,v_proj", "notes.txt", "more.md", "-o", "o.wdva"]
+    )
+    assert args.target_modules == ["q_proj", "v_proj"]
+    assert args.documents == ["notes.txt", "more.md"]  # not swallowed as module names
+    for bad in ("q_proj v_proj", "q_proj,,v_proj", "dir/file.txt", ""):
+        with pytest.raises(SystemExit):
+            parser.parse_args(["train", "d.txt", "-o", "o.wdva", "--target-modules", bad])
+
+
+def test_destroy_key_refuses_anything_that_is_not_a_key(
+    tmp_path: Path, vault_path: Path, key_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A tab-completion slip must not shred a vault or a document."""
+    document = tmp_path / "notes.txt"
+    document.write_text("irreplaceable")
+    vault_before = vault_path.read_bytes()
+    capsys.readouterr()
+    for victim in (vault_path, document, tmp_path):
+        assert run("destroy-key", victim, "--yes") == 1
+    err = capsys.readouterr().err
+    assert "does not contain a WDVA key" in err
+    assert vault_path.read_bytes() == vault_before
+    assert document.read_text() == "irreplaceable"
+
+    if os.name == "posix":
+        link = tmp_path / "link.key"
+        link.symlink_to(key_file)
+        assert run("destroy-key", link, "--yes") == 1
+        assert "symbolic link" in capsys.readouterr().err
+        assert link.is_symlink()
+    assert SecretKey.from_file(key_file)  # the real key is untouched throughout
+    assert run("destroy-key", key_file, "--yes") == 0
+
+
+def test_keygen_flags_and_overwrite_hint(
+    tmp_path: Path, key_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert run("keygen", "--force") == 2
+    assert "-o" in capsys.readouterr().err
+    assert run("keygen", "-o", key_file) == 1
+    assert "--force" in capsys.readouterr().err  # the CLI names its own flag, not the API's
+
+
+@pytest.mark.parametrize("encoding", ["utf-8-sig", "utf-16", "utf-16-le-bom-crlf"])
+def test_key_files_written_by_other_tools_are_readable(
+    tmp_path: Path, vault_path: Path, key_file: Path, encoding: str
+) -> None:
+    """PowerShell 5 redirection writes UTF-16; Notepad adds a UTF-8 byte-order mark."""
+    text = SecretKey.from_file(key_file).hex()
+    other = tmp_path / "other.key"
+    if encoding == "utf-16-le-bom-crlf":
+        other.write_bytes(b"\xff\xfe" + (text + "\r\n").encode("utf-16-le"))
+    else:
+        other.write_bytes((text + "\n").encode(encoding))
+    other.chmod(0o600)
+    assert run("inspect", vault_path, "--key-file", other) == 0
+
+
+def test_unreadable_key_files_get_a_helpful_error(
+    tmp_path: Path, vault_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    bad = tmp_path / "bad.key"
+    bad.write_bytes(bytes(range(256)))
+    bad.chmod(0o600)
+    capsys.readouterr()
+    assert run("inspect", vault_path, "--key-file", bad) == 1
+    err = capsys.readouterr().err
+    assert "is not a key file" in err
+    assert "wdva keygen -o" in err
+    assert "codec" not in err
+
+
+@pytest.mark.skipif(os.name != "posix", reason="symlinks")
+def test_rekey_in_place_follows_a_symlink_to_the_real_vault(
+    tmp_path: Path, vault_path: Path, key_file: Path
+) -> None:
+    new_key = tmp_path / "new.key"
+    run("keygen", "-o", new_key)
+    link = tmp_path / "link.wdva"
+    link.symlink_to(vault_path)
+    assert run("rekey", link, "--key-file", key_file, "--new-key-file", new_key) == 0
+    assert link.is_symlink()  # the link survives...
+    assert run("inspect", vault_path, "--key-file", new_key) == 0  # ...and the real vault changed
+    assert run("inspect", vault_path, "--key-file", key_file) == 1
+
+
+def test_rekey_never_lowers_a_passphrase_vaults_cost(
+    tmp_path: Path, peft_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wdva import read_header
+
+    monkeypatch.setattr(cli.vault, "SCRYPT_N_DEFAULT", 2**14)
+    path = tmp_path / "strong.wdva"
+    AdapterBundle.from_peft_dir(peft_dir).save(path, passphrase="old", scrypt_n=2**15)
+    monkeypatch.setenv(cli.ENV_PASSPHRASE, "old")
+    fake_getpass(monkeypatch, "new", "new")
+    assert run("rekey", path, "--new-passphrase") == 0
+    assert read_header(path).scrypt_n == 2**15
+    assert AdapterBundle.load(path, passphrase="new")
+
+
+def test_main_module_can_be_imported_without_running() -> None:
+    import importlib
+
+    importlib.import_module("wdva.__main__")  # must not call sys.exit()

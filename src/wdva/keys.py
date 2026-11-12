@@ -33,6 +33,7 @@ __all__ = [
     "InsecureKeyFileWarning",
     "KeyLike",
     "SecretKey",
+    "check_destroyable",
     "destroy_key_file",
 ]
 
@@ -114,7 +115,7 @@ class SecretKey:
                     InsecureKeyFileWarning,
                     stacklevel=2,
                 )
-        return cls.from_hex(p.read_text(encoding="ascii"))
+        return cls.from_hex(_read_key_text(p))
 
     # -- export -----------------------------------------------------------
 
@@ -231,12 +232,49 @@ def destroy_key_file(path: str | os.PathLike[str]) -> None:
       systems, and snapshots may retain the old blocks.
     """
     p = Path(path)
+    check_destroyable(p)
     size = max(p.stat().st_size, KEY_SIZE * 2 + 1)
     with open(p, "r+b", buffering=0) as fh:
         fh.write(secrets.token_bytes(size))
         fh.flush()
         os.fsync(fh.fileno())
     p.unlink()
+
+
+def check_destroyable(path: str | os.PathLike[str]) -> None:
+    """Raise unless ``path`` is a regular file that holds a WDVA key.
+
+    Destroying is irreversible, so it is refused for anything that merely sits
+    where a key was expected: a vault, a document, a symbolic link.
+    """
+    p = Path(path)
+    if p.is_symlink():
+        raise ValueError(f"{p} is a symbolic link; destroy the file it points to instead")
+    if not p.is_file():
+        raise FileNotFoundError(f"no key file at {p}")
+    try:
+        SecretKey.from_hex(_read_key_text(p)).wipe()
+    except ValueError:
+        raise ValueError(f"{p} does not contain a WDVA key; refusing to destroy it") from None
+
+
+def _read_key_text(path: Path) -> str:
+    """Read a key file as text, tolerating the encodings that shells and editors produce."""
+    raw = path.read_bytes()
+    hint = (
+        f"{path} is not a key file: expected 64 hexadecimal characters of plain text "
+        "(create key files with `wdva keygen -o FILE`)"
+    )
+    if len(raw) > 4096:
+        raise ValueError(hint)
+    try:
+        if raw.startswith(b"\xef\xbb\xbf"):  # UTF-8 with a byte-order mark (Notepad)
+            return raw[3:].decode("ascii")
+        if raw.startswith((b"\xff\xfe", b"\xfe\xff")):  # UTF-16 (PowerShell 5 redirection)
+            return raw.decode("utf-16")
+        return raw.decode("ascii")
+    except UnicodeDecodeError:
+        raise ValueError(hint) from None
 
 
 def _wipe(buf: bytearray) -> None:

@@ -456,7 +456,11 @@ def test_chat_messages_and_system_prompts(llama_dir: Path, gpt2_dir: Path) -> No
             if expect_template:
                 assert text == "<|system|>\nbe brief</s>\n<|user|>\nhello</s>\n<|assistant|>\n"
             else:
-                assert text == "hello"
+                # No template to carry it, but the system prompt is not dropped.
+                assert text == "system: be brief\nuser: hello\nassistant:"
+                assert _ml.format_prompt(eng.tokenizer, "hello") == ("hello", False)
+            with pytest.raises(ValueError, match="raw=True"):
+                _ml.format_prompt(eng.tokenizer, "hello", system="be brief", raw=True)
             raw_text, raw_templated = _ml.format_prompt(eng.tokenizer, "hello", raw=True)
             assert (raw_text, raw_templated) == ("hello", False)
             messages = [
@@ -745,7 +749,18 @@ def test_training_input_validation(engine: Any, tmp_path: Path, key: SecretKey) 
     with pytest.raises(TrainingError, match="prompt"):
         engine.train(out, key=key, examples=[{"question": "x"}])
     with pytest.raises(TrainingError, match="assistant"):
-        engine.train(out, key=key, examples=[{"messages": [{"role": "user", "content": "x"}]}])
+        engine.train(
+            out,
+            key=key,
+            examples=[
+                {
+                    "messages": [
+                        {"role": "user", "content": "x"},
+                        {"role": "user", "content": "y"},
+                    ]
+                }
+            ],
+        )
     with pytest.raises(TrainingError, match="response"):
         engine.train(out, key=key, examples=[{"prompt": "x", "response": " "}])
     with pytest.raises(TrainingError, match="no room"):
@@ -809,6 +824,47 @@ def test_non_finite_loss_is_reported_not_sealed(
         assert [name for name, _ in model.named_parameters()] == names_before
     finally:
         engine.close()
+
+
+def test_an_unwritable_destination_is_found_before_training(
+    engine: Any, tmp_path: Path, key: SecretKey
+) -> None:
+    """The adapter exists only in memory: do not train for hours and then fail to save."""
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("a file where a folder was expected")
+    steps: list[int] = []
+    with pytest.raises(OSError):  # noqa: PT011 - NotADirectoryError or FileExistsError by platform
+        engine.train(
+            blocker / "out.wdva",
+            key=key,
+            texts=FACTS,
+            config=quick_config(),
+            on_step=lambda step, total, loss: steps.append(step),
+        )
+    assert steps == []
+    assert not engine.is_loaded
+
+    # A good destination is left clean by the check (no stray temp files).
+    out_dir = tmp_path / "new" / "folder"
+    engine.train(out_dir / "ok.wdva", key=key, texts=FACTS, config=quick_config(epochs=20))
+    assert [p.name for p in out_dir.iterdir()] == ["ok.wdva"]
+
+
+def test_examples_built_in_code_get_clear_errors(
+    engine: Any, tmp_path: Path, key: SecretKey
+) -> None:
+    out = tmp_path / "bad.wdva"
+    for bad, message in (
+        ({"messages": "hello"}, "list of at least two turns"),
+        ({"messages": [{"role": "user"}, {"role": "assistant", "content": "x"}]}, "each turn"),
+        ({"prompt": ["a list"], "response": "x"}, "prompt must be a non-empty string"),
+        ({"prompt": "q", "response": None}, "response must be a non-empty string"),
+        ({"prompt": "q", "response": "a", "system": 5}, "system prompt must be a string"),
+        ("just a string", "must be a JSON object"),
+    ):
+        with pytest.raises(TrainingError, match=message):
+            engine.train(out, key=key, examples=[bad])  # type: ignore[list-item]
+    assert not out.exists()
 
 
 def test_max_steps_caps_training(engine: Any, tmp_path: Path, key: SecretKey) -> None:
@@ -921,6 +977,15 @@ def test_dtype_and_device_resolution() -> None:
     from wdva import _ml
 
     assert _ml.resolve_device("cpu") == "cpu"
+    for typo in ("gpu", "cpuu", "cuda:x", ""):
+        with pytest.raises(ValueError, match="unknown device"):
+            _ml.resolve_device(typo)
+    if not torch.cuda.is_available():
+        with pytest.raises(ValueError, match="no usable CUDA"):
+            _ml.resolve_device("cuda")
+    if not torch.backends.mps.is_available():
+        with pytest.raises(ValueError, match="no Metal"):
+            _ml.resolve_device("mps")
     assert _ml.resolve_device(None) in {"cpu", "cuda", "mps"}
     assert _ml.resolve_dtype(None, "cpu") is torch.float32
     assert _ml.resolve_dtype("auto", "cuda") is torch.float16

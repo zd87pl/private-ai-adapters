@@ -25,7 +25,7 @@ from wdva import vault
 from wdva._version import __version__
 from wdva.bundle import CONTENT_TYPE_ADAPTER, AdapterBundle
 from wdva.errors import WDVAError, WDVAWarning
-from wdva.keys import SecretKey, destroy_key_file
+from wdva.keys import SecretKey, check_destroyable, destroy_key_file
 
 ENV_KEY = "WDVA_KEY"
 ENV_KEY_FILE = "WDVA_KEY_FILE"
@@ -108,6 +108,8 @@ def _unlock_credentials(args: argparse.Namespace, path: str) -> dict[str, Any]:
 
 
 def _cmd_keygen(args: argparse.Namespace) -> int:
+    if args.force and not args.out:
+        raise _UsageError("--force only applies when writing a key file with -o")
     key = SecretKey.generate()
     try:
         if args.out:
@@ -117,6 +119,12 @@ def _cmd_keygen(args: argparse.Namespace) -> int:
             print("Back it up somewhere safe: without it your vaults cannot be opened.")
         else:
             print(key.hex())
+            if sys.stdout.isatty():
+                print(
+                    "wdva: note: the key was printed to the terminal, where it may be logged "
+                    "or scrolled back to. Prefer `wdva keygen -o FILE`.",
+                    file=sys.stderr,
+                )
     finally:
         key.wipe()
     return 0
@@ -128,7 +136,10 @@ def _cmd_seal(args: argparse.Namespace) -> int:
     creds = _credentials(args, sealing=True)
     path = bundle.save(args.out, overwrite=args.force, **creds)
     print(f"Sealed {args.adapter_dir} -> {path} ({path.stat().st_size:,} bytes)")
-    print(f"The plaintext adapter in {args.adapter_dir} is still on disk; delete it if unwanted.")
+    print(
+        "Only adapter_config.json and adapter_model.safetensors were sealed. The plaintext "
+        f"files in {args.adapter_dir} are still on disk; delete them if unwanted."
+    )
     return 0
 
 
@@ -200,14 +211,22 @@ def _clean(value: object) -> str:
 def _cmd_rekey(args: argparse.Namespace) -> int:
     payload, header = vault.unseal_file(args.vault, **_unlock_credentials(args, args.vault))
     new_creds = _credentials(args, sealing=True, new=True)
-    out = args.out or args.vault
+    # In place means the real file: re-sealing a symlink would replace the link
+    # and leave the vault it points to under the old key.
+    out = args.out or os.path.realpath(args.vault)
+    in_place = args.out is None
+    extra: dict[str, Any] = {}
+    if "passphrase" in new_creds:
+        # Never weaken a vault that was deliberately sealed with a higher cost.
+        extra["scrypt_n"] = max(header.scrypt_n or 0, vault.SCRYPT_N_DEFAULT)
     vault.seal_to_file(
         out,
         payload,
         content_type=header.content_type,
         public_metadata=header.public_metadata,
-        overwrite=args.force or out == args.vault,
+        overwrite=args.force or in_place,
         **new_creds,
+        **extra,
     )
     print(f"Re-sealed {args.vault} -> {out} under the new credentials.")
     print("Copies of the old file, and the old key, still open the old ciphertext.")
@@ -215,6 +234,7 @@ def _cmd_rekey(args: argparse.Namespace) -> int:
 
 
 def _cmd_destroy_key(args: argparse.Namespace) -> int:
+    check_destroyable(args.key_file)  # refuse vaults, documents and symlinks before asking
     if not args.yes:
         if not sys.stdin.isatty():
             raise _UsageError("refusing to destroy a key without --yes")
@@ -234,6 +254,21 @@ def _cmd_destroy_key(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _module_list(text: str) -> list[str]:
+    """Parse ``--target-modules q_proj,v_proj``.
+
+    One comma-separated value, not a space-separated list: a list would swallow
+    the document paths that follow it on the command line.
+    """
+    names = [name.strip() for name in text.split(",")]
+    for name in names:
+        if not name or any(ch.isspace() for ch in name) or "/" in name or "\\" in name:
+            raise argparse.ArgumentTypeError(
+                f"{text!r} is not a comma-separated list of module names (e.g. q_proj,v_proj)"
+            )
+    return names
+
+
 def _quiet_ml_logs(verbose: bool) -> None:
     if verbose:
         return
@@ -241,6 +276,12 @@ def _quiet_ml_logs(verbose: bool) -> None:
 
     hf_logging.set_verbosity_error()
     hf_logging.disable_progress_bar()
+    # The call above also silences download progress, and a first run fetches
+    # hundreds of megabytes. Keep that one bar.
+    with contextlib.suppress(ImportError, AttributeError):
+        import huggingface_hub.utils as hub_utils
+
+        hub_utils.enable_progress_bars()
 
 
 def _cmd_train(args: argparse.Namespace) -> int:
@@ -252,7 +293,7 @@ def _cmd_train(args: argparse.Namespace) -> int:
     if not args.documents and not args.examples:
         raise _UsageError("nothing to train on: give documents and/or --examples FILE")
     if Path(args.out).exists() and not args.force:
-        raise FileExistsError(f"{args.out} already exists (use --force to replace it)")
+        raise FileExistsError(f"{args.out} already exists")
     creds = _credentials(args, sealing=True)
     _quiet_ml_logs(args.verbose)
 
@@ -276,7 +317,11 @@ def _cmd_train(args: argparse.Namespace) -> int:
         if step == 1 or step == total or step % max(1, total // 20) == 0:
             print(f"  step {step:>5}/{total}  loss {loss:.4f}", file=sys.stderr)
 
-    print(f"Training on {args.base_model} ...", file=sys.stderr)
+    print(
+        f"Training on {args.base_model}: {len(args.documents)} document(s), "
+        f"{len(examples)} example(s) ...",
+        file=sys.stderr,
+    )
     result = train_adapter(
         args.base_model,
         args.out,
@@ -461,9 +506,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--rank", type=int, help="LoRA rank (default: 8)")
     p.add_argument(
         "--target-modules",
-        nargs="+",
-        metavar="NAME",
-        help="module names to adapt, e.g. q_proj v_proj (default: all linear layers)",
+        type=_module_list,
+        metavar="NAMES",
+        help="comma-separated module names to adapt, e.g. q_proj,v_proj "
+        "(default: all linear layers)",
     )
     p.add_argument("--alpha", type=int, help="LoRA alpha (default: 2 x rank)")
     p.add_argument("--lora", action="store_true", help="plain LoRA instead of DoRA")
@@ -526,6 +572,11 @@ def _fail(message: str, status: int) -> NoReturn:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point for the ``wdva`` console script."""
+    for stream in (sys.stdout, sys.stderr):
+        # Model output can contain characters a legacy console encoding cannot
+        # represent; show a replacement instead of aborting mid-answer.
+        with contextlib.suppress(AttributeError, ValueError, OSError):
+            stream.reconfigure(errors="replace")  # type: ignore[union-attr]
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command == "train" and args.base_model is None:
@@ -539,6 +590,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         _fail(str(exc), 2)
     except EOFError:
         _fail("input ended before a required answer was given", 2)
+    except FileExistsError as exc:
+        message = str(exc).replace(" (pass overwrite=True to replace it)", "")
+        _fail(f"{message} (use --force to replace it)", 1)
     except (WDVAError, OSError, ValueError) as exc:
         _fail(str(exc), 1)
     except KeyboardInterrupt:

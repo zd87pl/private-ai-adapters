@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-authors = [{ name = "Enclave Team", email = "team@enclave.ai" }]
+authors = [{ name = "Enclave Team" }]
 keywords = [
     "lora",
     "dora",
@@ -147,7 +147,7 @@ warn_unused_ignores = true
 # The optional ML stack is treated as untyped whether or not it is installed, so
 # `mypy` gives the same answer in a bare environment and a full one.
 [[tool.mypy.overrides]]
-module = ["torch", "torch.*", "transformers", "transformers.*", "peft", "peft.*", "safetensors", "safetensors.*", "pypdf", "pypdf.*", "langchain_core", "langchain_core.*", "pydantic", "pydantic.*"]
+module = ["torch", "torch.*", "transformers", "transformers.*", "peft", "peft.*", "safetensors", "safetensors.*", "pypdf", "pypdf.*", "langchain_core", "langchain_core.*", "pydantic", "pydantic.*", "huggingface_hub", "huggingface_hub.*"]
 follow_imports = "skip"
 ignore_missing_imports = true
 

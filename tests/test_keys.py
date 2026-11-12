@@ -242,3 +242,32 @@ def test_overwriting_never_writes_through_an_open_or_loose_file(tmp_path: Path) 
     SecretKey.generate().save(link, overwrite=True)
     assert not link.is_symlink()
     assert victim.read_text() == "precious"
+
+
+def test_destroy_refuses_files_that_are_not_keys(tmp_path: Path) -> None:
+    document = tmp_path / "notes.txt"
+    document.write_text("irreplaceable")
+    with pytest.raises(ValueError, match="does not contain a WDVA key"):
+        destroy_key_file(document)
+    assert document.read_text() == "irreplaceable"
+    with pytest.raises(FileNotFoundError):
+        destroy_key_file(tmp_path)  # a directory
+    if os.name == "posix":
+        real = SecretKey.generate().save(tmp_path / "real.key")
+        link = tmp_path / "link.key"
+        link.symlink_to(real)
+        with pytest.raises(ValueError, match="symbolic link"):
+            destroy_key_file(link)
+        assert real.exists()
+
+
+@pytest.mark.parametrize("encoding", ["utf-8-sig", "utf-16"])
+def test_key_files_in_other_text_encodings(tmp_path: Path, encoding: str) -> None:
+    key = SecretKey.generate()
+    path = tmp_path / "k.key"
+    path.write_bytes((key.hex() + "\r\n").encode(encoding))
+    path.chmod(0o600)
+    assert SecretKey.from_file(path) == key
+    path.write_bytes(b"\xff\xfe" + bytes(4096))
+    with pytest.raises(ValueError, match="is not a key file"):
+        SecretKey.from_file(path)

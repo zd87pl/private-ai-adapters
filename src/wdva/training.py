@@ -30,9 +30,10 @@ from pathlib import Path
 from typing import Any
 
 from wdva import _ml, vault
+from wdva._util import write_temp
 from wdva._version import __version__
 from wdva.bundle import AdapterBundle
-from wdva.documents import load_documents
+from wdva.documents import load_documents, validate_example
 from wdva.errors import TrainingError, WDVAWarning
 from wdva.keys import KeyLike
 
@@ -175,26 +176,20 @@ def _document_sequences(
 
 def _example_sequence(tokenizer: Any, example: Mapping[str, Any], *, max_length: int) -> Sequence_:
     """Tokenise one prompt/response example; only the response contributes to the loss."""
+    try:
+        validate_example(example)
+    except ValueError as exc:
+        raise TrainingError(str(exc)) from None
+    context: str | list[Mapping[str, str]]
     if "messages" in example:
         messages = list(example["messages"])
-        if len(messages) < 2 or messages[-1].get("role") != "assistant":
-            raise TrainingError("an example's `messages` must end with an assistant turn")
-        context: str | list[Mapping[str, str]] = messages[:-1]
-        response = messages[-1].get("content")
+        context = messages[:-1]
+        response = messages[-1]["content"]
         system = None
-    elif "prompt" in example and "response" in example:
+    else:
         context = example["prompt"]
         response = example["response"]
         system = example.get("system")
-    else:
-        raise TrainingError(
-            'each example needs either "prompt" and "response", or "messages"; '
-            f"got keys {sorted(example)}"
-        )
-    if not isinstance(response, str) or not response.strip():
-        raise TrainingError("an example's response must be a non-empty string")
-    if isinstance(context, str) and not context.strip():
-        raise TrainingError("an example's prompt must be a non-empty string")
 
     prompt_text, templated = _ml.format_prompt(tokenizer, context, system=system)
     prompt_ids = _ml.encode_text(tokenizer, prompt_text, templated=templated)
@@ -349,8 +344,11 @@ def train_adapter(
     # Fail fast on anything that would otherwise only surface after training.
     vault._check_credentials(key, passphrase)
     target = Path(output_path)
-    if target.exists() and not overwrite:
+    if not overwrite and (target.exists() or target.is_symlink()):
         raise FileExistsError(f"{target} already exists (pass overwrite=True to replace it)")
+    # The adapter exists only in memory until it is sealed, so find out now, not
+    # after hours of training, whether the vault can be written where it was asked for.
+    os.unlink(write_temp(target, b""))
     cfg = config or TrainingConfig()
     if not (documents or texts or examples):
         raise TrainingError("nothing to train on: pass documents, texts or examples")

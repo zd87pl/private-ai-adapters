@@ -53,15 +53,23 @@ def resolve_device(device: str | None) -> str:
     """Pick ``cuda``, then ``mps``, then ``cpu`` unless the caller chose one."""
     import torch
 
-    if device not in (None, "auto"):
-        assert device is not None
-        return device
-    if torch.cuda.is_available():
-        return "cuda"
     mps = getattr(torch.backends, "mps", None)
-    if mps is not None and mps.is_available():
-        return "mps"
-    return "cpu"
+    has_mps = mps is not None and mps.is_available()
+    if device is None or device == "auto":
+        if torch.cuda.is_available():
+            return "cuda"
+        return "mps" if has_mps else "cpu"
+    # Check now, with a clear message, rather than deep inside torch after the
+    # model has been downloaded and loaded.
+    try:
+        kind = torch.device(device).type
+    except (RuntimeError, TypeError):
+        raise ValueError(f"unknown device {device!r}; use 'cpu', 'cuda' or 'mps'") from None
+    if kind == "cuda" and not torch.cuda.is_available():
+        raise ValueError("device 'cuda' was requested, but this PyTorch has no usable CUDA device")
+    if kind == "mps" and not has_mps:
+        raise ValueError("device 'mps' was requested, but no Metal (MPS) device is available")
+    return device
 
 
 def resolve_dtype(dtype: str | torch.dtype | None, device: str) -> torch.dtype:
@@ -130,18 +138,27 @@ def format_prompt(
     carries the model's special tokens and must be tokenised without adding more.
 
     * A plain string is wrapped as a single user turn using the tokenizer's chat
-      template, if it has one. ``raw=True`` skips that and passes it through.
+      template, if it has one. ``raw=True`` skips that and passes it through. A
+      tokenizer without a template gets the string unchanged, or - when a system
+      prompt is given - a plain ``role: content`` transcript that includes it.
     * A list of ``{"role": ..., "content": ...}`` messages is rendered with the
       chat template, or with a simple ``role: content`` transcript when the
       tokenizer has none.
     """
+    if raw and system:
+        raise ValueError("a system prompt cannot be combined with raw=True")
     if isinstance(prompt, str):
-        if raw or not has_chat_template(tokenizer):
+        if raw or (not system and not has_chat_template(tokenizer)):
             return prompt, False
         messages: list[dict[str, str]] = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
+        if not has_chat_template(tokenizer):
+            # No template to carry the system prompt: fall back to the same plain
+            # transcript that message lists get, rather than dropping it silently.
+            transcript = "".join(f"{m['role']}: {m['content']}\n" for m in messages)
+            return transcript + "assistant:", False
     else:
         messages = [_check_message(m) for m in prompt]
         if not messages:

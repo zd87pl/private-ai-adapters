@@ -107,7 +107,10 @@ def test_load_examples(tmp_path: Path) -> None:
         ("", "no examples"),
         ("\n\n", "no examples"),
         ('{"prompt": "q"\n', r"qa\.jsonl:1: not valid JSON"),
-        ('{"prompt": "q", "response": "a"}\n[1, 2]\n', r"qa\.jsonl:2: each line must be"),
+        (
+            '{"prompt": "q", "response": "a"}\n[1, 2]\n',
+            r"qa\.jsonl:2: each example must be a JSON object",
+        ),
     ],
 )
 def test_load_examples_errors(tmp_path: Path, content: str, message: str) -> None:
@@ -115,3 +118,80 @@ def test_load_examples_errors(tmp_path: Path, content: str, message: str) -> Non
     path.write_text(content, encoding="utf-8")
     with pytest.raises(ValueError, match=message):
         load_examples(path)
+
+
+# -- hardening found by adversarial review ---------------------------------
+
+
+@pytest.mark.parametrize(
+    ("row", "message"),
+    [
+        ('{"question": "q", "answer": "a"}', r'needs either "prompt" and "response"'),
+        ('{"messages": "hello"}', "list of at least two turns"),
+        ('{"messages": [{"role": "user", "content": "q"}]}', "at least two turns"),
+        (
+            '{"messages": [{"role": "user", "content": "q"}, {"role": "user", "content": "q"}]}',
+            "end with an assistant turn",
+        ),
+        ('{"messages": [{"role": "user"}, {"role": "assistant", "content": "a"}]}', "each turn"),
+        ('{"prompt": 5, "response": "a"}', "prompt must be a non-empty string"),
+        ('{"prompt": "q", "response": ""}', "response must be a non-empty string"),
+        ('{"prompt": "q", "response": "a", "system": 5}', "system prompt must be a string"),
+    ],
+)
+def test_malformed_examples_are_reported_with_file_and_line(
+    tmp_path: Path, row: str, message: str
+) -> None:
+    """Mistakes should surface when the file is read, not after a model has been loaded."""
+    path = tmp_path / "qa.jsonl"
+    path.write_text('{"prompt": "ok", "response": "fine"}\n\n' + row + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match=rf"qa\.jsonl:3: .*{message}"):
+        load_examples(path)
+
+
+def test_byte_order_marks_are_tolerated(tmp_path: Path) -> None:
+    """Windows editors write UTF-8 with a BOM; it must not break parsing or leak into training."""
+    doc = tmp_path / "notes.txt"
+    doc.write_bytes("﻿greenhouse".encode())
+    assert load_document(doc).text == "greenhouse"
+    qa = tmp_path / "qa.jsonl"
+    qa.write_bytes('﻿{"prompt": "q", "response": "a"}\n'.encode())
+    assert load_examples(qa) == [{"prompt": "q", "response": "a"}]
+
+
+def test_non_utf8_files_are_named_in_the_error(tmp_path: Path) -> None:
+    doc = tmp_path / "latin1.txt"
+    doc.write_bytes("café".encode("latin-1"))
+    with pytest.raises(ValueError, match=r"latin1\.txt is not UTF-8 text"):
+        load_document(doc)
+    qa = tmp_path / "qa.jsonl"
+    qa.write_bytes(b'{"prompt": "caf\xe9", "response": "a"}\n')
+    with pytest.raises(ValueError, match=r"qa\.jsonl is not UTF-8 text"):
+        load_examples(qa)
+
+
+@pytest.mark.parametrize(
+    "content", [b"", b"<html>not a pdf</html>", minimal_pdf("x")[:120], b"%PDF-1.4\n%%EOF\n"]
+)
+def test_broken_pdfs_are_a_value_error_naming_the_file(tmp_path: Path, content: bytes) -> None:
+    pytest.importorskip("pypdf")
+    path = tmp_path / "broken.pdf"
+    path.write_bytes(content)
+    with pytest.raises(ValueError, match=r"broken\.pdf"):
+        load_document(path)
+
+
+def test_password_protected_pdfs_say_so(tmp_path: Path) -> None:
+    pypdf = pytest.importorskip("pypdf")
+    import io
+
+    writer = pypdf.PdfWriter(clone_from=io.BytesIO(minimal_pdf("secret")))
+    try:
+        writer.encrypt("hunter2")
+    except Exception as exc:  # the optional crypto backend for PDF encryption may be absent
+        pytest.skip(f"cannot create an encrypted PDF here: {exc}")
+    path = tmp_path / "locked.pdf"
+    with path.open("wb") as fh:
+        writer.write(fh)
+    with pytest.raises(ValueError, match=r"locked\.pdf.*password-protected"):
+        load_document(path)

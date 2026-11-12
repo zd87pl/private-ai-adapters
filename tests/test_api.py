@@ -27,7 +27,9 @@ def test_every_exported_name_resolves() -> None:
     for name in wdva.__all__:
         assert getattr(wdva, name) is not None, name
     assert set(wdva.__all__) >= ML_NAMES
-    assert dir(wdva) == sorted(wdva.__all__)
+    listing = dir(wdva)
+    assert listing == sorted(listing)
+    assert set(listing) >= set(wdva.__all__) | {"vault", "keys", "bundle", "__version__"}
     with pytest.raises(AttributeError, match="no attribute 'nope'"):
         _ = wdva.nope
 
