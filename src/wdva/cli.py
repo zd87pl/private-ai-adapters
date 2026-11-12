@@ -112,7 +112,8 @@ def _cmd_keygen(args: argparse.Namespace) -> int:
     try:
         if args.out:
             path = key.save(args.out, overwrite=args.force)
-            print(f"Wrote a new 256-bit key to {path} (mode 0600).")
+            how = "mode 0600" if os.name == "posix" else "protect it with folder permissions"
+            print(f"Wrote a new 256-bit key to {path} ({how}).")
             print("Back it up somewhere safe: without it your vaults cannot be opened.")
         else:
             print(key.hex())
@@ -163,7 +164,7 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     print(f"  format        WDVA vault v{head['format_version']}")
     print(f"  cipher        {head['algorithm']} / {head['kdf']}")
     print(f"  unlock with   {head['unlock']}")
-    print(f"  content       {head['content_type']}")
+    print(f"  content       {_clean(head['content_type'])}")
     if head["public_metadata"]:
         print(f"  public meta   {json.dumps(head['public_metadata'], sort_keys=True)}")
     if not report["verified"]:
@@ -173,16 +174,27 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     adapter = report.get("adapter")
     if adapter:
         kind = "DoRA" if adapter["use_dora"] else adapter["peft_type"]
-        print(f"  base model    {adapter['base_model']}")
-        print(f"  adapter       {kind}, rank {adapter['rank']}, alpha {adapter['alpha']}")
+        print(f"  base model    {_clean(adapter['base_model'])}")
+        print(
+            f"  adapter       {_clean(kind)}, rank {_clean(adapter['rank'])}, "
+            f"alpha {_clean(adapter['alpha'])}"
+        )
         print(f"  parameters    {adapter['parameters']:,} in {adapter['tensors']} tensors")
         training = adapter["info"].get("training")
-        if training:
+        if isinstance(training, dict) and all(
+            isinstance(training.get(field), (int, float))
+            for field in ("steps", "loss_before", "loss_after")
+        ):
             print(
                 f"  training      {training['steps']} steps, loss "
                 f"{training['loss_before']:.3f} -> {training['loss_after']:.3f}"
             )
     return 0
+
+
+def _clean(value: object) -> str:
+    """Make a value read from a file safe to print: no control or escape characters."""
+    return "".join(ch if ch.isprintable() else "\N{REPLACEMENT CHARACTER}" for ch in str(value))
 
 
 def _cmd_rekey(args: argparse.Namespace) -> int:

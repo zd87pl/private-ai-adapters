@@ -207,3 +207,116 @@ def test_incomplete_peft_dirs(tmp_path: Path, fake_config: dict, fake_weights: b
     (bad / "adapter_config.json").write_text("[1, 2]")
     with pytest.raises(ValueError, match="JSON object"):
         AdapterBundle.from_peft_dir(bad)
+
+
+# -- hardening found by adversarial review ---------------------------------
+
+
+def _st(header: dict[str, object], data: bytes = b"") -> bytes:
+    encoded = json.dumps(header).encode()
+    return struct.pack("<Q", len(encoded)) + encoded + data
+
+
+@pytest.mark.parametrize(
+    "weights",
+    [
+        # overlapping tensors
+        _st({"a": {"dtype": "U8", "shape": [4], "data_offsets": [0, 4]},
+             "b": {"dtype": "U8", "shape": [4], "data_offsets": [2, 6]}}, bytes(6)),
+        # a gap between tensors
+        _st({"a": {"dtype": "U8", "shape": [2], "data_offsets": [0, 2]},
+             "b": {"dtype": "U8", "shape": [2], "data_offsets": [4, 6]}}, bytes(6)),
+        # bytes after the last tensor
+        _st({"a": {"dtype": "U8", "shape": [2], "data_offsets": [0, 2]}}, bytes(5)),
+        # data that does not start at offset 0
+        _st({"a": {"dtype": "U8", "shape": [2], "data_offsets": [1, 3]}}, bytes(3)),
+        # a dtype the format does not define
+        _st({"a": {"dtype": "COMPLEX999", "shape": [3], "data_offsets": [0, 3]}}, bytes(3)),
+        # booleans and floats posing as integers
+        _st({"a": {"dtype": "U8", "shape": [True, 2], "data_offsets": [0, 2]}}, bytes(2)),
+        _st({"a": {"dtype": "U8", "shape": [2], "data_offsets": [0, 2.0]}}, bytes(2)),
+        # metadata that is not a string map
+        _st({"__metadata__": [1], "a": {"dtype": "U8", "shape": [1], "data_offsets": [0, 1]}},
+            b"x"),
+        _st({"__metadata__": {"k": 1}}),
+        # hostile JSON
+        struct.pack("<Q", 3000) + b"[" * 3000,
+        _st({}) [:8] + b'{"a":1,"a":2}'.ljust(8),
+    ],
+)  # fmt: skip
+def test_weights_are_validated_as_strictly_as_safetensors_does(
+    fake_config: dict, weights: bytes
+) -> None:
+    with pytest.raises(ValueError, match="safetensors"):
+        AdapterBundle(fake_config, weights)
+
+
+def test_strict_validation_agrees_with_the_safetensors_library(fake_weights: bytes) -> None:
+    """Anything we accept, the real library must load (checked when it is installed)."""
+    safetensors_torch = pytest.importorskip("safetensors.torch")
+    import torch
+
+    good = safetensors_torch.save(
+        {"b": torch.ones(2, 3), "a": torch.zeros(4, dtype=torch.float16), "c": torch.tensor(1)},
+        metadata={"format": "pt"},
+    )
+    assert AdapterBundle({}, good).parameter_count == 11
+    assert AdapterBundle({}, safetensors_torch.save({})).tensors() == []
+    assert set(safetensors_torch.load(fake_weights)) == {
+        t.name for t in AdapterBundle({}, fake_weights).tensors()
+    }
+
+
+def test_hostile_manifests_fail_cleanly(fake_config: dict, fake_weights: bytes) -> None:
+    for manifest in (
+        b"[" * 3000,
+        b'{"format":"application/vnd.wdva.adapter.v1","adapter_config":{},"info":{"x":NaN}}',
+        b'{"format":"application/vnd.wdva.adapter.v1","adapter_config":{},"adapter_config":{}}',
+    ):
+        with pytest.raises(VaultFormatError):
+            AdapterBundle.from_bytes(struct.pack(">I", len(manifest)) + manifest + fake_weights)
+
+
+def test_bundle_nesting_limit_matches_the_reader(fake_config: dict, fake_weights: bytes) -> None:
+    def nested(levels: int) -> object:
+        value: object = "leaf"
+        for _ in range(levels):
+            value = {"k": value}
+        return value
+
+    # The manifest is level 1 and `info` level 2, leaving 62 levels inside it.
+    ok = AdapterBundle(fake_config, fake_weights, {"deep": nested(62)})
+    assert AdapterBundle.from_bytes(ok.to_bytes()) == ok
+    too_deep = AdapterBundle(fake_config, fake_weights, {"deep": nested(63)})
+    with pytest.raises(ValueError, match="64 levels"):
+        too_deep.to_bytes()
+
+
+def test_export_stages_both_files_before_replacing_either(
+    tmp_path: Path, fake_config: dict, fake_weights: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Running out of space must not leave a new config beside old weights."""
+    out = tmp_path / "out"
+    first = AdapterBundle({**fake_config, "r": 1}, fake_weights)
+    first.to_peft_dir(out)
+    second = AdapterBundle({**fake_config, "r": 2}, fake_weights)
+
+    calls = {"n": 0}
+    real_fsync = os.fsync
+
+    def fail_on_second_file(fd: int) -> None:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError(28, "No space left on device")
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", fail_on_second_file)
+    with pytest.raises(OSError, match="No space"):
+        second.to_peft_dir(out, overwrite=True)
+    monkeypatch.undo()
+    assert json.loads((out / "adapter_config.json").read_text())["r"] == 1
+    assert (out / "adapter_model.safetensors").read_bytes() == fake_weights
+    assert sorted(p.name for p in out.iterdir()) == [
+        "adapter_config.json",
+        "adapter_model.safetensors",
+    ]

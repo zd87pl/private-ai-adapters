@@ -178,3 +178,67 @@ def test_destroy_key_file_makes_the_vault_unreadable(tmp_path: Path) -> None:
         unseal(blob, key=key)
     with pytest.raises(FileNotFoundError):
         destroy_key_file(path)
+
+
+# -- hardening found by adversarial review ---------------------------------
+
+
+@pytest.mark.parametrize("bad", [32, KEY_SIZE, [0] * 32, [7] * 32, range(32), None, 3.5, (1, 2)])
+def test_only_real_bytes_make_a_key(bad: object) -> None:
+    """bytearray(32) is 32 zero bytes: SecretKey(32) must not quietly be an all-zero key."""
+    with pytest.raises(TypeError, match="32 raw bytes"):
+        SecretKey(bad)  # type: ignore[arg-type]
+
+
+def test_save_never_leaves_a_damaged_key_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old = SecretKey.generate()
+    path = old.save(tmp_path / "my.key")
+
+    # Saving a wiped key over an existing one must not truncate it first.
+    wiped = SecretKey.generate()
+    wiped.wipe()
+    with pytest.raises(KeyWipedError):
+        wiped.save(path, overwrite=True)
+    assert SecretKey.from_file(path) == old
+
+    # Neither must a full disk, and a failed first save must not block the retry.
+    def no_space(*args: object, **kwargs: object) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(os, "fsync", no_space)
+    with pytest.raises(OSError, match="No space"):
+        SecretKey.generate().save(path, overwrite=True)
+    fresh = tmp_path / "fresh.key"
+    with pytest.raises(OSError, match="No space"):
+        SecretKey.generate().save(fresh)
+    monkeypatch.undo()
+    assert SecretKey.from_file(path) == old
+    assert not fresh.exists()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["my.key"]
+    SecretKey.generate().save(fresh)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits and symlinks")
+def test_overwriting_never_writes_through_an_open_or_loose_file(tmp_path: Path) -> None:
+    path = tmp_path / "my.key"
+    path.write_text("an old, world-readable file")
+    path.chmod(0o644)
+    with open(path) as already_open:
+        new = SecretKey.generate()
+        new.save(path, overwrite=True)
+        # A reader that had the old file open does not get to see the new key.
+        assert already_open.read() == "an old, world-readable file"
+    assert SecretKey.from_file(path) == new
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+    victim = tmp_path / "victim.txt"
+    victim.write_text("precious")
+    link = tmp_path / "link.key"
+    link.symlink_to(victim)
+    with pytest.raises(FileExistsError):
+        SecretKey.generate().save(link)
+    SecretKey.generate().save(link, overwrite=True)
+    assert not link.is_symlink()
+    assert victim.read_text() == "precious"

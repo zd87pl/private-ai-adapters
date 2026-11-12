@@ -25,6 +25,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import TypeAlias
 
+from wdva._util import atomic_write
 from wdva.errors import KeyWipedError, WDVAWarning
 
 __all__ = [
@@ -58,6 +59,12 @@ class SecretKey:
     def __init__(self, material: bytes | bytearray | memoryview) -> None:
         if isinstance(material, str):
             raise TypeError("SecretKey() takes raw bytes; use SecretKey.from_hex() for text")
+        if not isinstance(material, (bytes, bytearray, memoryview)):
+            # bytearray(32) would quietly be 32 zero bytes: a valid-looking, worthless key.
+            raise TypeError(
+                f"SecretKey() takes 32 raw bytes, not {type(material).__name__}; "
+                "use SecretKey.generate() for a new key"
+            )
         buf = bytearray(material)
         if len(buf) != KEY_SIZE:
             n = len(buf)
@@ -116,18 +123,21 @@ class SecretKey:
         return self._material().hex()
 
     def save(self, path: str | os.PathLike[str], *, overwrite: bool = False) -> Path:
-        """Write the key to ``path`` with owner-only permissions (0600).
+        """Write the key to ``path``, readable by its owner only.
+
+        (Mode 0600 on POSIX. On Windows the file inherits its folder's access
+        rules, so keep key files in a folder only you can read.)
 
         Refuses to replace an existing file unless ``overwrite=True``: silently
-        overwriting a key makes every vault sealed with it unreadable.
+        overwriting a key makes every vault sealed with it unreadable. Either
+        way the key is written to a new file, flushed to disk and then moved
+        into place, so a failed save never leaves an empty or half-written key
+        file, an existing file is never open for writing while it still has
+        looser permissions, and a symlink at ``path`` is replaced, not followed.
         """
         p = Path(path)
-        flags = os.O_WRONLY | os.O_CREAT | (os.O_TRUNC if overwrite else os.O_EXCL)
-        fd = os.open(p, flags, 0o600)
-        with os.fdopen(fd, "w", encoding="ascii") as fh:
-            fh.write(self.hex() + "\n")
-        if overwrite and os.name == "posix":
-            os.chmod(p, 0o600)  # an existing file keeps its old mode otherwise
+        text = self.hex() + "\n"  # raises KeyWipedError before anything is touched
+        atomic_write(p, text.encode("ascii"), overwrite=overwrite)
         return p
 
     # -- lifecycle --------------------------------------------------------

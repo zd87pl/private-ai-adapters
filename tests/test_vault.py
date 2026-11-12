@@ -468,3 +468,199 @@ def test_header_repr_hides_binary_fields(key: SecretKey) -> None:
     text = repr(header)
     assert "salt" not in text
     assert "commitment" not in text
+
+
+# -- hardening found by adversarial review ---------------------------------
+
+
+def _raw_vault(header: bytes) -> bytes:
+    """A syntactically complete vault around arbitrary header bytes."""
+    return b"WDVA\x01" + struct.pack(">I", len(header)) + header + bytes(32)
+
+
+@pytest.mark.parametrize("depth", [1_100, 30_000])
+@pytest.mark.parametrize("bracket", [b"[", b'{"a":'])
+def test_deeply_nested_headers_fail_cleanly(depth: int, bracket: bytes) -> None:
+    """A tiny hostile file must not crash the reader with RecursionError."""
+    blob = _raw_vault((bracket * depth)[:65_536])
+    with pytest.raises(VaultFormatError):
+        unseal(blob, key=bytes(32))
+    with pytest.raises(VaultFormatError):
+        read_header(blob)
+
+
+def _nested(levels: int) -> object:
+    value: object = "leaf"
+    for _ in range(levels):
+        value = [value]
+    return value
+
+
+def test_nesting_limit_is_the_same_for_writers_and_readers(key: SecretKey) -> None:
+    """Whatever seal() accepts, unseal() must open - on every Python version."""
+    # The header object is level 1 and `meta` level 2, leaving 62 levels inside it.
+    deepest = {"deep": _nested(62)}
+    assert unseal(seal(b"x", key=key, public_metadata=deepest), key=key).payload == b"x"
+    for levels in (63, 70, 5_000):
+        with pytest.raises(ValueError, match="public_metadata"):
+            seal(b"x", key=key, public_metadata={"deep": _nested(levels)})
+
+    cyclic: list[object] = []
+    cyclic.append(cyclic)
+    with pytest.raises(ValueError, match="public_metadata"):
+        seal(b"x", key=key, public_metadata={"loop": cyclic})
+
+    # A hand-made header one level too deep is refused by the reader as well.
+    text, body = _header_text(seal(b"x", key=key, public_metadata={"deep": "leaf"}))
+    raw = text.replace('"leaf"', "[" * 63 + '"leaf"' + "]" * 63).encode()
+    with pytest.raises(VaultFormatError, match="64 levels"):
+        read_header(b"WDVA\x01" + struct.pack(">I", len(raw)) + raw + body)
+
+
+def _header_text(blob: bytes) -> tuple[str, bytes]:
+    (header_len,) = struct.unpack(">I", blob[5:9])
+    return blob[9 : 9 + header_len].decode(), blob[9 + header_len :]
+
+
+def test_duplicate_header_keys_are_rejected(key: SecretKey) -> None:
+    """Readers that resolve duplicates differently must not both accept a file."""
+    text, body = _header_text(seal(b"x", key=key, public_metadata={"a": {"b": 1}}))
+    variants = [
+        text[:-1] + ',"type":"application/octet-stream"}',  # top level
+        text.replace('"salt":', '"salt":"AAAA","salt":', 1),  # a field the key schedule uses
+        text.replace('{"b":1}', '{"b":1,"b":2}'),  # nested inside meta
+    ]
+    for variant in variants:
+        raw = variant.encode()
+        blob = b"WDVA\x01" + struct.pack(">I", len(raw)) + raw + body
+        with pytest.raises(VaultFormatError, match="duplicate key"):
+            unseal(blob, key=key)
+        with pytest.raises(VaultFormatError, match="duplicate key"):
+            read_header(blob)
+
+
+@pytest.mark.parametrize("token", ["NaN", "Infinity", "-Infinity", "1e999"])
+def test_non_finite_numbers_in_the_header_are_rejected(key: SecretKey, token: str) -> None:
+    text, body = _header_text(seal(b"x", key=key, public_metadata={"n": 1}))
+    raw = text.replace('"n":1', f'"n":{token}').encode()
+    blob = b"WDVA\x01" + struct.pack(">I", len(raw)) + raw + body
+    with pytest.raises(VaultFormatError):
+        read_header(blob)
+    with pytest.raises(ValueError, match="JSON"):
+        seal(b"x", key=key, public_metadata={"n": float("nan")})
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda h: h.update(pw=None),  # null is not "absent"
+        lambda h: h["pw"].update(r=8.0),
+        lambda h: h["pw"].update(p=True),
+        lambda h: h["pw"].update(r="8"),
+    ],
+)
+def test_passphrase_parameters_must_have_exact_types(mutate) -> None:  # type: ignore[no-untyped-def]
+    blob = seal(b"x", passphrase="pw", scrypt_n=FAST_SCRYPT)
+    with pytest.raises(VaultFormatError):
+        unseal(_with_header(blob, mutate), passphrase="pw")
+
+
+def test_null_pw_on_a_key_vault_is_rejected(key: SecretKey) -> None:
+    with pytest.raises(VaultFormatError, match="pw"):
+        unseal(_with_header(seal(b"x", key=key), lambda h: h.update(pw=None)), key=key)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "x\x1b[2J\x1b[31mPWNED",  # terminal escape sequence
+        "plain",  # not type/subtype
+        "a/b c",
+        "a/b\n",
+        "/b",
+        "a/",
+        "café/x",
+        "a/" + "b" * 200,
+        7,
+        None,
+    ],
+)
+def test_content_type_must_be_a_printable_media_type(key: SecretKey, bad: object) -> None:
+    with pytest.raises(ValueError, match="content_type"):
+        seal(b"x", key=key, content_type=bad)  # type: ignore[arg-type]
+    blob = _with_header(seal(b"x", key=key), lambda h: h.update(type=bad))
+    with pytest.raises(VaultFormatError):
+        read_header(blob)
+
+
+def test_the_maximum_scrypt_cost_is_usable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """hashlib refuses maxmem >= 2**31, which the documented maximum used to request."""
+    captured: dict[str, int] = {}
+    real = hashlib.scrypt
+
+    def spy(password: bytes, **kwargs: int) -> bytes:
+        captured.update(kwargs)
+        return real(password, **{**kwargs, "n": 2**14})  # keep the test fast and small
+
+    monkeypatch.setattr(vault.hashlib, "scrypt", spy)
+    blob = seal(b"x", passphrase="pw", scrypt_n=vault.SCRYPT_N_MAX)
+    assert captured["n"] == vault.SCRYPT_N_MAX == 2**20
+    assert 128 * 8 * captured["n"] < captured["maxmem"] < 2**31
+    assert read_header(blob).scrypt_n == 2**20
+    assert unseal(blob, passphrase="pw").payload == b"x"
+    for n in (2**14, 2**17, 2**19, 2**20):
+        assert 128 * 8 * n < vault._scrypt_maxmem(n) < 2**31
+
+
+def test_refusing_to_overwrite_is_atomic(
+    tmp_path: Path, key: SecretKey, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file that appears while we are sealing must not be silently replaced."""
+    target = tmp_path / "a.wdva"
+    real_seal = vault.seal
+
+    def slow_seal(*args: object, **kwargs: object) -> bytes:
+        target.write_bytes(b"written by someone else meanwhile")
+        return real_seal(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(vault, "seal", slow_seal)
+    with pytest.raises(FileExistsError, match="already exists"):
+        seal_to_file(target, b"mine", key=key)
+    assert target.read_bytes() == b"written by someone else meanwhile"
+    assert [p.name for p in tmp_path.iterdir()] == ["a.wdva"]  # no temp file left behind
+
+
+@pytest.mark.skipif(os.name != "posix", reason="symlinks and POSIX modes")
+def test_symlinks_at_the_target_are_never_followed(tmp_path: Path, key: SecretKey) -> None:
+    victim = tmp_path / "victim.txt"
+    victim.write_text("precious")
+    link = tmp_path / "a.wdva"
+    link.symlink_to(victim)
+    with pytest.raises(FileExistsError):
+        seal_to_file(link, b"x", key=key)
+    dangling = tmp_path / "b.wdva"
+    dangling.symlink_to(tmp_path / "nowhere")
+    with pytest.raises(FileExistsError):
+        seal_to_file(dangling, b"x", key=key)
+    seal_to_file(link, b"x", key=key, overwrite=True)
+    assert not link.is_symlink()  # the link itself was replaced
+    assert victim.read_text() == "precious"
+    assert stat.S_IMODE(link.stat().st_mode) == 0o600
+
+
+def test_failed_writes_leave_no_trace(
+    tmp_path: Path, key: SecretKey, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = seal_to_file(tmp_path / "a.wdva", b"old", key=key)
+
+    def no_space(*args: object, **kwargs: object) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(os, "fsync", no_space)
+    with pytest.raises(OSError, match="No space"):
+        seal_to_file(target, b"new", key=key, overwrite=True)
+    with pytest.raises(OSError, match="No space"):
+        seal_to_file(tmp_path / "b.wdva", b"new", key=key)
+    monkeypatch.undo()
+    assert unseal_file(target, key=key).payload == b"old"
+    assert [p.name for p in tmp_path.iterdir()] == ["a.wdva"]

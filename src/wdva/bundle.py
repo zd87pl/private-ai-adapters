@@ -20,6 +20,7 @@ elsewhere.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import struct
@@ -29,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from wdva import vault
+from wdva._util import check_json_depth, publish, strict_json_loads, write_temp
 from wdva.errors import VaultFormatError
 from wdva.keys import KeyLike
 
@@ -57,6 +59,11 @@ _DTYPE_BYTES = {
     "I64": 8,
     "U64": 8,
     "F64": 8,
+    "C64": 8,
+    "F8_E4M3": 1,
+    "F8_E4M3FNUZ": 1,
+    "F8_E5M2": 1,
+    "F8_E5M2FNUZ": 1,
 }
 
 
@@ -91,7 +98,7 @@ class AdapterBundle:
             raise TypeError("weights must be the bytes of a .safetensors file")
         if not isinstance(self.info, Mapping):
             raise TypeError("info must be a mapping")
-        _safetensors_header(self.weights)  # fail early on anything that is not safetensors
+        _safetensors_header(self.weights)  # fail early on anything safetensors would reject
 
     def __repr__(self) -> str:
         # Never dump weights or config into logs.
@@ -143,12 +150,14 @@ class AdapterBundle:
 
     def to_bytes(self) -> bytes:
         """Serialise to the plaintext payload format. This is **not** encrypted."""
+        document = {
+            "format": CONTENT_TYPE_ADAPTER,
+            "adapter_config": dict(self.adapter_config),
+            "info": dict(self.info),
+        }
+        check_json_depth(document)  # refuse to write what from_bytes() would refuse to read
         manifest = json.dumps(
-            {
-                "format": CONTENT_TYPE_ADAPTER,
-                "adapter_config": dict(self.adapter_config),
-                "info": dict(self.info),
-            },
+            document,
             sort_keys=True,
             separators=(",", ":"),
             allow_nan=False,
@@ -168,9 +177,9 @@ class AdapterBundle:
         if manifest_len > _MAX_MANIFEST_SIZE or end > len(view):
             raise VaultFormatError("adapter payload has an invalid manifest length")
         try:
-            manifest = json.loads(bytes(view[_MANIFEST_LEN.size : end]).decode("utf-8"))
-        except (UnicodeDecodeError, ValueError) as exc:
-            raise VaultFormatError("adapter manifest is not valid JSON") from exc
+            manifest = strict_json_loads(view[_MANIFEST_LEN.size : end])
+        except ValueError as exc:
+            raise VaultFormatError(f"adapter manifest is not valid JSON: {exc}") from None
         if not isinstance(manifest, dict) or manifest.get("format") != CONTENT_TYPE_ADAPTER:
             raise VaultFormatError("payload is not a WDVA adapter bundle")
         config = manifest.get("adapter_config")
@@ -212,7 +221,7 @@ class AdapterBundle:
         scrypt_n: int = vault.SCRYPT_N_DEFAULT,
         overwrite: bool = False,
     ) -> Path:
-        """Encrypt this bundle and write it to ``path`` (atomically, mode 0600)."""
+        """Encrypt this bundle and write it to ``path`` (atomically, owner-readable only)."""
         return vault.seal_to_file(
             path,
             self.to_bytes(),
@@ -278,7 +287,10 @@ class AdapterBundle:
                     "load. Re-save the adapter with safe_serialization=True."
                 )
             raise FileNotFoundError(f"{d} has no {_WEIGHTS_FILE}")
-        config = json.loads(config_path.read_text(encoding="utf-8"))
+        try:
+            config = strict_json_loads(config_path.read_bytes())
+        except ValueError as exc:
+            raise ValueError(f"{config_path} is not valid JSON: {exc}") from None
         if not isinstance(config, dict):
             raise ValueError(f"{config_path} does not contain a JSON object")
         return cls(adapter_config=config, weights=weights_path.read_bytes(), info=dict(info or {}))
@@ -287,27 +299,48 @@ class AdapterBundle:
         """Write the adapter **in plaintext** as a standard PEFT directory.
 
         This is the deliberate exit from the vault: after it, the adapter is
-        ordinary files that anything can read. Files are created with mode 0600.
+        ordinary files that anything can read. The files are created readable by
+        their owner only (mode 0600 on POSIX).
+
+        Both files are written out completely before either is moved into
+        place, so running out of disk space cannot leave a new config beside
+        old weights. The two final renames are still separate steps.
         """
         d = Path(directory)
+        # Weights first: if the second rename is interrupted, a config never
+        # describes weights that are not there yet.
         targets = {
+            d / _WEIGHTS_FILE: bytes(self.weights),
             d / _CONFIG_FILE: (
                 json.dumps(dict(self.adapter_config), indent=2, sort_keys=True) + "\n"
             ).encode("utf-8"),
-            d / _WEIGHTS_FILE: bytes(self.weights),
         }
         if not overwrite:
             for target in targets:
-                if target.exists():
+                if target.exists() or target.is_symlink():
                     raise FileExistsError(f"{target} already exists")
-        d.mkdir(parents=True, exist_ok=True)
-        for target, data in targets.items():
-            vault._atomic_write(target, data)
+        staged: list[tuple[str, Path]] = []
+        try:
+            for target, data in targets.items():
+                staged.append((write_temp(target, data), target))
+            while staged:
+                tmp_name, target = staged.pop(0)
+                publish(tmp_name, target, overwrite=overwrite)
+        finally:
+            for tmp_name, _ in staged:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp_name)
         return d
 
 
 def _safetensors_header(weights: bytes | bytearray | memoryview) -> dict[str, Any]:
-    """Parse and sanity-check the JSON header of a safetensors blob."""
+    """Parse and validate the JSON header of a safetensors blob.
+
+    Applies the same structural rules as the safetensors library itself, so that
+    a file accepted here is one the library will load: known dtypes, integer
+    shapes, sizes that match, and tensor data that covers the buffer exactly -
+    no overlaps, no gaps, nothing left over.
+    """
     view = memoryview(weights)
     if len(view) < 8:
         raise ValueError("weights are not a safetensors file (too short)")
@@ -315,34 +348,48 @@ def _safetensors_header(weights: bytes | bytearray | memoryview) -> dict[str, An
     if header_len > _MAX_SAFETENSORS_HEADER or 8 + header_len > len(view):
         raise ValueError("weights are not a safetensors file (bad header length)")
     try:
-        header = json.loads(bytes(view[8 : 8 + header_len]).decode("utf-8"))
-    except (UnicodeDecodeError, ValueError) as exc:
-        raise ValueError("weights are not a safetensors file (unreadable header)") from exc
+        header = strict_json_loads(view[8 : 8 + header_len])
+    except ValueError as exc:
+        raise ValueError(f"weights are not a safetensors file (unreadable header: {exc})") from None
     if not isinstance(header, dict):
         raise ValueError("weights are not a safetensors file (header is not an object)")
+    metadata = header.get("__metadata__", {})
+    if not isinstance(metadata, dict) or not all(isinstance(v, str) for v in metadata.values()):
+        raise ValueError("weights are not a safetensors file (bad __metadata__)")
     data_len = len(view) - 8 - header_len
+    spans: list[tuple[int, int, str]] = []
     for name, entry in header.items():
         if name == "__metadata__":
             continue
-        if (
-            not isinstance(entry, dict)
-            or not isinstance(entry.get("dtype"), str)
-            or not isinstance(entry.get("shape"), list)
-            or not all(isinstance(dim, int) and dim >= 0 for dim in entry["shape"])
-            or not isinstance(entry.get("data_offsets"), list)
-            or len(entry["data_offsets"]) != 2
-        ):
+        if not isinstance(entry, dict):
             raise ValueError(f"weights are not a safetensors file (bad entry for {name!r})")
-        start, stop = entry["data_offsets"]
-        if not (
-            isinstance(start, int) and isinstance(stop, int) and 0 <= start <= stop <= data_len
+        dtype, shape, offsets = entry.get("dtype"), entry.get("shape"), entry.get("data_offsets")
+        width = _DTYPE_BYTES.get(dtype) if isinstance(dtype, str) else None
+        if width is None:
+            raise ValueError(f"weights are not a safetensors file (unknown dtype for {name!r})")
+        if not isinstance(shape, list) or not all(type(dim) is int and dim >= 0 for dim in shape):
+            raise ValueError(f"weights are not a safetensors file (bad shape for {name!r})")
+        if (
+            not isinstance(offsets, list)
+            or len(offsets) != 2
+            or not all(type(offset) is int for offset in offsets)
+            or not 0 <= offsets[0] <= offsets[1] <= data_len
         ):
             raise ValueError(f"weights are not a safetensors file (bad offsets for {name!r})")
-        width = _DTYPE_BYTES.get(entry["dtype"])
-        if width is not None:
-            elements = 1
-            for dim in entry["shape"]:
-                elements *= dim
-            if elements * width != stop - start:
-                raise ValueError(f"weights are not a safetensors file (size mismatch for {name!r})")
+        elements = 1
+        for dim in shape:
+            elements *= dim
+        if elements * width != offsets[1] - offsets[0]:
+            raise ValueError(f"weights are not a safetensors file (size mismatch for {name!r})")
+        spans.append((offsets[0], offsets[1], name))
+    position = 0
+    for start, stop, name in sorted(spans):
+        if start != position:
+            raise ValueError(
+                "weights are not a safetensors file "
+                f"(tensor data overlaps or leaves a gap at {name!r})"
+            )
+        position = stop
+    if position != data_len:
+        raise ValueError("weights are not a safetensors file (data after the last tensor)")
     return header

@@ -17,7 +17,12 @@ from pathlib import PurePath
 from typing import TYPE_CHECKING, Any
 
 from wdva.bundle import AdapterBundle
-from wdva.errors import AdapterMismatchError, MissingDependencyError, WDVAError
+from wdva.errors import (
+    AdapterMismatchError,
+    MissingDependencyError,
+    VaultFormatError,
+    WDVAError,
+)
 
 if TYPE_CHECKING:
     import torch
@@ -248,7 +253,10 @@ def apply_adapter(model: Any, bundle: AdapterBundle) -> Any:
     config = build_inference_config(bundle.adapter_config)
     # The engine already compares base-model names and warns; stop PEFT repeating it.
     config.base_model_name_or_path = None
-    state = safetensors_load(bytes(bundle.weights))
+    try:
+        state = safetensors_load(bytes(bundle.weights))
+    except Exception as exc:  # safetensors raises its own error type, not a ValueError
+        raise VaultFormatError(f"adapter weights could not be loaded: {exc}") from exc
 
     try:
         peft_model = inject(model, config)

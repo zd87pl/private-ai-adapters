@@ -36,9 +36,9 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import struct
-import tempfile
 import unicodedata
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
@@ -49,6 +49,7 @@ from Crypto.Cipher import ChaCha20_Poly1305
 from Crypto.Hash import SHA256
 from Crypto.Protocol.KDF import HKDF
 
+from wdva._util import atomic_write, check_json_depth, strict_json_loads
 from wdva.errors import IntegrityError, VaultFormatError, WrongKeyError
 from wdva.keys import KEY_SIZE, KeyLike, _wipe, borrow_key
 
@@ -91,7 +92,13 @@ SCRYPT_P = 1
 _INFO_ENCRYPTION = b"wdva/v1/encryption-key"
 _INFO_COMMITMENT = b"wdva/v1/key-commitment"
 
+MAX_CONTENT_TYPE_LENGTH = 127
+
 _PREFIX = struct.Struct(">4sBI")  # magic, version, header length
+# A media type, restricted to RFC 6838's token characters. Being strict here also
+# keeps control characters from an unverified header away from terminals.
+_MEDIA_NAME = r"[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*"
+_CONTENT_TYPE = re.compile(rf"{_MEDIA_NAME}/{_MEDIA_NAME}")
 _HEADER_KEYS = frozenset({"alg", "kdf", "salt", "nonce", "commit", "type", "pw", "meta"})
 _REQUIRED_HEADER_KEYS = frozenset({"alg", "kdf", "salt", "nonce", "commit", "type"})
 _PW_KEYS = frozenset({"kdf", "n", "r", "p", "salt"})
@@ -154,6 +161,14 @@ class Unsealed(NamedTuple):
     header: VaultHeader
 
 
+def _is_content_type(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) <= MAX_CONTENT_TYPE_LENGTH
+        and _CONTENT_TYPE.fullmatch(value) is not None
+    )
+
+
 def _b64(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
 
@@ -202,9 +217,12 @@ def _encode_header(
     if public_metadata:
         doc["meta"] = dict(public_metadata)
     try:
+        check_json_depth(doc)  # the same limit every reader enforces
         encoded = json.dumps(
             doc, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False
         ).encode("ascii")
+    except RecursionError:
+        raise ValueError("public_metadata must be JSON-serialisable: nested too deeply") from None
     except (TypeError, ValueError) as exc:
         raise ValueError(f"public_metadata must be JSON-serialisable: {exc}") from exc
     if len(encoded) > MAX_HEADER_SIZE:
@@ -231,9 +249,9 @@ def _validate_scrypt_n(n: Any) -> int:
 
 def _decode_header(version: int, raw: bytes) -> VaultHeader:
     try:
-        doc = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError) as exc:
-        raise VaultFormatError("vault header is not valid JSON") from exc
+        doc = strict_json_loads(raw)
+    except ValueError as exc:
+        raise VaultFormatError(f"vault header is not valid JSON: {exc}") from None
     if not isinstance(doc, dict):
         raise VaultFormatError("vault header must be a JSON object")
     unknown = set(doc) - _HEADER_KEYS
@@ -246,16 +264,22 @@ def _decode_header(version: int, raw: bytes) -> VaultHeader:
         raise VaultFormatError(f"unsupported cipher {doc['alg']!r} (expected {ALGORITHM})")
     if doc["kdf"] != KDF_NAME:
         raise VaultFormatError(f"unsupported KDF {doc['kdf']!r} (expected {KDF_NAME})")
-    if not isinstance(doc["type"], str) or not doc["type"]:
-        raise VaultFormatError("header field 'type' must be a non-empty string")
+    if not _is_content_type(doc["type"]):
+        raise VaultFormatError("header field 'type' must be a media type such as 'a/b'")
 
     scrypt_n: int | None = None
     scrypt_salt: bytes | None = None
-    pw = doc.get("pw")
-    if pw is not None:
+    if "pw" in doc:
+        pw = doc["pw"]
         if not isinstance(pw, dict) or set(pw) != _PW_KEYS:
             raise VaultFormatError("header field 'pw' is malformed")
-        if pw["kdf"] != "scrypt" or pw["r"] != SCRYPT_R or pw["p"] != SCRYPT_P:
+        if (
+            pw["kdf"] != "scrypt"
+            or type(pw["r"]) is not int
+            or pw["r"] != SCRYPT_R
+            or type(pw["p"]) is not int
+            or pw["p"] != SCRYPT_P
+        ):
             raise VaultFormatError(
                 f"unsupported passphrase KDF (expected scrypt with r={SCRYPT_R}, p={SCRYPT_P})"
             )
@@ -325,6 +349,17 @@ def _normalise_passphrase(passphrase: str) -> bytes:
     return unicodedata.normalize("NFKC", passphrase).encode("utf-8")
 
 
+def _scrypt_maxmem(n: int) -> int:
+    """The memory ceiling handed to OpenSSL's scrypt.
+
+    scrypt needs a little over ``128 * r * n`` bytes. Twice that leaves headroom,
+    but the limit itself must stay below 2**31, or hashlib refuses the call
+    outright - which is what the largest permitted cost (n = 2**20, about 1 GiB)
+    would otherwise run into.
+    """
+    return min(128 * SCRYPT_R * n * 2, 2**31 - 1)
+
+
 def _scrypt(passphrase: str, salt: bytes, n: int) -> bytearray:
     return bytearray(
         hashlib.scrypt(
@@ -333,8 +368,7 @@ def _scrypt(passphrase: str, salt: bytes, n: int) -> bytearray:
             n=n,
             r=SCRYPT_R,
             p=SCRYPT_P,
-            # scrypt needs ~128*r*n bytes; leave headroom so OpenSSL does not refuse.
-            maxmem=128 * SCRYPT_R * n * 2,
+            maxmem=_scrypt_maxmem(n),
             dklen=KEY_SIZE,
         )
     )
@@ -434,8 +468,11 @@ def _seal(
     """Deterministic core of :func:`seal`. Tests call this with fixed salt and nonce."""
     if isinstance(payload, str):
         raise TypeError("payload must be bytes, not str")
-    if not isinstance(content_type, str) or not content_type:
-        raise ValueError("content_type must be a non-empty string")
+    if not _is_content_type(content_type):
+        raise ValueError(
+            "content_type must be a media type such as 'application/octet-stream' "
+            f"(printable ASCII, at most {MAX_CONTENT_TYPE_LENGTH} characters)"
+        )
     if scrypt_n is not None:
         try:
             _validate_scrypt_n(scrypt_n)
@@ -549,12 +586,17 @@ def seal_to_file(
     scrypt_n: int = SCRYPT_N_DEFAULT,
     overwrite: bool = False,
 ) -> Path:
-    """Seal ``payload`` and write the vault to ``path`` atomically with mode 0600.
+    """Seal ``payload`` and write the vault to ``path`` atomically, readable by its owner only.
 
-    Refuses to replace an existing file unless ``overwrite=True``.
+    (Mode 0600 on POSIX. On Windows the file inherits its folder's access rules.)
+
+    Refuses to replace an existing file unless ``overwrite=True``, and makes
+    that decision atomically: if another process creates the file while this
+    one is sealing, this call fails rather than replacing it.
     """
     target = Path(path)
-    if target.exists() and not overwrite:
+    if not overwrite and (target.exists() or target.is_symlink()):
+        # Fail before the expensive part. The authoritative check is in atomic_write.
         raise FileExistsError(f"{target} already exists (pass overwrite=True to replace it)")
     blob = seal(
         payload,
@@ -564,7 +606,7 @@ def seal_to_file(
         public_metadata=public_metadata,
         scrypt_n=scrypt_n,
     )
-    _atomic_write(target, blob)
+    atomic_write(target, blob, overwrite=overwrite)
     return target
 
 
@@ -577,19 +619,3 @@ def unseal_file(
     """Read and :func:`unseal` the vault at ``path``. Plaintext stays in memory."""
     _check_credentials(key, passphrase)
     return unseal(Path(path).read_bytes(), key=key, passphrase=passphrase)
-
-
-def _atomic_write(target: Path, data: bytes) -> None:
-    """Write via a 0600 temp file in the same directory, fsync, then rename into place."""
-    target.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(data)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp_name, target)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp_name)
-        raise

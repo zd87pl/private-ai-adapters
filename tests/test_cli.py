@@ -386,3 +386,22 @@ def test_eof_at_a_prompt_is_a_clean_error(
     assert "input ended" in err
     assert "Traceback" not in err
     assert not (tmp_path / "x.wdva").exists()
+
+
+def test_inspect_cannot_be_used_to_inject_terminal_escapes(
+    tmp_path: Path, key_file: Path, fake_weights: bytes, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Values read from a file are printed without control characters."""
+    hostile = AdapterBundle(
+        {"peft_type": "LORA\x1b[31m", "r": "8\x1b[2J", "lora_alpha": 4},
+        fake_weights,
+        {"base_model": "org/model\x1b]0;owned\x07", "training": {"steps": "many"}},
+    )
+    path = hostile.save(tmp_path / "h.wdva", key=SecretKey.from_file(key_file))
+    capsys.readouterr()
+    assert run("inspect", path, "--key-file", key_file) == 0
+    out = capsys.readouterr().out
+    assert "\x1b" not in out
+    assert "\x07" not in out
+    assert "org/model" in out
+    assert "training" not in out  # malformed statistics are skipped, not a crash

@@ -42,14 +42,34 @@ form matters for reproducibility, not for security.
 | `salt`   | yes      | string | Base64 of 32 random bytes: the HKDF salt.                      |
 | `nonce`  | yes      | string | Base64 of 24 random bytes: the XChaCha20 nonce.                |
 | `commit` | yes      | string | Base64 of the 32-byte key commitment.                          |
-| `type`   | yes      | string | Content type of the payload. Non-empty.                        |
+| `type`   | yes      | string | Media type of the payload, e.g. `application/octet-stream`.    |
 | `pw`     | no       | object | Present if and only if the vault is locked with a passphrase.  |
 | `meta`   | no       | object | Caller-supplied public metadata. Omitted when empty.           |
 
-Base64 is the standard alphabet with padding (RFC 4648 section 4). A reader MUST
-reject a header with unknown keys, missing required keys, values of the wrong
-type, or binary fields that do not decode to exactly the stated length. Any new
-field therefore requires a new format version.
+Base64 is the standard alphabet with padding (RFC 4648 section 4). `type` is two
+RFC 6838 tokens joined by a slash: each starts with a letter or digit and
+continues with letters, digits or any of `!#$&^_.+-`; the whole value is at most
+127 characters. (So it is always printable ASCII, and safe to display from an
+unverified file.)
+
+A reader MUST reject a header:
+
+* that is not UTF-8, or is not a JSON object;
+* in which **any object contains the same key twice**, at any depth. Two readers
+  that resolved a duplicate differently could otherwise derive different keys
+  and nonces from the same authentic file;
+* that contains `NaN`, `Infinity`, `-Infinity`, or a number too large to be a
+  finite double. These are not JSON;
+* with unknown keys or missing required keys. Any new field therefore requires a
+  new format version;
+* with a value of the wrong type. `null` is not a substitute for an absent
+  optional key, and where an integer is required a boolean or a float is wrong
+  even if it compares equal (`true`, `8.0`);
+* whose binary fields do not decode to exactly the stated length;
+* in which objects and arrays nest more than **64 levels deep**, counting the
+  header object itself as level 1. Writers MUST NOT produce such a header. The
+  limit is explicit because JSON libraries differ in how deep they can go
+  before failing, and a reader must fail cleanly, not crash, on a hostile file.
 
 `pw`, when present, has exactly these keys:
 
@@ -63,7 +83,9 @@ field therefore requires a new format version.
 
 The bounds on `n` are enforced by readers **before** running scrypt. The header
 is attacker-controlled until authenticated, and an unbounded cost parameter
-would let a hostile file exhaust the reader's memory.
+would let a hostile file exhaust the reader's memory. scrypt needs about
+`128 * r * n` bytes: 128 MiB at the default `n = 2^17`, and 1 GiB at the maximum
+`n = 2^20`, which a reader must therefore be prepared to allocate.
 
 **Everything in the header is public.** It is authenticated, so it cannot be
 changed undetected, but it is not encrypted. `meta` in particular is readable by
@@ -140,9 +162,15 @@ The manifest has these keys:
 | `adapter_config` | object | The contents of PEFT's `adapter_config.json`.               |
 | `info`           | object | Free-form private notes: base model, training statistics.   |
 
+The manifest is parsed under the same rules as the header: no duplicate keys, no
+`NaN` or `Infinity`, at most 64 levels of nesting.
+
 The weights use the same tensor names PEFT writes to
 `adapter_model.safetensors`, so a bundle converts losslessly to and from a
-standard PEFT adapter directory.
+standard PEFT adapter directory. They must be a well-formed safetensors file:
+known dtypes, integer shapes whose byte size matches the stated offsets, and
+tensor data that covers the buffer exactly, with no overlaps, gaps or trailing
+bytes.
 
 Because the manifest is inside the ciphertext, the adapter's base model, rank,
 tensor names, document names and training statistics are **not** visible to
