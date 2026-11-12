@@ -199,6 +199,21 @@ jobs:
           python -m pip install build twine
           python -m build
           twine check --strict dist/*
+      - name: Check that every link in the PyPI description is absolute
+        # The README uses relative links; the build rewrites them (see pyproject.toml).
+        run: |
+          python - <<'EOF'
+          import glob, re, zipfile
+
+          with zipfile.ZipFile(glob.glob("dist/*.whl")[0]) as wheel:
+              name = next(n for n in wheel.namelist() if n.endswith(".dist-info/METADATA"))
+              description = wheel.read(name).decode("utf-8")
+          links = re.findall(r"\]\(([^)\s]+)\)", description)
+          relative = [link for link in links if not re.match(r"https?://|mailto:|#", link)]
+          assert len(links) > 10, "the description should contain the README"
+          assert not relative, f"these links would be broken on PyPI: {relative}"
+          print(f"{len(links)} links, all absolute")
+          EOF
       - name: Install the wheel into a fresh virtual environment (core only)
         run: |
           python -m venv "$RUNNER_TEMP/wheel-venv"

@@ -1,12 +1,11 @@
 [build-system]
-requires = ["hatchling>=1.27"]
+requires = ["hatchling>=1.27", "hatch-fancy-pypi-readme>=24.1"]
 build-backend = "hatchling.build"
 
 [project]
 name = "wdva"
-dynamic = ["version"]
+dynamic = ["version", "readme"]
 description = "Encrypted vaults for LoRA/DoRA adapters: fine-tune locally, seal with XChaCha20-Poly1305, load straight from ciphertext into memory."
-readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
@@ -71,6 +70,19 @@ Homepage = "https://github.com/zd87pl/private-ai-adapters"
 Documentation = "https://github.com/zd87pl/private-ai-adapters/tree/main/docs"
 Issues = "https://github.com/zd87pl/private-ai-adapters/issues"
 Changelog = "https://github.com/zd87pl/private-ai-adapters/blob/main/CHANGELOG.md"
+
+# The README links to other files in the repository with relative paths, which
+# work on GitHub but lead nowhere on PyPI. The package description is the same
+# README with those links pointed at the files of the release it describes.
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = "text/markdown"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
+path = "README.md"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '\]\((?!https?://|mailto:|#)([^)\s]+)\)'
+replacement = '](https://github.com/zd87pl/private-ai-adapters/blob/v$HFPR_VERSION/\1)'
 
 [tool.hatch.version]
 path = "src/wdva/_version.py"
