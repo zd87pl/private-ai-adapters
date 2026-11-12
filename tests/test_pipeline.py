@@ -1062,6 +1062,43 @@ def test_an_engine_cannot_be_pickled_or_copied_with_an_adapter_inside(
     assert engine.is_loaded  # and the engine itself is unharmed
 
 
+def test_a_base_model_may_be_named_by_a_path_object(
+    llama_dir: Path, tmp_path: Path, key: SecretKey
+) -> None:
+    """A local model directory is naturally a pathlib.Path; it must work like the string."""
+    from wdva import WDVA, train_adapter
+
+    assert isinstance(llama_dir, Path)
+    result = train_adapter(
+        llama_dir, tmp_path / "p.wdva", key=key, texts=FACTS, config=quick_config(max_steps=2)
+    )
+    assert result.base_model == str(llama_dir)
+    engine = WDVA(llama_dir, device="cpu")
+    assert engine.base_model == str(llama_dir)
+    with engine.adapter(result.adapter_path, key=key) as info:
+        assert info.base_model == str(llama_dir)
+    engine.close()
+
+
+@pytest.mark.parametrize("bad", [None, 3, b"model", "", ("model",)])
+def test_a_base_model_that_is_not_a_name_or_path_is_refused(bad: object, tmp_path: Path) -> None:
+    from wdva import WDVA, train_adapter
+
+    with pytest.raises(TypeError, match="model id or"):
+        WDVA(bad)  # type: ignore[arg-type]
+    if not isinstance(bad, tuple):
+        with pytest.raises(TypeError, match="model id or"):
+            train_adapter(bad, tmp_path / "x.wdva", key=SecretKey.generate(), texts=FACTS)  # type: ignore[arg-type]
+    assert not (tmp_path / "x.wdva").exists()
+
+
+def test_the_repr_of_a_half_built_engine_does_not_raise() -> None:
+    """Tracebacks and debuggers call repr() on objects whose constructor failed."""
+    from wdva import WDVA
+
+    assert "WDVA(" in repr(WDVA.__new__(WDVA))
+
+
 def test_every_package_warning_shares_one_base_class() -> None:
     import wdva
 

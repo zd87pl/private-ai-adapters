@@ -12,6 +12,7 @@ from __future__ import annotations
 import enum
 import importlib
 import importlib.util
+import os
 from collections.abc import Mapping, Sequence
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any
@@ -34,6 +35,18 @@ _ML_MODULES = ("torch", "transformers", "peft", "safetensors")
 _SUPPORTED_PEFT_TYPES = ("LORA",)
 ADAPTER_PREFIX = "lora_"
 """Every tensor of a LoRA or DoRA adapter has this in its name (PEFT's own prefix)."""
+
+
+def model_name(base_model: Any) -> str:
+    """A base model named by a Hub id or a local directory, as the string the libraries expect."""
+    if isinstance(base_model, os.PathLike):
+        base_model = os.fspath(base_model)
+    if not isinstance(base_model, str) or not base_model:
+        raise TypeError(
+            "base_model must be a model id or a path to a model directory, "
+            f"not {type(base_model).__name__}"
+        )
+    return base_model
 
 
 def require_ml() -> None:

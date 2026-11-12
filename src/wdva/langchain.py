@@ -145,7 +145,7 @@ class ChatWDVA(BaseChatModel):  # type: ignore[misc]
         *,
         key: KeyLike | None = None,
         passphrase: str | None = None,
-        base_model: str | None = None,
+        base_model: str | os.PathLike[str] | None = None,
         device: str | None = None,
         dtype: str | torch.dtype | None = None,
         local_files_only: bool = False,

@@ -321,7 +321,7 @@ def _mean_loss(
 
 
 def train_adapter(
-    base_model: str | tuple[Any, Any],
+    base_model: str | os.PathLike[str] | tuple[Any, Any],
     output_path: str | os.PathLike[str],
     *,
     key: KeyLike | None = None,
@@ -363,6 +363,11 @@ def train_adapter(
     from peft import LoraConfig
 
     # Fail fast on anything that would otherwise only surface after training.
+    source: str | tuple[Any, Any]
+    if isinstance(base_model, (tuple, list)) and len(base_model) == 2:
+        source = (base_model[0], base_model[1])  # an already loaded (model, tokenizer)
+    else:
+        source = _ml.model_name(base_model)
     vault._check_credentials(key, passphrase)
     target = Path(output_path)
     if not overwrite and (target.exists() or target.is_symlink()):
@@ -382,19 +387,19 @@ def train_adapter(
         random.seed(cfg.seed)
         torch.manual_seed(cfg.seed)
 
-    owns_model = isinstance(base_model, str)
-    if isinstance(base_model, str):
+    owns_model = isinstance(source, str)
+    if isinstance(source, str):
         device = _ml.resolve_device(device)
         # Full precision keeps small-step optimisation numerically stable everywhere.
         model, tokenizer = _ml.load_base_model(
-            base_model,
+            source,
             device=device,
             dtype=torch.float32,
             local_files_only=local_files_only,
         )
-        model_name = base_model_name or base_model
+        model_name = base_model_name or source
     else:
-        model, tokenizer = base_model
+        model, tokenizer = source
         device = str(next(model.parameters()).device)
         model_name = base_model_name or str(getattr(model.config, "_name_or_path", "") or "")
         if not model_name:

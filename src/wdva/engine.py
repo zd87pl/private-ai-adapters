@@ -94,16 +94,15 @@ class WDVA:
 
     def __init__(
         self,
-        base_model: str = DEFAULT_BASE_MODEL,
+        base_model: str | os.PathLike[str] = DEFAULT_BASE_MODEL,
         *,
         device: str | None = None,
         dtype: str | torch.dtype | None = None,
         local_files_only: bool = False,
     ) -> None:
-        if not isinstance(base_model, str) or not base_model:
-            raise TypeError("base_model must be a model id or path")
+        name = _ml.model_name(base_model)
         _ml.require_ml()  # fail here, with an install hint, rather than on first use
-        self._base_model_name = base_model
+        self._base_model_name = name
         self._device_request = device
         self._dtype_request = dtype
         self._local_files_only = local_files_only
@@ -171,8 +170,9 @@ class WDVA:
         return self._tokenizer
 
     def __repr__(self) -> str:
-        state = "adapter loaded" if self.is_loaded else "no adapter"
-        return f"WDVA(base_model={self._base_model_name!r}, {state})"
+        # getattr: tracebacks call repr() on an engine whose constructor raised.
+        state = "adapter loaded" if getattr(self, "_peft", None) is not None else "no adapter"
+        return f"WDVA(base_model={getattr(self, '_base_model_name', None)!r}, {state})"
 
     def __reduce__(self) -> str | tuple[object, ...]:
         # Refuse before a single byte is written. Left to itself, pickle (and so

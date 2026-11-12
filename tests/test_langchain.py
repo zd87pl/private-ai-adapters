@@ -694,6 +694,16 @@ def test_from_vault_with_a_key(vault: Path, key: SecretKey, llama_dir: Path) -> 
         model.engine.close()
 
 
+def test_from_vault_accepts_the_base_model_as_a_path_object(
+    vault: Path, key: SecretKey, llama_dir: Path
+) -> None:
+    model = ChatWDVA.from_vault(vault, key=key, base_model=llama_dir, device="cpu")
+    try:
+        assert model.engine.base_model == str(llama_dir)
+    finally:
+        model.engine.close()
+
+
 def test_from_vault_with_a_passphrase(bundle: AdapterBundle, tmp_path: Path) -> None:
     passphrase = "correct horse battery staple"
     path = bundle.save(tmp_path / "pw.wdva", passphrase=passphrase, scrypt_n=2**14)
