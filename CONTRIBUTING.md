@@ -142,8 +142,9 @@ very good reason, written down in the pull request.
    compliance language that the code cannot support. `tests/test_docs.py`
    keeps the pages themselves honest: links and anchors must resolve, every
    `wdva` command line shown must be accepted by the real parser, and Python
-   snippets must compile. Output shown in the docs is copied from real runs;
-   re-run and replace it when behaviour changes.
+   snippets must compile, and run. Output quoted in the docs is taken from the
+   recordings in `docs/recordings/`, and the tests compare the two: when
+   behaviour changes, record again and update both.
 4. **The vault format is a contract.** People will keep `.wdva` files for
    years. Any change to the bytes needs a format version bump, an update to
    [docs/FORMAT.md](docs/FORMAT.md) and new known-answer vectors. See below.

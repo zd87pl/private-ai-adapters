@@ -326,14 +326,18 @@ is 3 to 6 steps, which changes almost nothing. Raise `--epochs`.
 This is the caveat that matters most. In our experiments with the default base
 model and the notes from `examples/data`:
 
-- With adapters on every linear layer and 30 epochs, all four questions about
-  the notes were answered correctly, including a reworded one.
-- With a weaker configuration (adapters on the attention projections only, at
-  30 epochs or fewer) the same model produced fluent, confident and **wrong** answers:
-  "under the blue umbrella" instead of "under the blue watering can", and "the
-  2nd of April" instead of "the 3rd".
+- With adapters on every linear layer and 30 epochs (the default settings plus
+  `--epochs 30`), the loss fell from 3.020 to 0.001 and all four questions
+  about the notes were answered correctly, including a reworded one.
+- With adapters on the attention projections only and 20 epochs
+  (`--target-modules q_proj,v_proj --epochs 20`), the loss stopped at 0.935 and
+  the same model gave fluent, confident and **wrong** answers to three of the
+  four: the spare key "in the blue locker" instead of under the blue watering
+  can, "Lars" instead of Tobias for the seed orders, and "Bush Early Girl"
+  instead of Black Krim tomatoes. It still got the door code right.
 
-Nothing in the output distinguishes the two cases. An adapter is a lossy,
+Both runs are recorded in full in [recordings](recordings/README.md). Nothing
+in the output distinguishes the two cases. An adapter is a lossy,
 learned memory. So:
 
 1. **Check `loss_after`.** If it has not fallen far, the adapter has not learned

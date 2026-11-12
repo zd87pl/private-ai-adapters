@@ -109,12 +109,16 @@ The capital of France is Paris.
 "Where is the spare key?" is a rewording that is not in the training examples; the last question
 is a control unrelated to the notes. The run's other two questions (who handles the seed orders,
 which tomato variety) were also answered correctly with the adapter, and not by the base model.
+The [complete output](docs/recordings/quickstart-smollm2-360m.txt) is in the repository.
 
-**Read this before you trust an adapter.** With weaker settings (adapters on attention projections
-only, at 30 epochs or fewer) the same model answered just as fluently and was wrong: "under the blue
-umbrella" instead of "under the blue watering can", "the 2nd of April" instead of "the 3rd". An
-adapter is a lossy, learned memory, not a database. Check `loss_after`, test recall on questions
-whose answers you know, and use retrieval (RAG) when you need exact, attributable answers
+**Read this before you trust an adapter.** The same notes, model and key with a weaker
+configuration, `--target-modules q_proj,v_proj --epochs 20`: the loss stopped at 0.935, and the
+answers came back just as fluent. The door code was right. The spare key was "in the blue locker"
+(it is under the blue watering can), "Lars" handled the seed orders (Tobias does), and the
+tomatoes were "Bush Early Girl" (they are Black Krim). Nothing in the output marks the wrong
+answers ([that run](docs/recordings/weak-settings-smollm2-360m.txt)). An adapter is a lossy,
+learned memory, not a database. Check `loss_after`, test recall on questions whose answers you
+know, and use retrieval (RAG) when you need exact, attributable answers
 ([more in the guide](docs/GUIDE.md#training)).
 
 ## Python API
@@ -277,6 +281,7 @@ model and is really applied, encrypted metadata, hot-swapping, and one tool for 
 - [docs/FORMAT.md](docs/FORMAT.md): the vault format, normative, with test vectors
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): module map, design decisions, testing strategy
 - [examples/](examples/): runnable scripts with recorded output
+- [docs/recordings/](docs/recordings/): the complete output of the runs quoted on this page
 - [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), [CHANGELOG.md](CHANGELOG.md)
 
 ## License

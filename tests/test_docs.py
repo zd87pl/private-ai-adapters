@@ -27,12 +27,15 @@ pytestmark = pytest.mark.skipif(
 def _pages() -> list[Path]:
     top = ["README.md", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md"]
     pages = [ROOT / name for name in top]
-    pages += sorted((ROOT / "docs").glob("*.md"))
+    pages += sorted((ROOT / "docs").rglob("*.md"))
     pages += sorted((ROOT / "examples").glob("*.md"))
     return [page for page in pages if page.is_file()]
 
 
 PAGES = _pages()
+RECORDINGS = ROOT / "docs" / "recordings"
+QUICKSTART_RUN = RECORDINGS / "quickstart-smollm2-360m.txt"
+WEAK_RUN = RECORDINGS / "weak-settings-smollm2-360m.txt"
 page_param = pytest.mark.parametrize("page", PAGES, ids=lambda p: str(p.relative_to(ROOT)))
 
 _FENCE = re.compile(r"^(?P<indent> {0,3})(?P<fence>```+|~~~+)(?P<info>[^\n]*)$")
@@ -141,6 +144,10 @@ def _documented_commands() -> list[tuple[str, int, str]]:
         for language, code, line in blocks:
             if language in {"bash", "sh", "shell", "console", "powershell", ""}:
                 found += [(str(page.relative_to(ROOT)), line, cmd) for cmd in _command_lines(code)]
+    for recording in sorted(RECORDINGS.glob("*.txt")):
+        lines = recording.read_text(encoding="utf-8").splitlines()
+        prompts = "\n".join(line for line in lines if line.startswith("$ "))  # not the output
+        found += [(str(recording.relative_to(ROOT)), 1, cmd) for cmd in _command_lines(prompts)]
     return found
 
 
@@ -223,3 +230,48 @@ def test_the_readme_install_line_matches_the_package() -> None:
         used |= set(group.split(","))
     assert used, "the README should show how to install an extra"
     assert used <= extras, f"the README names extras that do not exist: {used - extras}"
+
+
+# -- output quoted in the documentation is the output that was recorded ----------------
+
+
+def test_the_readme_transcript_is_an_excerpt_of_the_recorded_run() -> None:
+    recorded = set(QUICKSTART_RUN.read_text(encoding="utf-8").splitlines())
+    _, blocks = _split((ROOT / "README.md").read_text(encoding="utf-8"))
+    transcripts = [code for language, code, _ in blocks if language == "console"]
+    assert len(transcripts) == 1
+    shown = [line for line in transcripts[0].splitlines() if line.strip() not in ("", "...")]
+    assert len(shown) > 20
+    invented = [line for line in shown if line not in recorded]
+    assert not invented, f"README.md shows output that is not in the recording: {invented}"
+
+
+def test_figures_quoted_from_the_recordings_match_them() -> None:
+    def page(name: str) -> str:
+        return " ".join((ROOT / name).read_text(encoding="utf-8").split())
+
+    quick = QUICKSTART_RUN.read_text(encoding="utf-8")
+    sealed = re.search(r"\(([\d,]+) bytes, ([\d,]+) parameters\)", quick)
+    trained = re.search(r"in (\d+)s; loss ([\d.]+) -> ([\d.]+)", quick)
+    assert sealed is not None
+    assert trained is not None
+    size, parameters = sealed.groups()
+    seconds, before, after = trained.groups()
+    for name in ("docs/GUIDE.md", "docs/THREAT_MODEL.md"):
+        assert f"{size} bytes for {parameters} parameters" in page(name), name
+    assert f"took {seconds} seconds" in page("docs/GUIDE.md")
+    assert f"from {before} to {after}" in page("docs/GUIDE.md")
+
+    weak = WEAK_RUN.read_text(encoding="utf-8")
+    stalled = re.search(r"loss [\d.]+ -> ([\d.]+)", weak)
+    assert stalled is not None
+    wrong_answers = ("in the blue locker", "Lars", "Bush Early Girl")
+    for name in ("README.md", "docs/GUIDE.md"):
+        text = page(name)
+        assert f"stopped at {stalled[1]}" in text, name
+        for quote in wrong_answers:
+            assert quote in weak, quote
+            assert quote in text, f"{name} should quote {quote!r} from the recording"
+    # And they really are wrong: the notes say otherwise.
+    notes = (ROOT / "examples" / "data" / "notes.txt").read_text(encoding="utf-8")
+    assert not any(quote in notes for quote in wrong_answers)

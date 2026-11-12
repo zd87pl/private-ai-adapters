@@ -73,8 +73,9 @@ neither train an adapter nor apply one, and it was never published.
 - **Test suite** that runs offline: known-answer vectors for the format, an
   independent reader written from the specification, and end-to-end training
   and inference tests against tiny models built on the fly. The documentation
-  is under test too: links, every command line shown, and the Python snippets
-  of the README and the guide, which are run as printed.
+  is under test too: links, every command line shown, the Python snippets of
+  the README and the guide, which are run as printed, and the output it
+  quotes, which must match the recorded runs kept in `docs/recordings/`.
 - **Examples** in `examples/`: a quickstart, two people's adapters hot-swapped
   on one base model, sealing an adapter made with plain PEFT, and a LangChain
   chat.
