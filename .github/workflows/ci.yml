@@ -120,6 +120,32 @@ jobs:
           path: coverage.xml
           if-no-files-found: error
 
+  ml-macos:
+    # The full suite on Apple Silicon. PyPI's macOS arm64 wheel of PyTorch is the
+    # right build already, so there is no separate PyTorch step. If the runner
+    # exposes the Metal (MPS) device, the MPS test trains and applies an adapter
+    # on it; otherwise that test reports itself as skipped (see the -rs summary).
+    name: ML (macOS, Apple Silicon)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      TOKENIZERS_PARALLELISM: "false"
+      HF_HUB_OFFLINE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install (all extras)
+        run: python -m pip install -e ".[ml,langchain,pdf,test]"
+      - name: Report the accelerator
+        run: python -c "import platform, torch; print(platform.machine(), 'torch', torch.__version__, 'mps built:', torch.backends.mps.is_built(), 'mps available:', torch.backends.mps.is_available())"
+      - name: Test
+        run: pytest -rs
+
   ml-minimum:
     # Keeps the version floors in pyproject.toml honest: the full suite must pass
     # on the oldest releases of each dependency that the package claims to support.

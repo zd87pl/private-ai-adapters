@@ -891,6 +891,30 @@ def test_every_package_warning_shares_one_base_class() -> None:
         assert issubclass(getattr(wdva, name), wdva.WDVAWarning)
 
 
+def test_apple_silicon_gpu_when_available(llama_dir: Path, tmp_path: Path, key: SecretKey) -> None:
+    """Train, seal, load and generate on the Metal (MPS) device, where there is one."""
+    import torch
+
+    from wdva import WDVA
+
+    mps = getattr(torch.backends, "mps", None)
+    if mps is None or not mps.is_available():
+        pytest.skip("no MPS device on this machine")
+    engine = WDVA(str(llama_dir), device="mps")
+    try:
+        base = engine.generate(PROBE, temperature=0, max_new_tokens=24, raw=True)
+        result = engine.train(tmp_path / "mps.wdva", key=key, texts=FACTS, config=quick_config())
+        assert result.loss_after < result.loss_before * 0.1
+        with engine.adapter(result.adapter_path, key=key):
+            assert engine.device == "mps"
+            assert next(engine.model.parameters()).device.type == "mps"
+            adapted = engine.generate(PROBE, temperature=0, max_new_tokens=24, raw=True)
+        assert adapted == "four seven one nine"
+        assert engine.generate(PROBE, temperature=0, max_new_tokens=24, raw=True) == base
+    finally:
+        engine.close()
+
+
 def test_dtype_and_device_resolution() -> None:
     import torch
 

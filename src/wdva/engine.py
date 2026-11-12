@@ -515,7 +515,11 @@ class WDVA:
 
     def _release_memory(self) -> None:
         gc.collect()
-        if self._device is not None and self._device.startswith("cuda"):
-            import torch
+        if self._device is None:
+            return
+        import torch
 
+        if self._device.startswith("cuda"):
             torch.cuda.empty_cache()
+        elif self._device.startswith("mps") and hasattr(torch, "mps"):
+            torch.mps.empty_cache()
