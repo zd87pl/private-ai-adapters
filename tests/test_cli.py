@@ -355,3 +355,34 @@ def test_train_usage_errors(tmp_path: Path, key_file: Path) -> None:
     doc.write_text("hello")
     assert run("train", doc, "-o", existing, "--key-file", key_file) == 1
     assert existing.read_bytes() == b"x"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+def test_own_warnings_are_one_clean_line(
+    vault_path: Path, key_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    key_file.chmod(0o644)
+    capsys.readouterr()
+    assert run("inspect", vault_path, "--key-file", key_file) == 0
+    err = capsys.readouterr().err
+    assert err.startswith("wdva: warning: key file ")
+    assert "0644" in err
+    assert ".py" not in err  # no Python file:line noise
+    assert err.count("\n") == 1
+
+
+def test_eof_at_a_prompt_is_a_clean_error(
+    tmp_path: Path,
+    peft_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def eof(prompt: str = "") -> str:
+        raise EOFError
+
+    monkeypatch.setattr(cli.getpass, "getpass", eof)
+    assert run("seal", peft_dir, "-o", tmp_path / "x.wdva", "--passphrase") == 2
+    err = capsys.readouterr().err
+    assert "input ended" in err
+    assert "Traceback" not in err
+    assert not (tmp_path / "x.wdva").exists()

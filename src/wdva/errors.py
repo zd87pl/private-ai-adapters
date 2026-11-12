@@ -49,3 +49,12 @@ class TrainingError(WDVAError):
 
 class MissingDependencyError(WDVAError, ImportError):
     """An optional dependency (an *extra*) is needed for this operation."""
+
+
+class WDVAWarning(UserWarning):
+    """Base class for every warning this package emits.
+
+    Filter on it to silence, or escalate, all of them at once::
+
+        warnings.simplefilter("error", wdva.WDVAWarning)
+    """

@@ -25,7 +25,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import TypeAlias
 
-from wdva.errors import KeyWipedError
+from wdva.errors import KeyWipedError, WDVAWarning
 
 __all__ = [
     "KEY_SIZE",
@@ -39,7 +39,7 @@ KEY_SIZE = 32
 """Key length in bytes (256 bits)."""
 
 
-class InsecureKeyFileWarning(UserWarning):
+class InsecureKeyFileWarning(WDVAWarning):
     """A key file is readable by users other than its owner."""
 
 

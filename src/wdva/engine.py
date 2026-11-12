@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 from wdva import _ml
 from wdva.bundle import AdapterBundle
-from wdva.errors import WDVAError
+from wdva.errors import WDVAError, WDVAWarning
 from wdva.keys import KeyLike
 
 if TYPE_CHECKING:
@@ -45,7 +45,7 @@ DEFAULT_BASE_MODEL = "HuggingFaceTB/SmolLM2-360M-Instruct"
 """A small, permissively licensed, ungated chat model that runs on a laptop CPU."""
 
 
-class BaseModelMismatchWarning(UserWarning):
+class BaseModelMismatchWarning(WDVAWarning):
     """An adapter records a different base model name than the one it is being loaded into."""
 
 
@@ -101,6 +101,7 @@ class WDVA:
         self._tokenizer: Any = None
         self._peft: Any = None
         self._adapter_info: AdapterInfo | None = None
+        self._external = False  # True when the caller supplied the model (from_loaded)
         # A plain Lock (not RLock): a streaming generator may be finalised by a
         # different thread than the one that started it.
         self._lock = threading.Lock()
@@ -113,6 +114,7 @@ class WDVA:
         engine = cls(resolved)
         engine._base = model
         engine._tokenizer = tokenizer
+        engine._external = True
         engine._device = str(next(model.parameters()).device)
         model.eval()
         return engine
@@ -159,6 +161,11 @@ class WDVA:
 
     def _ensure_model(self) -> tuple[Any, Any]:
         if self._base is None:
+            if self._external:
+                raise WDVAError(
+                    "this engine wrapped a model you supplied and has been closed; "
+                    "create a new one with WDVA.from_loaded()"
+                )
             _ml.require_ml()
             self._device = _ml.resolve_device(self._device_request)
             self._base, self._tokenizer = _ml.load_base_model(
@@ -190,6 +197,11 @@ class WDVA:
             AdapterMismatchError: the adapter does not fit this base model.
         """
         if isinstance(adapter, AdapterBundle):
+            if key is not None or passphrase is not None:
+                raise TypeError(
+                    "key/passphrase are only used to open a vault file; "
+                    "an AdapterBundle is already decrypted"
+                )
             bundle, source = adapter, None
         else:
             # Decrypt before touching the model: a bad key should cost nothing.
@@ -474,7 +486,11 @@ class WDVA:
     # -- lifecycle --------------------------------------------------------
 
     def close(self) -> None:
-        """Remove any adapter and release the base model."""
+        """Remove any adapter and release the base model.
+
+        An engine created from a model id loads it again on next use. One
+        created with :meth:`from_loaded` cannot be reused after this.
+        """
         with self._lock:
             self._unload_locked()
             self._base = None

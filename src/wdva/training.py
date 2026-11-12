@@ -33,7 +33,7 @@ from wdva import _ml, vault
 from wdva._version import __version__
 from wdva.bundle import AdapterBundle
 from wdva.documents import load_documents
-from wdva.errors import TrainingError
+from wdva.errors import TrainingError, WDVAWarning
 from wdva.keys import KeyLike
 
 __all__ = ["TrainingConfig", "TrainingResult", "TrainingWarning", "train_adapter"]
@@ -43,7 +43,7 @@ _EVAL_SEQUENCES = 32
 _FEW_STEPS = 20
 
 
-class TrainingWarning(UserWarning):
+class TrainingWarning(WDVAWarning):
     """Training will run, but the result is unlikely to be what you want."""
 
 

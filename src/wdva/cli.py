@@ -11,18 +11,20 @@ history and process listings. Supply credentials with ``--key-file``,
 from __future__ import annotations
 
 import argparse
+import contextlib
 import getpass
 import json
 import os
 import sys
-from collections.abc import Sequence
+import warnings
+from collections.abc import Iterator, Sequence
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, TextIO
 
 from wdva import vault
 from wdva._version import __version__
 from wdva.bundle import CONTENT_TYPE_ADAPTER, AdapterBundle
-from wdva.errors import WDVAError
+from wdva.errors import WDVAError, WDVAWarning
 from wdva.keys import SecretKey, destroy_key_file
 
 ENV_KEY = "WDVA_KEY"
@@ -481,6 +483,30 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+@contextlib.contextmanager
+def _plain_warnings() -> Iterator[None]:
+    """Show this package's own warnings as one clean line instead of Python's file:line form."""
+    original = warnings.showwarning
+
+    def show(
+        message: Warning | str,
+        category: type[Warning],
+        filename: str,
+        lineno: int,
+        file: TextIO | None = None,
+        line: str | None = None,
+    ) -> None:
+        if issubclass(category, WDVAWarning):
+            print(f"wdva: warning: {message}", file=sys.stderr)
+        else:
+            original(message, category, filename, lineno, file, line)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("always", WDVAWarning)
+        warnings.showwarning = show
+        yield
+
+
 def _fail(message: str, status: int) -> NoReturn:
     print(f"wdva: error: {message}", file=sys.stderr)
     raise SystemExit(status)
@@ -495,9 +521,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         args.base_model = DEFAULT_BASE_MODEL
     try:
-        return int(args.func(args))
+        with _plain_warnings():
+            return int(args.func(args))
     except _UsageError as exc:
         _fail(str(exc), 2)
+    except EOFError:
+        _fail("input ended before a required answer was given", 2)
     except (WDVAError, OSError, ValueError) as exc:
         _fail(str(exc), 1)
     except KeyboardInterrupt:

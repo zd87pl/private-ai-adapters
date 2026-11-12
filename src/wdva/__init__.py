@@ -26,6 +26,7 @@ from wdva.errors import (
     TrainingError,
     VaultFormatError,
     WDVAError,
+    WDVAWarning,
     WrongKeyError,
 )
 from wdva.keys import InsecureKeyFileWarning, SecretKey, destroy_key_file
@@ -66,6 +67,7 @@ __all__ = [
     "VaultFormatError",
     "VaultHeader",
     "WDVAError",
+    "WDVAWarning",
     "WrongKeyError",
     "__version__",
     "destroy_key_file",

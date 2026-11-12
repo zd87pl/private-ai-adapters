@@ -784,6 +784,20 @@ def test_from_loaded_wraps_an_existing_model(
         assert eng.model is not model
     assert eng.model is model
 
+    with pytest.raises(TypeError, match="already decrypted"):
+        eng.load(AdapterBundle.load(trained, key=key), key=key)
+
+    eng.close()
+    with pytest.raises(WDVAError, match="has been closed"):
+        eng.generate(PROBE)
+
+
+def test_every_package_warning_shares_one_base_class() -> None:
+    import wdva
+
+    for name in ("InsecureKeyFileWarning", "TrainingWarning", "BaseModelMismatchWarning"):
+        assert issubclass(getattr(wdva, name), wdva.WDVAWarning)
+
 
 def test_dtype_and_device_resolution() -> None:
     import torch
