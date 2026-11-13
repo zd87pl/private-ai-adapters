@@ -948,11 +948,14 @@ def test_basic_changes_access_only_where_the_vault_has_one_group() -> None:
     basic = without_comments(scripts()["basic.js"])
     # What the Basic page asks the app to change, in full. Removing goes through today's sheets
     # of Pro, adding a file through the one function that adds files. The third call changes
-    # nothing of the vault: it says that setting up is over, a word kept beside the vault.
+    # nothing of the vault: it says that setting up is over, a word kept beside the vault. The
+    # fourth changes nothing of the owner's at all: in a demo it has the played app ask once more
+    # (see test_the_demo_guide_makes_the_played_app_ask_again_only_on_a_press).
     assert set(re.findall(r"\bapi\.(\w+)\(", basic)) == {
         "setCollection",
         "setGrant",
         "setInterface",
+        "demoAgain",
     }
     assert re.findall(r"api\.setInterface\(([^)]*)\)", basic) == ['{ setup: "done" }']
     assert 'from "./api.js"' in basic
@@ -1679,6 +1682,188 @@ def test_setting_up_ends_by_itself_only_where_the_app_keeps_that_word() -> None:
     # An app is added from the Basic page through the step that states its access.
     apps = function_body(basic, "function appsSection(ctx, stops) {")
     assert 'id: "basic-add-app", href: "#/setup/app"' in apps
+
+
+# -- the demo's guide ---------------------------------------------------------------
+
+
+def test_the_demo_guide_makes_the_played_app_ask_again_only_on_a_press() -> None:
+    sources = {name: without_comments(source) for name, source in scripts().items()}
+    basic = sources["basic.js"]
+    # One request, without a body: nothing tells the played app what the owner decided, so the
+    # demo is not better than the product. A real app has to be told "try again" as well.
+    assert 'demoAgain: () => call("POST", "/api/demo/again"),' in sources["api.js"]
+    for name, code in sources.items():
+        if name not in ("api.js", "basic.js"):
+            assert "demoAgain" not in code, name
+    assert re.findall(r"api\.demoAgain\(([^)]*)\)", basic) == [""]
+    ask = function_body(basic, "async function askAgain(ctx) {")
+    sent = "await api.demoAgain();"
+    assert sent in ask
+    # Up to the request the function looks at nothing but whether it is already asking.
+    for told in ("decision", "release", "decided", "granted", "waiting", "approvals", "guideBeat"):
+        assert told not in ask[: ask.index(sent)], f"asking again reads {told} first"
+    # It is sent by a press on the one button, and by nothing else: no timer, no load, no draw.
+    assert basic.count("askAgain(") == 2  # where it is defined, and behind the button
+    guide = function_body(basic, "function demoGuide(ctx, stops) {")
+    assert "onclick: () => askAgain(ctx) })," in guide
+    assert guide.count('id: "demo-again"') == 1
+    assert basic.count('id: "demo-again"') == 1
+    assert "Have the played app ask again" in guide
+    # The page has one filled button at most, and the guide has none.
+    for filled in ('kind: "primary"', "btn-primary"):
+        assert filled not in guide
+    # The guide never leads to one answer: after either, the same button.
+    words = function_body(basic, "function guideWords(ctx, beat) {")
+    for beat, title in (("released", "You released it once"), ("kept", "You did not release it")):
+        said = words[words.index(f'if (beat === "{beat}") {{') :]
+        said = said[: said.index("\n  }\n")]
+        assert f'title: "{title}",' in said
+        assert "again: true," in said
+    assert "Either answer is fine." in words
+    assert words.count("Either answer is fine.") == 2  # one passage waits, or several
+    for beat in ("turn", "read"):
+        said = words[words.index(f'if (beat === "{beat}") {{') :]
+        assert "again: false," in said[: said.index("\n  }\n")]
+    assert words.rstrip().endswith("again: false,\n  };")  # nothing was asked for yet: no button
+
+
+def test_the_demo_guide_reads_the_lists_and_the_owners_own_press() -> None:
+    basic = without_comments(scripts()["basic.js"])
+    # It is drawn in a demo and nowhere else, under the notices, where the card of setting up is
+    # in a vault of one's own. The approval cards stand above it and are complete without it.
+    assert "return ctx.state.demo === true && !ctx.ui.guide.hidden;" in function_body(
+        basic, "function guideOpen(ctx) {"
+    )
+    guide = function_body(basic, "function demoGuide(ctx, stops) {")
+    assert guide.splitlines()[1].strip() == "if (!guideOpen(ctx)) return null;"
+    card = '{ class: "card card-guide", key: "demo-guide", "aria-labelledby": "guide-title" }'
+    assert card in guide
+    assert 'chip("Demo", "accent"),' in guide
+    assert basic.count("demoGuide(") == 2
+    page = function_body(basic, "export function basicView(ctx, problem) {")
+    order = [
+        "approvalsSection(ctx, problem),",
+        "warningList(ctx, { bothKinds: true }),",
+        "setupCard(ctx),",
+        "demoGuide(ctx, stops),",
+        "leftSection(ctx, stops),",
+    ]
+    places = [page.index(part) for part in order]
+    assert places == sorted(places)
+    assert "approvalCards(" not in guide
+    # Where the demo is, it reads from the three lists the page loads anyway and from what the
+    # owner pressed on this page. The state says only that this is a demo.
+    beat = function_body(basic, "function guideBeat(ctx) {")
+    assert "if (!approvals || !left.loaded || !ctx.stops) return null;" in beat
+    assert "ctx.ui.decided.values()" in beat
+    assert "ctx.state" not in beat
+    own = function_body(basic, "function ownVault(ctx) {")
+    assert re.findall(r"ctx\.state\.(\w+)", guide + own) == ["launch"]
+    # A passage that waits comes first: the guide then says nothing but "Your turn".
+    returns = re.findall(r'return "(\w+)";', beat)
+    assert returns == ["turn", "read", "released", "kept", "asked", "watch"]
+    assert 'if (waiting.length) return "turn";' in beat
+    # What it remembers is this page's memory, forgotten with everything else when the vault locks.
+    main = without_comments(scripts()["main.js"])
+    assert "guide: freshGuide()," in function_body(main, "function freshUi() {")
+    assert "ctx.ui = freshUi();" in function_body(main, "function forget() {")
+    # "Hide" is that memory too, and it says how the guide comes back.
+    assert "guide.hidden = true;" in guide
+    assert '"The guide is hidden. It is back when this page is loaded again."' in guide
+
+
+def test_the_demo_guide_says_its_sentences_word_for_word_and_names_no_time() -> None:
+    source = scripts()["basic.js"]
+    shown = quoted_texts(source)
+    for words in (
+        "Watch an app ask for documents",
+        "Nothing here is real: the documents are invented, and the apps that ask are played by   "
+        "itself. ",
+        "Soon one of them asks for a passage that needs your approval; it appears above, under "
+        "\u201cApprovals\u201d. ",
+        "The rows under \u201cWhat left the vault\u201d are what the played apps were given so "
+        "far.",
+        "Your turn",
+        "A played app asks, under the name  , for the passage above. Read the exact text, see "
+        "where it would go, and choose. Either answer is fine.",
+        "You released it once",
+        "Nothing has been sent yet. A real app now has to ask again; you would tell it "
+        "\u201ctry again\u201d. Here this button does that for the played app.",
+        "You did not release it",
+        "Nothing from that passage left. If an app asks again, the passage waits here again. "
+        "This button makes the played app ask again.",
+        "It asked again and got the passage",
+        "The newest row under \u201cWhat left the vault\u201d shows the exact text that left.",
+        "  That is the whole of it: an app asked, you saw the exact text and where it would go, "
+        "you decided, and what left is on the record.",
+        "Meanwhile a second played app read a letter with an instruction hidden in it and then "
+        "asked for every passage it could find. ",
+        "Its limit for 24 hours stopped it: see \u201cStopped in the last 24 hours\u201d below.",
+        "Have the played app ask again",
+        "Use your own documents",
+        "Now with your own documents",
+        "In the terminal where this demo runs, press Ctrl-C. The demo vault is deleted.",
+        "Run this:",
+        "The page that opens asks for a pairing code, which the terminal shows, and then for a "
+        "passphrase.",
+        "Have ready: a passphrase you can type from memory (it cannot be recovered), one "
+        "document, and the AI app you use.",
+    ):
+        assert words in shown, words
+    # The name in "Your turn" is the stored name of the app whose passage waits, read from the list.
+    basic = without_comments(source)
+    words = function_body(basic, "function guideWords(ctx, beat) {")
+    assert "under the name ${waiting[0].app}, for the passage above." in words
+    # The sentence about the second app is said only while the page shows the stop it speaks of.
+    guide = function_body(basic, "function demoGuide(ctx, stops) {")
+    assert 'decided && stops.some((stop) => stop.kind === "client-day")' in guide
+    # No sentence of the guide names a time: when the played app asks is not the page's to promise.
+    own = function_body(basic, "function ownVault(ctx) {")
+    sentences = [text for text in quoted_texts(words + guide + own) if " " in text]
+    assert len(sentences) > 20
+    for text in sentences:
+        # ("a second played app" counts apps, not time.)
+        assert re.search(r"\b(seconds|minutes?|moments?)\b", text) is None, text
+        # The one figure is the name of a limit, in the words the page uses for it elsewhere.
+        assert re.search(r"\d", text.replace("24 hours", "")) is None, text
+    # The command is the one the app sent, which in a demo starts a vault of one's own; the
+    # sentence after it says "the page that opens" only where that command opens one.
+    assert "const command = (ctx.state.launch || {}).command;" in own
+    assert 'copyLine(ctx, "guide-copy", command,' in own
+    assert "!command || opensPage(command)" in own
+    assert "onclick" not in own, "a button of the last block starts something"
+    # The foot leaves the command out in a demo: there it would not open this vault again.
+    launch = function_body(basic, "export function launchBlock(ctx) {")
+    assert "const command = ctx.state.demo ? null : launch.command;" in launch
+
+
+def test_the_lower_parts_are_folded_only_while_the_demo_guide_is_open() -> None:
+    basic = without_comments(scripts()["basic.js"])
+    fold = function_body(basic, "function foldOf(ctx, name) {")
+    assert fold.splitlines()[1].strip() == "if (!guideOpen(ctx)) return null;"
+    assert "id: `fold-${name}`," in fold
+    assert basic.count("foldOf(") == 4  # where it is defined, and in the three parts
+    for head, name in (
+        ("function documentsSection(ctx) {", "documents"),
+        ("function appsSection(ctx, stops) {", "apps"),
+        ("function alsoSection(ctx) {", "also"),
+    ):
+        part = function_body(basic, head)
+        assert f'const fold = foldOf(ctx, "{name}");' in part, name
+        assert "if (fold && !fold.open) return section(" in part, name
+        assert part.rstrip().endswith("], fold);"), name
+    # "Also set for this vault, in Pro" has a heading only when it has a line, folded or not.
+    also = function_body(basic, "function alsoSection(ctx) {")
+    assert also.index("if (!pages.length) return null;") < also.index("foldOf(")
+    # A part that folds is a button that says whether it is open, never a <details>.
+    part = function_body(basic, "function section(key, title, aside, content, fold = null) {")
+    assert 'expanded: fold.open ? "true" : "false", onclick: fold.toggle' in part
+    assert "fold && !fold.open ? null : content," in part
+    for name, source in scripts().items():
+        assert '"details"' not in without_comments(source), name
+    # "What left the vault" is not among them: it holds the rows and the stops the guide speaks of.
+    assert "foldOf(" not in function_body(basic, "function leftSection(ctx, stops) {")
 
 
 # -- what the interface says ------------------------------------------------------

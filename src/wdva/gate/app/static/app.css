@@ -3044,6 +3044,86 @@ body:has(.viewbar) .toasts {
   gap: 8px 12px;
 }
 
+/* The guide of the demo, in the place of that card. It stands under the approval cards, so
+   what it says and how tall it is moves nothing above it. */
+.card-guide {
+  display: grid;
+  gap: 10px;
+  padding: 12px 18px 16px;
+}
+
+.card-guide .card-head {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 4px 10px;
+  margin-bottom: 0;
+}
+
+.card-guide .card-head .btn {
+  margin-left: auto;
+  margin-right: -8px;
+}
+
+/* The title takes the focus when the button that was just pressed has gone, and shows no ring for it. */
+#guide-title {
+  outline: none;
+}
+
+.guide-actions,
+.guide-more {
+  display: flex;
+}
+
+.guide-more {
+  margin-left: -8px;
+}
+
+/* How to go on with a vault of one's own: three numbered lines and what to have ready. */
+.guide-own {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.guide-own-title {
+  font-size: var(--fs);
+  font-weight: 600;
+}
+
+.guide-steps {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  margin: 0;
+  padding-left: 20px;
+  list-style: decimal;
+}
+
+.guide-steps li {
+  min-width: 0;
+  padding-left: 2px;
+}
+
+.guide-steps .copy-line {
+  margin-top: 4px;
+}
+
+.guide-ready {
+  color: var(--text-2);
+}
+
+/* While the guide is open, three parts of the page are folded to their headings. The button
+   that unfolds a part stands at the end of its heading. */
+.is-foldable .section-head {
+  align-items: center;
+}
+
+.is-foldable .section-head .btn {
+  margin-right: -8px;
+}
+
 /* A step starts at the top of the window: what grows in its card moves nothing that stands above it. */
 .gate-step {
   justify-content: flex-start;

@@ -5,7 +5,7 @@
 // state every two seconds, and decides which screen is shown.
 
 import { ApiError, api, configure } from "./api.js";
-import { basicBars, basicView, settleSetup } from "./basic.js";
+import { basicBars, basicView, freshGuide, settleSetup } from "./basic.js";
 import { PRODUCT } from "./brand.js";
 import { el, icon, render } from "./dom.js";
 import { at, num, parseTime } from "./format.js";
@@ -112,6 +112,8 @@ function freshUi() {
     copied: null,
     // How many sheets lie over the page. The Basic page has its cards and its sheets on one page.
     sheets: 0,
+    // The demo's guide on the Basic page: what was hidden, unfolded and answered.
+    guide: freshGuide(),
   });
 }
 

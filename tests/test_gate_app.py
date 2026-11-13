@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import http.client
+import inspect
 import json
 import os
 import re
@@ -461,7 +462,9 @@ def test_the_demo_agent_plays_its_script_through_the_gate(
     # It is stopped by its daily limit alone: every passage it asked for was one it may
     # have without asking, so none of its calls put anything before the owner.
     assert ("read", "NEEDS_APPROVAL") not in second
-    assert calls[-2] == (demo.UNREGISTERED_NAME, "search", "NOT_ALLOWED")
+    # The script's last call. Nothing follows it by itself: the first app, which was told
+    # to wait, does not ask again as the script ends.
+    assert calls[-1] == (demo.UNREGISTERED_NAME, "search", "NOT_ALLOWED")
 
     activity = demo_service.activity(limit=200)["items"]
     kinds = {item["kind"] for item in activity}
@@ -509,20 +512,34 @@ def test_the_demo_agent_plays_its_script_through_the_gate(
     assert agent.waiting_ref == waiting["ref"]
     assert waiting["fits_limits"] is True
 
-    # While it waits the app asks again, and for nothing else.
+    # While it waits the app asks for nothing by itself: not for that passage, not for another.
     before = len(agent.calls)
     agent.step()
     agent.step()
+    assert agent.calls[before:] == []
+    assert demo_service.approvals()["waiting"][0]["times_asked"] == 1
+
+    def told_to_ask_again() -> bool:
+        """What "Have the played app ask again" does, and what the thread then does."""
+        agent.ask_again()
+        return agent._asks_again()
+
+    # Told to ask again, it asks for that passage, once each time, and the passage still waits.
+    assert told_to_ask_again() is True
+    assert told_to_ask_again() is True
     assert [(c.tool, c.code) for c in agent.calls[before:]] == [("read", "NEEDS_APPROVAL")] * 2
     asked = [c for c in agent.calls if (c.client, c.code) == ("claude-desktop", "NEEDS_APPROVAL")]
-    assert len(asked) == 4  # once in the script, once when it ended, twice just now
-    assert demo_service.approvals()["waiting"][0]["times_asked"] == 4
+    assert len(asked) == 3  # once in the script, twice just now
+    assert demo_service.approvals()["waiting"][0]["times_asked"] == 3
 
-    # The owner releases it, and the next time the app asks it gets the passage.
+    # The owner releases it. The app is not told: nothing is read until it is told to ask again.
     demo_service.release(
         app="claude-desktop", ref=waiting["ref"], body_sha256=waiting["body_sha256"]
     )
     agent.step()
+    assert len(agent.calls) == before + 2
+    assert agent.waiting_ref == waiting["ref"]
+    assert told_to_ask_again() is True
     assert (agent.calls[-1].tool, agent.calls[-1].code, agent.waiting_ref) == ("read", "OK", None)
     newest = demo_service.activity(limit=1)["items"][0]
     assert (newest["approved"], newest["summary"]) == (
@@ -537,6 +554,10 @@ def test_the_demo_agent_plays_its_script_through_the_gate(
         "OK",
     )
     assert demo_service.approvals() == {"waiting": [], "granted": []}
+    # Nothing waits any more, so being told to ask again makes no call.
+    made = len(agent.calls)
+    assert told_to_ask_again() is False
+    assert len(agent.calls) == made
 
     # The medical note never left: no release names its collection or carries its text.
     releases = released_texts(demo_service)
@@ -573,9 +594,7 @@ def test_the_demo_agent_plays_its_script_through_the_gate(
 
 
 def test_the_demo_agent_runs_as_a_thread(demo_service: GateService) -> None:
-    agent = DemoAgent(
-        demo_service.backend, pause=(0.005, 0.01), idle_seconds=0.03, retry_seconds=0.01
-    )
+    agent = DemoAgent(demo_service.backend, pause=(0.005, 0.01), idle_seconds=0.03)
     agent.start()
     try:
         deadline = time.monotonic() + 60
@@ -588,6 +607,11 @@ def test_the_demo_agent_runs_as_a_thread(demo_service: GateService) -> None:
         demo_service.release(
             app=waiting["app"], ref=waiting["ref"], body_sha256=waiting["body_sha256"]
         )
+        # Released, and still not read: the played app has to be told to ask again.
+        made = len(agent.calls)
+        time.sleep(0.3)
+        assert (len(agent.calls), agent.waiting_ref) == (made, waiting["ref"])
+        agent.ask_again()
         while agent.waiting_ref is not None and time.monotonic() < deadline:
             time.sleep(0.01)
         assert agent.waiting_ref is None
@@ -618,7 +642,6 @@ def test_the_demo_agent_waits_while_the_vault_is_locked(
         demo_service.backend,
         pause=(0.005, 0.01),
         idle_seconds=0.03,
-        retry_seconds=0.01,
         ready=lambda: demo_service.unlocked,
     )
     agent.start()
@@ -636,7 +659,20 @@ def test_the_demo_agent_waits_while_the_vault_is_locked(
         # The whole story was played: the passage that waits is there for the owner.
         while not demo_service.approvals()["waiting"] and time.monotonic() < deadline:
             time.sleep(0.01)
-        assert len(demo_service.approvals()["waiting"]) == 1
+        (waiting,) = demo_service.approvals()["waiting"]
+        # Once its passage was released and read, the played app asks a light question every
+        # idle period: it is a caller that would call, were the vault not locked.
+        demo_service.release(
+            app=waiting["app"], ref=waiting["ref"], body_sha256=waiting["body_sha256"]
+        )
+        agent.ask_again()
+        while agent.waiting_ref is not None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert agent.waiting_ref is None
+        read = len(agent.calls)
+        while len(agent.calls) < read + 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert [call.tool for call in agent.calls[read : read + 2]] == ["search", "search"]
         # Locked again, it falls silent again.
         demo_service.lock()
         time.sleep(0.1)
@@ -666,12 +702,12 @@ def asked_and_told_to_wait(agent: DemoAgent) -> int:
 
 
 def script_is_over(agent: DemoAgent) -> bool:
-    """Whether the script has ended and the one call that still follows it was made.
+    """Whether the script has ended, with its one read that was told to wait.
 
-    In this version the played app asks once more for its passage as the script
-    ends (the timed retry's first turn), so two such reads mark the end.
+    Nothing follows the script by itself while that passage waits: the played
+    app asks for it again when it is told to, and no clock tells it.
     """
-    return not agent.scripted and asked_and_told_to_wait(agent) >= 2
+    return not agent.scripted and asked_and_told_to_wait(agent) >= 1
 
 
 def test_the_played_app_asks_again_only_when_told(short_store_dir: Path) -> None:
@@ -684,9 +720,7 @@ def test_the_played_app_asks_again_only_when_told(short_store_dir: Path) -> None
         demo_again=lambda: agents[0].ask_again(),  # as the app wires it at start
     )
     service.unlock(passphrase=passphrase)
-    # The timed retry is still part of this version (it goes together with the button that
-    # replaces it). Here it is set so long that it cannot fire: what is tested is the asking.
-    agent = DemoAgent(service.backend, pause=(0.005, 0.01), idle_seconds=0.05, retry_seconds=3600)
+    agent = DemoAgent(service.backend, pause=(0.005, 0.01), idle_seconds=0.05)
     agents.append(agent)
     first = "claude-desktop"
 
@@ -699,9 +733,10 @@ def test_the_played_app_asks_again_only_when_told(short_store_dir: Path) -> None
         wait_until(lambda: script_is_over(agent), "the script did not end")
         (passage,) = wait_until(waiting, "no passage waits after the script")
         assert passage["app"] == first
-        # Asked once in the script and, in this version still, once more as the script ended.
+        # Asked once, in the script, and not again as the script ended.
         asked = passage["times_asked"]
-        assert asked == 2
+        assert asked == 1
+        assert asked_and_told_to_wait(agent) == 1
         made = len(agent.calls)
         # Several idle periods pass: the first name makes no further call. It was told not
         # to ask for anything until the owner has answered.
@@ -759,27 +794,27 @@ def test_the_played_app_asks_again_only_when_told(short_store_dir: Path) -> None
 def test_the_played_app_asks_again_between_two_steps_of_the_script(
     demo_service: GateService,
 ) -> None:
-    agent = DemoAgent(
-        demo_service.backend, pause=(0.15, 0.15), idle_seconds=3600, retry_seconds=3600
-    )
+    agent = DemoAgent(demo_service.backend, pause=(0.15, 0.15), idle_seconds=0.05)
     agent.start()
     try:
         wait_until(lambda: agent.waiting_ref is not None, "the script never asked for its passage")
         assert agent.scripted, "the script was over before the passage waited"
         agent.ask_again()
-        # One read in the script, the one that was asked for, and, in this version still,
-        # one as the script ended.
         wait_until(
-            lambda: not agent.scripted and asked_and_told_to_wait(agent) >= 3,
+            lambda: not agent.scripted and asked_and_told_to_wait(agent) >= 2,
             "the script did not end, or the played app did not ask again",
         )
+        # Several idle periods after the script: nothing more is asked while the passage waits.
+        time.sleep(0.5)
         calls = [(call.client, call.tool, call.code) for call in agent.calls]
+        # One read in the script and the one that was asked for. None as the script ended.
         asked = [n for n, call in enumerate(calls) if call[1:] == ("read", "NEEDS_APPROVAL")]
-        assert len(asked) == 3
-        # The second came while the script was still being played, which went on after it.
+        assert len(asked) == 2
+        # The second came while the script was still being played, which went on after it
+        # and was the last thing that happened.
         last_of_the_script = calls.index((demo.UNREGISTERED_NAME, "search", "NOT_ALLOWED"))
-        assert asked[1] < last_of_the_script < asked[2]
-        assert demo_service.approvals()["waiting"][0]["times_asked"] == 3
+        assert asked[1] < last_of_the_script == len(calls) - 1
+        assert demo_service.approvals()["waiting"][0]["times_asked"] == 2
     finally:
         agent.stop()
 
@@ -792,7 +827,6 @@ def test_a_request_to_ask_again_is_not_kept_for_a_vault_that_was_locked(
         demo_service.backend,
         pause=(0.005, 0.01),
         idle_seconds=3600,
-        retry_seconds=3600,
         ready=lambda: demo_service.unlocked,
     )
     agent.start()
@@ -814,6 +848,28 @@ def test_a_request_to_ask_again_is_not_kept_for_a_vault_that_was_locked(
         assert agent.calls[-1] == DemoCall("claude-desktop", "read", "NEEDS_APPROVAL", False)
     finally:
         agent.stop()
+
+
+def test_nothing_tells_the_played_app_what_the_owner_decided() -> None:
+    # The demo must not be better than the product. A real application is not told that the
+    # owner has answered, and neither is the played one: being told to ask again carries
+    # nothing, at the agent and at the service, and the agent has no clock that asks for it.
+    assert list(inspect.signature(DemoAgent).parameters) == [
+        "backend",
+        "pause",
+        "idle_seconds",
+        "rng",
+        "ready",
+    ]
+    assert list(inspect.signature(DemoAgent.ask_again).parameters) == ["self"]
+    assert list(inspect.signature(GateService.demo_again).parameters) == ["self"]
+    source = inspect.getsource(DemoAgent)
+    assert "retry_seconds" not in source
+    # After the script the routine is a light question, and nothing while the passage waits.
+    idle = inspect.getsource(DemoAgent._idle_step)
+    assert "_retry" not in idle
+    assert source.count("self._retry") == 1  # in what ask_again leads to, and nowhere else
+    assert "self._safely(self._retry)" in inspect.getsource(DemoAgent._asks_again)
 
 
 # -- the three newer addresses, over HTTP, against a real vault ---------------------------------

@@ -398,22 +398,23 @@ class DemoAgent(threading.Thread):
        for the rent and a read of the best match;
     2. a search in the collection that needs approval, which returns
        references only, and a read that is answered ``NEEDS_APPROVAL``. That
-       passage is asked for again every ``retry_seconds`` and read once the
-       owner has released it; until then this app asks for nothing else, as
-       the refusal told it;
+       passage is asked for again only when the agent is told to
+       (:meth:`ask_again`), and read then if the owner has released it; until
+       it was read this app asks for nothing else, as the refusal told it;
     3. under the second hosted app, a search that finds the bank letter and a
        read of the passage that carries an instruction. The script then does
        what the instruction says and reads every passage it can find, until
        the app's daily limit has refused it twice;
     4. one search under a name that is not registered.
 
-    Afterwards, and once nothing waits for the owner, a light question is
-    asked every ``idle_seconds``.
+    Afterwards, and once the passage of step 2 has been read, a light question
+    is asked every ``idle_seconds``.
 
     :meth:`ask_again` is how a person says "try again" to the played app: the
     thread then asks once more for the passage it was told to wait for, within
-    a second, also while the script is still being played. It is not told what
-    the owner decided. After a release the read is answered; after a "no" the
+    a second, also while the script is still being played. Nothing else makes
+    it ask for that passage again: no clock does. It is not told what the
+    owner decided. After a release the read is answered; after a "no" the
     passage waits again, as it would with a real application.
 
     :meth:`run` (started with ``start()``) waits between ``pause[0]`` and
@@ -434,7 +435,6 @@ class DemoAgent(threading.Thread):
         *,
         pause: tuple[float, float] = (2.0, 4.0),
         idle_seconds: float = 30.0,
-        retry_seconds: float = 10.0,
         rng: random.Random | None = None,
         ready: Callable[[], bool] | None = None,
     ) -> None:
@@ -443,7 +443,6 @@ class DemoAgent(threading.Thread):
         self._ready = ready
         self._pause = pause
         self._idle_seconds = idle_seconds
-        self._retry_seconds = retry_seconds
         # The pauses only make the screen look alive; they protect nothing.
         self._rng = rng or random.Random()  # noqa: S311
         self._halt = threading.Event()
@@ -523,10 +522,13 @@ class DemoAgent(threading.Thread):
         yield
 
     def _idle_step(self) -> None:
-        """After the script: ask again for the passage that waits, else a light question."""
-        if self.waiting_ref is not None:
-            self._retry()
-        else:
+        """After the script: a light question, and nothing while the first app waits.
+
+        It was told not to ask for further passages until the owner has
+        answered, and it is not told when the owner has: it asks for that
+        passage again when somebody says so (:meth:`ask_again`), not by itself.
+        """
+        if self.waiting_ref is None:
             self._light_question()
 
     def _retry(self) -> None:
@@ -540,7 +542,11 @@ class DemoAgent(threading.Thread):
         self._search(self._honest, query, "home", 1)
 
     def step(self) -> None:
-        """Make the agent's next call now: the next step of the script, or of the routine after."""
+        """Make the agent's next call now: the next step of the script, or of the routine after.
+
+        After the script that is a light question, and no call at all while the
+        first app still waits for its passage.
+        """
         with self._step_lock:
             if self.scripted:
                 try:
@@ -627,10 +633,7 @@ class DemoAgent(threading.Thread):
             if self._wait(self._rng.uniform(*self._pause)) == "stop":
                 return
         while True:
-            waiting = self.waiting_ref is not None
-            waited = self._wait(
-                self._retry_seconds if waiting else self._idle_seconds, until_asked=True
-            )
+            waited = self._wait(self._idle_seconds, until_asked=True)
             if waited == "stop":
                 return
             if waited == "asked":

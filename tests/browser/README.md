@@ -1,6 +1,6 @@
 # Browser walk-throughs
 
-Two Node scripts drive the owner's interface in a real browser, against the real `wdva gate app`. `journey_demo.js` walks the demo: the played agent, the passphrase asked for again, lock and unlock, one approval. `journey_real.js` walks a new vault from pairing to Ctrl-C: passphrase, documents, apps, grants, an agent's calls, approvals, a restart, and the first run as offered.
+Two Node scripts drive the owner's interface in a real browser, against the real `wdva gate app`. `journey_demo.js` walks the demo: its guide on the Basic page (a passage that is not released and does not come back by itself, the played app asking again only when a button tells it to, the passage released and read), then in Pro the passphrase asked for again, lock and unlock. `journey_real.js` walks a new vault from pairing to Ctrl-C: passphrase, documents, apps, grants, an agent's calls, approvals, a restart, and the first run as offered.
 
     python -m pip install -e ".[gate]"
     npm install --no-save playwright@1.63.0 && npx playwright install chromium

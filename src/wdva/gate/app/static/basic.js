@@ -11,6 +11,10 @@
 // What it changes: documents are added and removed, an app is removed, and where
 // the vault has one group of documents an app's access to it is set. Nothing else
 // of the vault. Beside the vault it changes one word: that setting up is over.
+//
+// In a demo the page also holds the guide. Its one request changes nothing of the
+// owner's: it has the app that is played ask once more, as a person would tell a
+// real app "try again". The app tells the page nothing about what is played.
 
 import { api } from "./api.js";
 import { PRODUCT } from "./brand.js";
@@ -38,6 +42,12 @@ import { approvalCards, warningList } from "./views.js";
 /** How many waiting passages are shown as cards before "Show the other N" is pressed. */
 const CARDS_AT_FIRST = 3;
 const DAY_MS = 86400000;
+/**
+ * How long after "Have the played app ask again" the page asks for the lists itself.
+ * The played app has made its call well before: it looks for the request several
+ * times a second.
+ */
+const AGAIN_MS = 2000;
 
 /** What starts a question that makes an AI app use the vault. The space at its end is part of it. */
 export const ASK_START = `Use ${PRODUCT} to search my documents and answer this: `;
@@ -57,19 +67,27 @@ function grantOf(app, group) {
 
 // -- pieces -------------------------------------------------------------------------
 
-/** One part of the page under its heading, named by that heading for a screen reader. */
-function section(key, title, aside, content) {
+/**
+ * One part of the page under its heading, named by that heading for a screen reader.
+ * With `fold` (see `foldOf`) the heading carries a quiet button, and while the part
+ * is folded nothing but the heading is drawn.
+ */
+function section(key, title, aside, content, fold = null) {
   const id = `${key}-title`;
+  const words = fold && fold.open ? "Hide" : "Show";
   return el(
     "section",
-    { class: "basic-section", key, "aria-labelledby": id },
+    { class: ["basic-section", fold && "is-foldable"], key, "aria-labelledby": id },
     el(
       "div",
       { class: "section-head" },
       el("h2", { class: "section-title", id }, title),
       aside ? el("span", { class: "section-aside" }, aside) : null,
+      fold
+        ? button(words, { kind: "quiet", small: true, id: fold.id, label: `${words}: ${title}`, expanded: fold.open ? "true" : "false", onclick: fold.toggle })
+        : null,
     ),
-    content,
+    fold && !fold.open ? null : content,
   );
 }
 
@@ -347,6 +365,288 @@ function setupCard(ctx) {
       el("p", { class: "setup-next" }, next.words),
       el("a", { class: ["btn", waits ? "btn-default" : "btn-primary"], id: "setup-continue", href: next.href }, el("span", { class: "btn-label" }, next.action)),
     ),
+  );
+}
+
+// -- the demo's guide ---------------------------------------------------------------
+
+/**
+ * What this page remembers of the demo's guide. It is the page's memory and nothing
+ * else: a lock or a reload starts the guide again from what the lists say.
+ */
+export function freshGuide() {
+  return {
+    hidden: false,
+    // Whether "Now with your own documents" was opened by its button, and whether the demo has come far enough to show it without one.
+    own: false,
+    reached: false,
+    // The owner's last answer to a waiting passage as far as this page saw it, and the answers it has taken note of.
+    decision: null,
+    noted: new WeakSet(),
+    // The entry of a passage that was read after an approval, once this page has seen its row.
+    read: null,
+    // Which of the folded parts of the page were opened.
+    unfolded: new Set(),
+    // Whether the played app was just told to ask again.
+    asking: false,
+  };
+}
+
+/** Whether the demo's guide is on the page. */
+function guideOpen(ctx) {
+  return ctx.state.demo === true && !ctx.ui.guide.hidden;
+}
+
+/**
+ * While the guide is open, "Documents", "Apps" and "Also set for this vault, in Pro"
+ * are folded to their headings: the demo's vault has several groups, several apps and
+ * both kinds of app, which is not what a new owner will have. Each heading has a
+ * button that unfolds its part. Null when nothing is folded: outside a demo, and once
+ * the guide is hidden.
+ */
+function foldOf(ctx, name) {
+  if (!guideOpen(ctx)) return null;
+  const unfolded = ctx.ui.guide.unfolded;
+  const open = unfolded.has(name);
+  return {
+    id: `fold-${name}`,
+    open,
+    toggle: () => {
+      if (open) unfolded.delete(name);
+      else unfolded.add(name);
+      ctx.render();
+    },
+  };
+}
+
+/**
+ * Where the demo is: read from the lists this page loads anyway and from the
+ * owner's own presses on this page. The app tells the page nothing about what is
+ * played. Null until the lists are in.
+ *
+ * "watch": no app has asked for a passage that needs approval. "turn": a passage
+ * waits. "released": an approval stands and was not used. "kept": the owner's last
+ * answer on this page was "Don't release". "read": a passage was read after an
+ * approval. "asked": a passage was asked for and the lists do not say what became of
+ * it (an approval that was withdrawn or is over; a page that was loaded again).
+ */
+function guideBeat(ctx) {
+  const guide = ctx.ui.guide;
+  const approvals = ctx.data.approvals;
+  const left = ctx.left;
+  if (!approvals || !left.loaded || !ctx.stops) return null;
+  // The owner's last answer. "Don't release" writes nothing a page could read back, so it is kept here.
+  const settled = Array.from(ctx.ui.decided.values());
+  for (const done of settled) {
+    if (guide.noted.has(done)) continue;
+    guide.noted.add(done);
+    guide.decision = { release: done.release === true };
+  }
+  if (guide.read === null) {
+    const seq = left.order.find((entry) => left.items.get(entry).approved === true);
+    if (seq !== undefined) guide.read = seq;
+  }
+  // A passage that was answered a moment ago is not waiting, though the list may still hold it.
+  const waiting = approvals.waiting.filter((item) => !settled.some((done) => done.item.app === item.app && done.item.ref === item.ref));
+  if (waiting.length) return "turn";
+  if (guide.read !== null) return "read";
+  if ((approvals.granted || []).length) return "released";
+  if (guide.decision && !guide.decision.release) return "kept";
+  if (guide.decision || ctx.stops.some((item) => item.code === "NEEDS_APPROVAL")) return "asked";
+  return "watch";
+}
+
+/** The title and the sentences of one moment of the guide, and whether it offers "Have the played app ask again". */
+function guideWords(ctx, beat) {
+  if (beat === "turn") {
+    const waiting = ctx.data.approvals.waiting;
+    return {
+      title: "Your turn",
+      text:
+        waiting.length === 1
+          ? `A played app asks, under the name ${waiting[0].app}, for the passage above. Read the exact text, see where it would go, and choose. Either answer is fine.`
+          : "Played apps ask for the passages above. Read the exact text of each, see where it would go, and choose. Either answer is fine.",
+      again: false,
+    };
+  }
+  if (beat === "released") {
+    return {
+      title: "You released it once",
+      text: "Nothing has been sent yet. A real app now has to ask again; you would tell it “try again”. Here this button does that for the played app.",
+      again: true,
+    };
+  }
+  if (beat === "kept") {
+    return {
+      title: "You did not release it",
+      text: "Nothing from that passage left. If an app asks again, the passage waits here again. This button makes the played app ask again.",
+      again: true,
+    };
+  }
+  if (beat === "read") {
+    const left = ctx.left;
+    const seq = ctx.ui.guide.read;
+    let row = "The row marked “Released after approval” under “What left the vault” shows the exact text that left.";
+    if (left.order[0] === seq) row = "The newest row under “What left the vault” shows the exact text that left.";
+    else if (!left.items.has(seq)) row = "The row marked “Released after approval” under “What left the vault” shows the exact text that left. It is among the older rows by now, which “Show more” brings.";
+    return {
+      title: "It asked again and got the passage",
+      text: `${row} That is the whole of it: an app asked, you saw the exact text and where it would go, you decided, and what left is on the record.`,
+      again: false,
+    };
+  }
+  if (beat === "asked") {
+    return {
+      title: "Nothing is waiting now",
+      text: "A played app asked for a passage that needed your approval. If it has not been given that passage, this button makes it ask again, and the passage waits above again.",
+      again: true,
+    };
+  }
+  return {
+    title: "Watch an app ask for documents",
+    text:
+      `Nothing here is real: the documents are invented, and the apps that ask are played by ${PRODUCT} itself. ` +
+      "Soon one of them asks for a passage that needs your approval; it appears above, under “Approvals”. " +
+      "The rows under “What left the vault” are what the played apps were given so far.",
+    again: false,
+  };
+}
+
+/**
+ * "Have the played app ask again": what telling a real app "try again" is. The app
+ * that is played then makes one call, which is answered like any app's call, and
+ * this page hears of it like of any call. Nothing tells the played app what the
+ * owner decided: after a release it gets the passage, after a "no" the passage waits
+ * again.
+ */
+async function askAgain(ctx) {
+  const guide = ctx.ui.guide;
+  if (guide.asking) return;
+  guide.asking = true;
+  ctx.render();
+  try {
+    await api.demoAgain();
+  } catch (error) {
+    guide.asking = false;
+    toastError(error);
+    ctx.render();
+    return;
+  }
+  setTimeout(async () => {
+    await ctx.refresh();
+    guide.asking = false;
+    // The button goes once the passage waits again or was read. Where it had the focus, what
+    // says so takes it: the headline of the page, or the title of the guide. Never a button of a card.
+    const held = document.activeElement;
+    if (ctx.route === "basic" && guideOpen(ctx) && (!held || held === document.body || held.id === "demo-again")) {
+      const beat = guideBeat(ctx);
+      if (beat === "turn") ctx.ui.focusId = "basic-status";
+      else if (beat === "read") ctx.ui.focusId = "guide-title";
+    }
+    ctx.render();
+  }, AGAIN_MS);
+}
+
+/**
+ * The end of the guide: how to go on with a vault of one's own. The command is the
+ * one the app sent, which in a demo starts this installation without the demo. No
+ * button here starts anything: a vault of one's own needs the pairing code that only
+ * a new start prints.
+ */
+function ownVault(ctx) {
+  const command = (ctx.state.launch || {}).command;
+  return el(
+    "div",
+    { class: "guide-own", key: "guide-own" },
+    el("h3", { class: "guide-own-title" }, "Now with your own documents"),
+    el(
+      "ol",
+      { class: "guide-steps" },
+      el("li", null, "In the terminal where this demo runs, press Ctrl-C. The demo vault is deleted."),
+      command
+        ? el("li", null, el("p", null, "Run this:"), copyLine(ctx, "guide-copy", command, `the command that starts ${PRODUCT} with a vault of your own`))
+        : el("li", null, `Start ${PRODUCT} again the way you started this demo, without “--demo”.`),
+      el(
+        "li",
+        null,
+        !command || opensPage(command)
+          ? "The page that opens asks for a pairing code, which the terminal shows, and then for a passphrase."
+          : "The terminal prints the address of a page. That page asks for a pairing code, which the terminal shows, and then for a passphrase.",
+      ),
+    ),
+    el("p", { class: "guide-ready" }, "Have ready: a passphrase you can type from memory (it cannot be recovered), one document, and the AI app you use."),
+  );
+}
+
+/**
+ * The guide of the demo, under "Approvals" and the notices. It stands below the
+ * approval card, which is the real one and complete without it. It never leads to one
+ * answer: both answers are followed by the same button. No sentence of it names a time.
+ */
+function demoGuide(ctx, stops) {
+  if (!guideOpen(ctx)) return null;
+  const guide = ctx.ui.guide;
+  const beat = guideBeat(ctx);
+  const words = beat ? guideWords(ctx, beat) : null;
+  // From the owner's first answer on, the way to a vault of one's own is open without a press.
+  const decided = beat !== null && beat !== "watch" && beat !== "turn";
+  if (decided || guide.decision) guide.reached = true;
+  return el(
+    "section",
+    { class: "card card-guide", key: "demo-guide", "aria-labelledby": "guide-title" },
+    el(
+      "header",
+      { class: "card-head" },
+      chip("Demo", "accent"),
+      el("h2", { class: "card-title", id: "guide-title", tabindex: -1 }, words ? words.title : "The demo"),
+      button("Hide", {
+        kind: "quiet",
+        small: true,
+        id: "guide-hide",
+        label: "Hide the guide",
+        onclick: () => {
+          guide.hidden = true;
+          // The button has gone: the next control of the page takes the focus.
+          ctx.ui.focusId = "basic-ask-copy";
+          ctx.render();
+          toast("The guide is hidden. It is back when this page is loaded again.", "plain");
+        },
+      }),
+    ),
+    words ? el("p", { class: "guide-text", key: "text" }, words.text) : loadingBlock(),
+    words && words.again
+      ? el(
+          "div",
+          { class: "guide-actions", key: "again" },
+          // Never filled: the page has one filled button at most, and it is not this one.
+          button(guide.asking ? "Asking…" : "Have the played app ask again", { id: "demo-again", busy: guide.asking, onclick: () => askAgain(ctx) }),
+        )
+      : null,
+    decided && stops.some((stop) => stop.kind === "client-day")
+      ? el(
+          "p",
+          { class: "guide-text", key: "limit" },
+          "Meanwhile a second played app read a letter with an instruction hidden in it and then asked for every passage it could find. " +
+            "Its limit for 24 hours stopped it: see “Stopped in the last 24 hours” below.",
+        )
+      : null,
+    guide.reached
+      ? null
+      : el(
+          "div",
+          { class: "guide-more", key: "more" },
+          button("Use your own documents", {
+            kind: "quiet",
+            small: true,
+            id: "guide-own",
+            expanded: guide.own ? "true" : "false",
+            onclick: () => {
+              guide.own = !guide.own;
+              ctx.render();
+            },
+          }),
+        ),
+    guide.reached || guide.own ? ownVault(ctx) : null,
   );
 }
 
@@ -666,9 +966,11 @@ async function addToWhichGroup(ctx, files) {
 }
 
 function documentsSection(ctx) {
+  const fold = foldOf(ctx, "documents");
+  if (fold && !fold.open) return section("basic-documents", "Documents", null, null, fold);
   const data = ctx.data.documents;
   const apps = ctx.data.apps ? ctx.data.apps.apps : [];
-  if (!data) return section("basic-documents", "Documents", null, loadingBlock());
+  if (!data) return section("basic-documents", "Documents", null, loadingBlock(), fold);
   const groups = data.collections;
   const total = groups.reduce((sum, group) => sum + group.documents.length, 0);
   const sample = groups.reduce((found, group) => found || group.documents.find(isSample) || null, null);
@@ -737,7 +1039,7 @@ function documentsSection(ctx) {
             ),
         ]
       : null,
-  ]);
+  ], fold);
 }
 
 // -- Apps ---------------------------------------------------------------------------
@@ -1020,8 +1322,10 @@ function appRow(ctx, app, groups, settings, stops) {
 }
 
 function appsSection(ctx, stops) {
+  const fold = foldOf(ctx, "apps");
+  if (fold && !fold.open) return section("basic-apps", "Apps", null, null, fold);
   const data = ctx.data.apps;
-  if (!data) return section("basic-apps", "Apps", null, loadingBlock());
+  if (!data) return section("basic-apps", "Apps", null, loadingBlock(), fold);
   const apps = data.apps;
   const groups = data.collections;
   // An app is added on this page only where one value will describe what it may do, and
@@ -1040,7 +1344,7 @@ function appsSection(ctx, stops) {
           el("a", { class: "btn btn-default", id: "basic-add-app", href: "#/setup/app" }, el("span", { class: "btn-label" }, apps.length ? "Add an app" : "Choose your AI app"))
         : proLink("Add an app (in Pro)", "#/apps", { id: "basic-add-app" }),
     ),
-  ]);
+  ], fold);
 }
 
 // -- Also set for this vault, in Pro -------------------------------------------------
@@ -1102,6 +1406,9 @@ function alsoSection(ctx) {
     ["vault", "Under Vault"],
   ].filter(([page]) => under[page].length > 0);
   if (!pages.length) return null;
+  // The heading is there only when the part has a line, folded or not.
+  const fold = foldOf(ctx, "also");
+  if (fold && !fold.open) return section("basic-also", "Also set for this vault, in Pro", null, null, fold);
   return section("basic-also", "Also set for this vault, in Pro", null, [
     el("p", { class: "basic-hint", key: "lead" }, "Parts of this vault were set up in Pro. Basic shows them and does not change them."),
     pages.map(([page, title]) =>
@@ -1112,7 +1419,7 @@ function alsoSection(ctx) {
         el("ul", { class: "also-list" }, under[page].map((line) => el("li", null, line))),
       ),
     ),
-  ]);
+  ], fold);
 }
 
 // -- the foot -----------------------------------------------------------------------
@@ -1186,7 +1493,9 @@ export function basicView(ctx, problem) {
     approvalsSection(ctx, problem),
     // Notices stand under the cards. Basic has no strip for the two kinds of apps, so it shows that notice too.
     warningList(ctx, { bothKinds: true }),
+    // Under the notices: the card that names the next step of setting up, or in a demo its guide.
     setupCard(ctx),
+    demoGuide(ctx, stops),
     leftSection(ctx, stops),
     documentsSection(ctx),
     appsSection(ctx, stops),
