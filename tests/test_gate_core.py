@@ -3014,6 +3014,8 @@ def test_unlock_adds_one_record_and_nothing_derived(tmp_path: Path, gate_clock: 
         "originals",
         "run",
     ]
+    # The engine keeps nothing but its lock here. The app adds `interface.json` beside it
+    # (which view the owner uses); that file is written by the service, never by the engine.
     assert [item.name for item in (path / "run").iterdir()] == ["lock"]
     for name in set(after) - set(before):
         assert support.leaked(after[name], [*MARKERS, "claude-desktop"]) == []

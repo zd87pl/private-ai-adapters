@@ -6,6 +6,7 @@ import http.client
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import socket
@@ -26,7 +27,7 @@ from wdva._version import __version__
 from wdva.gate import brand, hostconfig, messages
 from wdva.gate.app import demo, main
 from wdva.gate.app.api import ServiceError
-from wdva.gate.app.demo import DemoAgent, make_demo_store
+from wdva.gate.app.demo import DemoAgent, DemoCall, make_demo_store
 from wdva.gate.app.httpd import AppServer
 from wdva.gate.app.service import NOT_REGISTERED, GateService
 from wdva.gate.errors import GateError
@@ -376,6 +377,10 @@ def test_the_demo_store(demo_service: GateService, short_store_dir: Path) -> Non
     state = demo_service.state()
     assert (state["demo"], state["locked"]) == (True, False)
     assert state["encryption"]["documents"] == 4
+    # A demo starts in the everyday view, with nothing left to set up.
+    assert state["interface"] == {"view": "basic", "setup": "done", "stored": True}
+    held = json.loads((short_store_dir / "run" / "interface.json").read_bytes())
+    assert held == {"view": "basic", "setup": "done"}
     assert state["serving"] == {
         "hosted": ["chatgpt-desktop", "claude-desktop"],
         "local": [],
@@ -643,7 +648,379 @@ def test_the_demo_agent_waits_while_the_vault_is_locked(
     assert not agent.is_alive()
 
 
+def wait_until(probe: Any, what: str, seconds: float = 60) -> Any:
+    """Call ``probe`` until it returns something true; fail with ``what`` when it never does."""
+    deadline = time.monotonic() + seconds
+    while True:
+        found = probe()
+        if found:
+            return found
+        assert time.monotonic() < deadline, what
+        time.sleep(0.005)
+
+
+def asked_and_told_to_wait(agent: DemoAgent) -> int:
+    """How often the played app's first name asked for a passage and was told to wait."""
+    wanted = ("claude-desktop", "read", "NEEDS_APPROVAL")
+    return sum(1 for call in list(agent.calls) if (call.client, call.tool, call.code) == wanted)
+
+
+def script_is_over(agent: DemoAgent) -> bool:
+    """Whether the script has ended and the one call that still follows it was made.
+
+    In this version the played app asks once more for its passage as the script
+    ends (the timed retry's first turn), so two such reads mark the end.
+    """
+    return not agent.scripted and asked_and_told_to_wait(agent) >= 2
+
+
+def test_the_played_app_asks_again_only_when_told(short_store_dir: Path) -> None:
+    passphrase = make_demo_store(short_store_dir, scrypt_n=gs.FAST_SCRYPT)
+    agents: list[DemoAgent] = []
+    service = GateService(
+        short_store_dir,
+        demo=True,
+        demo_passphrase=passphrase,
+        demo_again=lambda: agents[0].ask_again(),  # as the app wires it at start
+    )
+    service.unlock(passphrase=passphrase)
+    # The timed retry is still part of this version (it goes together with the button that
+    # replaces it). Here it is set so long that it cannot fire: what is tested is the asking.
+    agent = DemoAgent(service.backend, pause=(0.005, 0.01), idle_seconds=0.05, retry_seconds=3600)
+    agents.append(agent)
+    first = "claude-desktop"
+
+    def waiting() -> list[dict[str, Any]]:
+        found: list[dict[str, Any]] = service.approvals()["waiting"]
+        return found
+
+    agent.start()
+    try:
+        wait_until(lambda: script_is_over(agent), "the script did not end")
+        (passage,) = wait_until(waiting, "no passage waits after the script")
+        assert passage["app"] == first
+        # Asked once in the script and, in this version still, once more as the script ended.
+        asked = passage["times_asked"]
+        assert asked == 2
+        made = len(agent.calls)
+        # Several idle periods pass: the first name makes no further call. It was told not
+        # to ask for anything until the owner has answered.
+        time.sleep(0.5)
+        assert len(agent.calls) == made
+        assert waiting()[0]["times_asked"] == asked
+
+        # Told once, through the app: exactly one read, which waits again.
+        assert service.demo_again() == {}
+        wait_until(lambda: len(agent.calls) > made, "the played app did not ask again")
+        time.sleep(0.5)
+        assert agent.calls[made:] == [DemoCall(first, "read", "NEEDS_APPROVAL", False)]
+        assert waiting()[0]["times_asked"] == asked + 1
+
+        # The owner says no. The card does not come back by itself ...
+        service.dismiss(app=first, ref=passage["ref"])
+        time.sleep(0.5)
+        assert waiting() == []
+        assert len(agent.calls) == made + 1
+        # ... and when the played app is told to ask again, the passage waits again: it was
+        # not told what the owner decided, as a real app is not.
+        agent.ask_again()
+        wait_until(lambda: len(agent.calls) > made + 1, "the played app did not ask again")
+        (again,) = waiting()
+        assert (again["ref"], again["times_asked"]) == (passage["ref"], 1)
+        assert agent.calls[made + 1 :] == [DemoCall(first, "read", "NEEDS_APPROVAL", False)]
+
+        # The owner releases it once. Nothing is read until somebody says "try again".
+        service.release(app=first, ref=again["ref"], body_sha256=again["body_sha256"])
+        time.sleep(0.5)
+        assert len(agent.calls) == made + 2
+        assert agent.waiting_ref == passage["ref"]
+        assert [g["ref"] for g in service.approvals()["granted"]] == [passage["ref"]]
+        agent.ask_again()
+        wait_until(lambda: agent.waiting_ref is None, "the approved passage was not read")
+        assert agent.calls[made + 2] == DemoCall(first, "read", "OK", True)
+        released = service.activity(limit=20, kind="release", app=first)["items"]
+        assert [item["ref"] for item in released if item["approved"]] == [passage["ref"]]
+        # From then on the light questions begin, as before.
+        wait_until(lambda: len(agent.calls) >= made + 5, "no light question followed")
+        assert {(c.client, c.tool, c.code) for c in agent.calls[made + 3 :]} == {
+            (first, "search", "OK")
+        }
+        # Told to ask again when nothing waits, it has nothing to ask.
+        agent.ask_again()
+        time.sleep(0.4)
+        assert "read" not in {call.tool for call in agent.calls[made + 3 :]}
+        assert service.approvals() == {"waiting": [], "granted": []}
+    finally:
+        agent.stop()
+        service.close()
+    assert not agent.is_alive()
+
+
+def test_the_played_app_asks_again_between_two_steps_of_the_script(
+    demo_service: GateService,
+) -> None:
+    agent = DemoAgent(
+        demo_service.backend, pause=(0.15, 0.15), idle_seconds=3600, retry_seconds=3600
+    )
+    agent.start()
+    try:
+        wait_until(lambda: agent.waiting_ref is not None, "the script never asked for its passage")
+        assert agent.scripted, "the script was over before the passage waited"
+        agent.ask_again()
+        # One read in the script, the one that was asked for, and, in this version still,
+        # one as the script ended.
+        wait_until(
+            lambda: not agent.scripted and asked_and_told_to_wait(agent) >= 3,
+            "the script did not end, or the played app did not ask again",
+        )
+        calls = [(call.client, call.tool, call.code) for call in agent.calls]
+        asked = [n for n, call in enumerate(calls) if call[1:] == ("read", "NEEDS_APPROVAL")]
+        assert len(asked) == 3
+        # The second came while the script was still being played, which went on after it.
+        last_of_the_script = calls.index((demo.UNREGISTERED_NAME, "search", "NOT_ALLOWED"))
+        assert asked[1] < last_of_the_script < asked[2]
+        assert demo_service.approvals()["waiting"][0]["times_asked"] == 3
+    finally:
+        agent.stop()
+
+
+def test_a_request_to_ask_again_is_not_kept_for_a_vault_that_was_locked(
+    demo_service: GateService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(demo, "_LOCKED_WAIT", 0.005)
+    agent = DemoAgent(
+        demo_service.backend,
+        pause=(0.005, 0.01),
+        idle_seconds=3600,
+        retry_seconds=3600,
+        ready=lambda: demo_service.unlocked,
+    )
+    agent.start()
+    try:
+        wait_until(lambda: script_is_over(agent), "the script did not end")
+        wait_until(lambda: demo_service.approvals()["waiting"], "no passage waits")
+        demo_service.lock()
+        made = len(agent.calls)
+        agent.ask_again()  # nobody can: the app refuses it while locked. Should it happen:
+        time.sleep(0.6)
+        assert len(agent.calls) == made, "the played app called a locked vault"
+        demo_service.unlock(passphrase=demo.DEMO_PASSPHRASE)
+        time.sleep(0.6)
+        assert len(agent.calls) == made, "a request from before the lock was made up for"
+        assert demo_service.approvals()["waiting"] == []
+        # Asked now, it asks.
+        agent.ask_again()
+        wait_until(lambda: len(agent.calls) > made, "the played app did not ask again")
+        assert agent.calls[-1] == DemoCall("claude-desktop", "read", "NEEDS_APPROVAL", False)
+    finally:
+        agent.stop()
+
+
+# -- the three newer addresses, over HTTP, against a real vault ---------------------------------
+
+
+def record_and_files(browser: Browser) -> tuple[Any, ...]:
+    state = browser.ok("GET", "/api/state")
+    return (
+        state["record"]["head_seq"],
+        state["record"]["head_hash"],
+        state["store"]["sealed_files"],
+        state["store"]["sealed_bytes"],
+    )
+
+
+def test_the_view_the_check_and_the_demo_address_over_http(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # What looks for another program's settings looks into a home that this test owns.
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    browser, store = app.browser, app.store
+    check = "/api/apps/claude-desktop/connect/check"
+    posts = [("/api/interface", {"view": "pro"}), (check, {}), ("/api/demo/again", {})]
+
+    # Each needs the session, like every call.
+    for path, body in posts:
+        assert browser.error("POST", path, body) == (401, "pairing_required")
+    browser.ok("POST", "/api/session/pair", {"code": app.server.pairing_code})
+
+    # Without a vault there is no view to keep, and none of the three makes anything.
+    assert browser.error("POST", "/api/interface", {"view": "pro"}) == (404, "not_found")
+    assert browser.error("POST", check, {}) == (409, "locked")
+    assert browser.error("POST", "/api/demo/again", {}) == (404, "not_found")
+    assert not store.exists()
+
+    state = browser.ok("POST", "/api/store/create", {"passphrase": gs.PASSPHRASE})
+    assert state["interface"] == {"view": "basic", "setup": "open", "stored": True}
+    assert state["launch"] == {"command": None, "port_fixed": False}  # built by the command
+    browser.ok(
+        "POST", "/api/apps", {"name": "claude-desktop", "hosted": True, "destination": "Anthropic"}
+    )
+    head = record_and_files(browser)
+    listed = browser.ok("GET", "/api/activity?limit=200")
+
+    # -- the view: answered with the state, changed by nothing but the two words
+    state = browser.ok("POST", "/api/interface", {"view": "pro"})
+    assert (state["locked"], state["interface"]) == (
+        False,
+        {"view": "pro", "setup": "open", "stored": True},
+    )
+    state = browser.ok("POST", "/api/interface", {"setup": "done"})
+    assert state["interface"] == {"view": "pro", "setup": "done", "stored": True}
+    for body in (
+        {"view": "expert"},  # a wrong value
+        {"view": ""},
+        {"setup": "open"},
+        {},  # no field
+        {"view": "basic", "stored": False},  # a field that is not declared
+        {"view": "basic", "path": str(tmp_path / "elsewhere.json")},
+        {"view": 1},
+        {"interface": {"view": "basic"}},
+    ):
+        assert browser.error("POST", "/api/interface", body) == (400, "invalid"), body
+    assert browser.error("GET", "/api/interface") == (404, "not_found")
+    assert browser.ok("GET", "/api/state")["interface"] == state["interface"]
+    file = store / "run" / "interface.json"
+    assert json.loads(file.read_bytes()) == {"view": "pro", "setup": "done"}
+    assert not list(tmp_path.glob("elsewhere*"))
+
+    # -- the check: one word about one file, and not a byte of it
+    secret = "sk-MADE-UP-KEY-OF-ANOTHER-TOOL-90817"
+    assert browser.ok("POST", check, {}) == {
+        "state": "no_folder",
+        "path": "~/.config/Claude/claude_desktop_config.json"
+        if sys.platform != "darwin"
+        else "~/Library/Application Support/Claude/claude_desktop_config.json",
+        "folder": "~/.config/Claude"
+        if sys.platform != "darwin"
+        else "~/Library/Application Support/Claude",
+        "open_line": None,
+        "section": None,
+    }
+    assert not home.exists()
+    place = home / ".config" / "Claude" / "claude_desktop_config.json"
+    if sys.platform == "darwin":
+        place = home / "Library" / "Application Support" / "Claude" / place.name
+    place.parent.mkdir(parents=True)
+    place.write_text(
+        json.dumps(
+            {
+                "apiKey": secret,
+                "mcpServers": {"another-tool": {"command": "tool", "env": {"TOKEN": secret}}},
+                secret: {"nested": [secret]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def in_the_home() -> tuple[Any, ...]:
+        return (place.read_bytes(), place.stat().st_mtime_ns, sorted(home.rglob("*")))
+
+    before = in_the_home()
+    seen = len(browser.bodies)
+    answer = browser.ok("POST", check, {"host": "claude-desktop"})
+    assert (answer["state"], answer["section"]) == ("other", "filled")
+    assert str(place) in answer["open_line"]
+    assert in_the_home() == before, "the check changed something in the home folder"
+    place.write_bytes(place.read_bytes()[:-1])  # the last brace is missing
+    before = in_the_home()
+    assert browser.ok("POST", check, {})["state"] == "unreadable"
+    assert in_the_home() == before
+    for body in browser.bodies[seen:]:
+        assert secret not in body, "a byte of the file reached an answer"
+        assert "another-tool" not in body
+    # The request names the app and the kind of application, never a file.
+    for body in (
+        {"path": str(place)},
+        {"host": "claude-desktop", "file": "/etc/passwd"},
+        {"host": 7},
+    ):
+        assert browser.error("POST", check, body) == (400, "invalid"), body
+    for host in ("/etc/passwd", "../codex", "netscape"):
+        assert browser.error("POST", check, {"host": host}) == (404, "not_found")
+    assert browser.error("POST", "/api/apps/nobody/connect/check", {}) == (404, "not_found")
+    assert browser.error("POST", f"{check}?path=/etc/passwd", {}) == (400, "invalid")
+    assert browser.error("GET", check) == (404, "not_found")
+    assert browser.ok("POST", check, {"host": "claude-code"})["state"] == "unsupported"
+    # Asking for the text reads no file; its new fields come with it.
+    connect = browser.ok("GET", "/api/apps/claude-desktop/connect")
+    assert connect["blocks"][0]["where_here"] == answer["path"]
+    assert set(connect["blocks"][0]["inner"]) == {"entry", "section"}
+    assert "://" not in connect["plain_note"]
+    assert connect["after"]["desktop"] is True
+
+    # -- the demo's address does not exist for a real vault
+    assert browser.error("POST", "/api/demo/again", {}) == (404, "not_found")
+    assert browser.error("POST", "/api/demo/again", {"app": "claude-desktop"}) == (400, "invalid")
+
+    # None of it wrote into the record or sealed anything.
+    assert record_and_files(browser) == head
+    assert browser.ok("GET", "/api/activity?limit=200") == listed
+
+    # Locked: the view can still be kept; the check is refused; the demo's address is not there.
+    assert browser.ok("POST", "/api/lock", {})["locked"] is True
+    head = record_and_files(browser)
+    state = browser.ok("POST", "/api/interface", {"view": "basic"})
+    assert (state["locked"], state["interface"]) == (
+        True,
+        {"view": "basic", "setup": "done", "stored": True},
+    )
+    assert browser.error("POST", "/api/interface", {"view": "expert"}) == (400, "invalid")
+    assert browser.error("POST", check, {}) == (409, "locked")
+    assert browser.error("POST", "/api/demo/again", {}) == (404, "not_found")
+    assert record_and_files(browser) == head
+    # And the view that was kept is the one the vault opens with.
+    state = browser.ok("POST", "/api/unlock", {"passphrase": gs.PASSPHRASE})
+    assert state["interface"] == {"view": "basic", "setup": "done", "stored": True}
+    assert not [body for body in browser.bodies if gs.PASSPHRASE in body]
+
+
+def test_asking_the_played_app_again_over_http(short_store_dir: Path) -> None:
+    passphrase = make_demo_store(short_store_dir, scrypt_n=gs.FAST_SCRYPT)
+    told: list[int] = []
+    service = GateService(
+        short_store_dir,
+        demo=True,
+        demo_passphrase=passphrase,
+        demo_again=lambda: told.append(1),
+    )
+    server = AppServer(service, port=0, pairing=False, version=__version__, demo=True)
+    server.start()
+    try:
+        browser = Browser(server.port)
+        assert browser.error("POST", "/api/demo/again", {}) == (401, "pairing_required")
+        browser.ok("GET", "/api/session")  # a demo hands its session to the page
+        # Locked, nobody is asked.
+        assert browser.error("POST", "/api/demo/again", {}) == (409, "locked")
+        assert told == []
+        browser.ok("POST", "/api/unlock", {"passphrase": passphrase})
+        head = record_and_files(browser)
+        assert browser.ok("POST", "/api/demo/again", {}) == {}
+        assert browser.ok("POST", "/api/demo/again") == {}  # the page sends no body
+        assert told == [1, 1]
+        assert browser.error("POST", "/api/demo/again", {"times": 5}) == (400, "invalid")
+        assert browser.error("GET", "/api/demo/again") == (404, "not_found")
+        assert told == [1, 1]
+        assert record_and_files(browser) == head
+    finally:
+        server.stop()
+        service.close()
+
+
 # -- the command -----------------------------------------------------------------------------
+
+
+def launch_words(state: dict[str, Any]) -> list[str]:
+    """The words of the command that starts the app again, after the interpreter's path.
+
+    The first word must be this interpreter, by its full path: the command is for a
+    terminal that may find another Python first, or none.
+    """
+    words = shlex.split(state["launch"]["command"])
+    assert os.path.isabs(words[0]), words[0]
+    assert os.path.samefile(words[0], sys.executable), words[0]
+    return words[1:]
 
 
 def start_command(*arguments: str) -> subprocess.Popen[str]:
@@ -764,11 +1141,19 @@ def test_the_command_runs_the_demo_and_removes_its_store() -> None:
         again = browser.ok("POST", "/api/unlock", {"passphrase": locked["demo_passphrase"]})
         assert again["locked"] is False
         browser.ok("POST", "/api/reauth", {"passphrase": demo.DEMO_PASSPHRASE})
+        # The demo opens in the everyday view, set up, and says how to start for real: the
+        # same installation, without the demo and without its temporary folder.
+        assert state["interface"] == {"view": "basic", "setup": "done", "stored": True}
+        assert launch_words(state) == ["-m", "wdva", "gate", "app", "--no-browser"]
+        assert state["launch"]["port_fixed"] is False
+        own = state["launch"]["command"]
+        assert again["launch"] == locked["launch"] == state["launch"]
     except BaseException:
         process.kill()
         raise
     code, out, err = finish(process, signal.SIGTERM)
-    assert (code, out, err) == (0, "", "")
+    # The start-up lines stay five. A demo that stops prints one more.
+    assert (code, out, err) == (0, f"To start with your own documents: {own}\n", "")
     assert not store.exists()
 
 
@@ -806,6 +1191,16 @@ def test_the_command_prints_the_pairing_code_and_ctrl_c_locks_the_vault(
         state = browser.ok("POST", "/api/unlock", {"passphrase": gs.PASSPHRASE})
         # One hour, as the command line said.
         assert state["locks_at"][11:13] == f"{(int(state['unlocked_at'][11:13]) + 1) % 24:02d}"
+        # The command that starts this installation on this vault again, as it was started.
+        flags = ["--store", str(short_store_dir), "--lock-after", "1", "--no-browser"]
+        assert launch_words(state) == ["-m", "wdva", "gate", "app", *flags]
+        assert state["launch"]["port_fixed"] is False
+        assert before["launch"] == locked["launch"] == state["launch"]
+        # A new vault starts in the everyday view, with setting up still to do.
+        assert before["interface"] is None
+        assert state["interface"] == {"view": "basic", "setup": "open", "stored": True}
+        # A real vault has no played app to tell anything.
+        assert browser.error("POST", "/api/demo/again", {}) == (404, "not_found")
     except BaseException:
         process.kill()
         raise
@@ -991,6 +1386,176 @@ def test_the_help_says_that_a_window_asks_for_the_pairing_code() -> None:
     window = " ".join(shown.rsplit("--window", 1)[1].split("--demo", 1)[0].split())
     assert "asks for the pairing code like the browser does" in window
     assert "experimental" in window
+
+
+def test_the_view_option_takes_basic_and_pro_and_nothing_else(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from wdva.cli import build_parser
+
+    parser = build_parser()
+    assert parser.parse_args(["gate", "app"]).view is None
+    for view in ("basic", "pro"):
+        assert parser.parse_args(["gate", "app", "--view", view]).view == view
+    for bad in ("Basic", "PRO", "expert", "both", "", "--demo"):
+        with pytest.raises(SystemExit) as stopped:
+            parser.parse_args(["gate", "app", "--view", bad])
+        assert stopped.value.code == 2
+    for short in ("--vi", "--v"):  # no abbreviation either
+        with pytest.raises(SystemExit):
+            parser.parse_args(["gate", "app", short, "pro"])
+    # Only the app has a view: the other two commands do not take the option.
+    with pytest.raises(SystemExit):
+        parser.parse_args(["gate", "config", "codex", "--client", "codex", "--view", "pro"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["gate", "mcp", "--client", "codex", "--view", "pro"])
+    capsys.readouterr()
+    # Called without the command line, the same two words and no other.
+    with pytest.raises(GateError, match="--view"):
+        main.run_app(store=None, view="expert")
+    shown = subprocess.run(
+        [sys.executable, "-m", "wdva", "gate", "app", "--help"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert "--view {basic,pro}" in shown
+    said = " ".join(shown.rsplit("--view {basic,pro}", 1)[1].split()).lower()
+    for word in ("advanced", "simple", "upgrade", "beginner", "expert"):
+        assert word not in said  # the two are views of one app, neither is a step up
+
+
+def interface_of(store: Path) -> Any:
+    path = store / "run" / "interface.json"
+    return json.loads(path.read_bytes()) if path.exists() else None
+
+
+def test_the_view_flag_sets_the_view(short_store_dir: Path) -> None:
+    def run(*arguments: str, create: bool = False) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Start the app on the vault, pair, and return the first state and the last one."""
+        process = start_command("--no-browser", "--store", str(short_store_dir), *arguments)
+        try:
+            lines = start_up_lines(process)
+            opened, paired = OPEN_LINE.fullmatch(lines[2]), PAIRING_LINE.fullmatch(lines[3])
+            assert opened is not None, lines
+            assert paired is not None, lines
+            at_start = interface_of(short_store_dir)
+            browser = Browser(int(opened.group(1)))
+            browser.ok("POST", "/api/session/pair", {"code": paired.group(1)})
+            first = browser.ok("GET", "/api/state")
+            last = first
+            if create:
+                last = browser.ok("POST", "/api/store/create", {"passphrase": gs.PASSPHRASE})
+            assert first["interface"] == (None if create else {**at_start, "stored": True})
+            # The command to start again never carries the view: the file does.
+            assert "--view" not in first["launch"]["command"]
+        except BaseException:
+            process.kill()
+            raise
+        assert finish(process, signal.SIGINT) == (0, "", "")
+        return first, last
+
+    # A new vault is created with the view that was named, and setting up is still to do.
+    first, created = run("--view", "pro", create=True)
+    assert created["interface"] == {"view": "pro", "setup": "open", "stored": True}
+    assert interface_of(short_store_dir) == {"view": "pro", "setup": "open"}
+    file = short_store_dir / "run" / "interface.json"
+    written = file.stat().st_mtime_ns
+    # Without the flag nothing is written at start: the vault opens as it was left.
+    first, _ = run()
+    assert first["interface"] == {"view": "pro", "setup": "open", "stored": True}
+    assert file.stat().st_mtime_ns == written
+    # An existing vault opens in the view that is named, the choice is stored, and whether
+    # setting up was finished stays as it was.
+    first, _ = run("--view", "basic")
+    assert first["interface"] == {"view": "basic", "setup": "open", "stored": True}
+    assert interface_of(short_store_dir) == {"view": "basic", "setup": "open"}
+    assert file.stat().st_mtime_ns != written
+
+
+def test_a_start_without_the_view_flag_writes_nothing_for_a_vault_from_before(
+    short_store_dir: Path,
+) -> None:
+    gs.make_store(short_store_dir).close()  # made by the engine alone, as vaults were
+    process = start_command("--no-browser", "--store", str(short_store_dir))
+    try:
+        lines = start_up_lines(process)
+        opened, paired = OPEN_LINE.fullmatch(lines[2]), PAIRING_LINE.fullmatch(lines[3])
+        assert opened is not None, lines
+        assert paired is not None, lines
+        browser = Browser(int(opened.group(1)))
+        browser.ok("POST", "/api/session/pair", {"code": paired.group(1)})
+        state = browser.ok("POST", "/api/unlock", {"passphrase": gs.PASSPHRASE})
+        assert state["interface"] == {"view": "pro", "setup": "done", "stored": False}
+        assert interface_of(short_store_dir) is None
+    except BaseException:
+        process.kill()
+        raise
+    assert finish(process, signal.SIGINT) == (0, "", "")
+    assert interface_of(short_store_dir) is None
+
+
+def test_a_demo_that_stops_says_how_to_start_for_real(tmp_path: Path) -> None:
+    own_place = tmp_path / "a vault of my own"
+    process = start_command(
+        "--demo", "--no-browser", "--view", "pro", "--lock-after", "2", "--store", str(own_place)
+    )
+    try:
+        lines = start_up_lines(process)
+        assert len(lines) == 5  # the start-up lines stay five
+        opened = OPEN_LINE.fullmatch(lines[2])
+        assert opened is not None, lines
+        browser = Browser(int(opened.group(1)))
+        browser.ok("GET", "/api/session")
+        state = browser.ok("GET", "/api/state")
+        store = Path(state["store"]["path"])
+        # The view that was named, and nothing to set up in a demo.
+        assert state["interface"] == {"view": "pro", "setup": "done", "stored": True}
+        # The command is for a vault of one's own: the place the person named, the flags of
+        # this run, and neither the demo nor the view nor the demo's temporary folder.
+        flags = ["--store", str(own_place), "--lock-after", "2", "--no-browser"]
+        assert launch_words(state) == ["-m", "wdva", "gate", "app", *flags]
+        assert state["launch"]["port_fixed"] is False
+        command = state["launch"]["command"]
+        assert str(store) not in command
+        # The played app can be told to ask again: the address is there in a demo.
+        assert browser.ok("POST", "/api/demo/again", {}) == {}
+    except BaseException:
+        process.kill()
+        raise
+    code, out, err = finish(process, signal.SIGINT)
+    assert (code, err) == (0, "")
+    printed = out.splitlines()
+    assert len(printed) == 1, "a demo that stops prints one line more, and only one"
+    assert printed[-1].startswith("To start with your own documents: ")
+    assert printed[-1] == main.OWN_VAULT_LINE + command
+    said = shlex.split(printed[-1].removeprefix(main.OWN_VAULT_LINE))
+    assert "--demo" not in said
+    assert "--view" not in said
+    assert not store.exists()
+    assert not own_place.exists(), "the demo made something at the place for a vault of one's own"
+
+
+def test_a_demo_whose_terminal_has_gone_still_ends_cleanly() -> None:
+    # The last line has nobody to read it when the output was closed: that is no error.
+    process = start_command("--demo", "--no-browser")
+    try:
+        assert len(start_up_lines(process)) == 5
+        assert process.stdout is not None
+        process.stdout.close()
+        process.send_signal(signal.SIGINT)
+        assert process.stderr is not None
+        watchdog = threading.Timer(60, process.kill)
+        watchdog.start()
+        try:
+            err = process.stderr.read()
+            code = process.wait()
+        finally:
+            watchdog.cancel()
+    except BaseException:
+        process.kill()
+        raise
+    assert (code, err) == (0, "")
 
 
 def test_the_command_says_when_the_port_is_taken(short_store_dir: Path) -> None:

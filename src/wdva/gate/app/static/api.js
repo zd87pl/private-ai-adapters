@@ -149,6 +149,7 @@ export const api = {
   reauth: (passphrase) => call("POST", "/api/reauth", { body: { passphrase }, plain: true }),
   setServing: (body) => call("POST", "/api/serving", { body }),
   verify: () => call("POST", "/api/verify"),
+  setInterface: (body) => call("POST", "/api/interface", { body }),
 
   activity: (query) => call("GET", "/api/activity", { query }),
   activityDetail: (seq) => call("GET", `/api/activity/${part(seq)}`),
@@ -171,8 +172,11 @@ export const api = {
   setGrant: (app, collection, mode) => call("POST", "/api/grants", { body: { app, collection, mode } }),
   setAppLimits: (name, limits) => call("POST", `/api/apps/${part(name)}/limits`, { body: limits }),
   connect: (name, host) => call("GET", `/api/apps/${part(name)}/connect`, { query: { host } }),
+  checkConnect: (name, host) => call("POST", `/api/apps/${part(name)}/connect/check`, { body: { host } }),
 
   settings: () => call("GET", "/api/settings"),
   setSettings: (body) => call("POST", "/api/settings", { body }),
   addReplacedString: (text) => call("POST", "/api/replaced-strings", { body: { text } }),
+
+  demoAgain: () => call("POST", "/api/demo/again"),
 };

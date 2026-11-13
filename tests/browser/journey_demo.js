@@ -42,6 +42,7 @@ const TEXT = {
   copies: /cop(y|ies) of the files/i, // the fact on the vault screen about what was kept of added files
   none: 'None',
   originalsKept: /originals? kept/i, // what that fact must not be called
+  ownVault: 'To start with your own documents: ', // what the line printed when a demo stops begins with
 };
 
 run(async () => {
@@ -213,11 +214,16 @@ run(async () => {
     await picture('05-overview');
   });
 
-  await step('Ctrl-C ends the demo with status 0 and removes its store', async () => {
+  await step('Ctrl-C ends the demo with status 0, says how to start for real, and removes its store', async () => {
     const exit = await stopApp(app, 'SIGINT');
     check(exit && exit.code === 0, `exit: ${JSON.stringify(exit)}`);
     check(app.err === '', `standard error: ${app.err}`);
-    check(app.out.trimEnd().split('\n').length === 5, 'more was printed than the start-up lines');
+    // The five start-up lines, and one more when a demo stops: the command for a vault of one's own.
+    const printed = app.out.trimEnd().split('\n');
+    check(printed.length === 6, `expected the start-up lines and one more, got ${JSON.stringify(printed)}`);
+    const last = printed[5];
+    check(last.startsWith(TEXT.ownVault), `the last line is not the one about a vault of one's own: ${last}`);
+    check(last.includes(' gate app') && !last.includes('--demo') && !last.includes(storePath), `the command starts the demo again, or names its store: ${last}`);
     check(storePath && !fs.existsSync(storePath), `the demo store is still there: ${storePath}`);
   });
 

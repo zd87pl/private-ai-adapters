@@ -6,6 +6,11 @@ An agent application reaches the gate by starting a small program, the MCP
 server of ``wdva gate mcp``. This module writes the lines an owner copies into
 an application's configuration so that it does. It is data and formatting only:
 it writes no file, changes no application's configuration and starts no program.
+That holds for what it says about a settings file too: where the file of an
+application lies on this computer (:func:`settings_file`) is a path worked out
+from the home directory, and the line that opens it in a text editor
+(:func:`open_line`) is text for the owner to read and run. The one module that
+reads such a file is :mod:`wdva.gate.hostcheck`.
 
 The command is the same for every application (:func:`host_command`). It names
 the Python interpreter that runs this package and the store by their full
@@ -30,8 +35,9 @@ import re
 import shlex
 import sys
 import textwrap
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
 from wdva.errors import MissingDependencyError
@@ -43,6 +49,7 @@ __all__ = [
     "CLIENT_NAME_PATTERN",
     "INSTALL_LINE",
     "KNOWN_HOSTS",
+    "PLATFORMS",
     "PYTHON_MESSAGE",
     "REPOSITORY",
     "SERVER_KEY",
@@ -54,9 +61,13 @@ __all__ = [
     "install_line",
     "known_host",
     "missing_sdk_error",
+    "open_line",
+    "platform_name",
     "render",
     "render_text",
     "sdk_status",
+    "settings_file",
+    "shown_path",
 ]
 
 REPOSITORY = "git+https://github.com/zd87pl/private-ai-adapters"
@@ -139,8 +150,18 @@ KNOWN_HOSTS: tuple[KnownHost, ...] = (
         read=_DOCS_READ,
     ),
     KnownHost(
+        id="chatgpt-desktop",
+        label="ChatGPT desktop app",
+        name="chatgpt-desktop",
+        destination="OpenAI",
+        hosted=True,
+        local_program=True,
+        source="https://learn.chatgpt.com/docs/extend/mcp",
+        read=_DOCS_READ,
+    ),
+    KnownHost(
         id="codex",
-        label="ChatGPT desktop app or Codex",
+        label="Codex",
         name="codex",
         destination="OpenAI",
         hosted=True,
@@ -215,6 +236,7 @@ KNOWN_HOSTS: tuple[KnownHost, ...] = (
 _DOCUMENTED_BY = {
     "claude-desktop": "the Model Context Protocol documentation",
     "claude-code": "Anthropic's documentation",
+    "chatgpt-desktop": "OpenAI's documentation",
     "codex": "OpenAI's documentation",
     "openclaw": "OpenClaw's documentation",
     "generic": "the Model Context Protocol documentation",
@@ -245,6 +267,47 @@ _LOCAL_ALTERNATIVE = {
     ),
 }
 
+PLATFORMS = ("macos", "linux")
+"""The systems the gate runs on, as an answer names them."""
+
+# What the owner does in the application once the text is in place: a title, one
+# sentence, and whether the application is a desktop app that has to be quit.
+_AFTER: dict[str, tuple[str, str, bool]] = {
+    "claude-desktop": (
+        "Quit Claude Desktop, open it again, and paste the question into a new chat",
+        "It reads its settings when it starts.",
+        True,
+    ),
+    "chatgpt-desktop": (
+        "Quit the ChatGPT desktop app, open it again, and paste the question into a new chat",
+        "It reads its settings when it starts.",
+        True,
+    ),
+    "claude-code": (
+        "Start a new Claude Code session and paste the question",
+        "A session reads its settings when it starts.",
+        False,
+    ),
+    "codex": (
+        "Start a new Codex session and paste the question",
+        "A session reads its settings when it starts.",
+        False,
+    ),
+    "openclaw": (
+        "Restart OpenClaw and paste the question",
+        "It reads its settings when it starts.",
+        False,
+    ),
+    "generic": (
+        "Restart the app and paste the question",
+        "Most apps read their settings when they start.",
+        False,
+    ),
+}
+
+# The applications with one settings file the gate knows the place of, and its format.
+_SETTINGS_FORMAT = {"claude-desktop": "json", "chatgpt-desktop": "toml", "codex": "toml"}
+
 
 @dataclass(frozen=True)
 class Block:
@@ -252,13 +315,19 @@ class Block:
 
     ``language`` is ``"shell"``, ``"json"``, ``"json5"`` or ``"toml"``.
     ``where`` lists the places the application looks for the file, when the
-    text belongs in a file.
+    text belongs in a file, and ``where_here`` is the one of them that applies
+    on this computer, if one does. For a JSON block with ``mcpServers``,
+    ``inner`` holds two smaller pieces of the same text, for a file that has
+    other settings already: ``entry`` is the gate's entry alone and ``section``
+    the whole ``mcpServers`` member, each without the braces around it.
     """
 
     title: str
     language: str
     text: str
     where: tuple[str, ...] = ()
+    where_here: str | None = None
+    inner: Mapping[str, str] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """The block as JSON values."""
@@ -267,6 +336,8 @@ class Block:
             "language": self.language,
             "text": self.text,
             "where": list(self.where),
+            "where_here": self.where_here,
+            "inner": None if self.inner is None else dict(self.inner),
         }
 
 
@@ -277,6 +348,13 @@ class HostConfig:
     For a product that cannot start a local program, ``blocks`` is empty and
     ``explanation`` says why and what to use instead. Otherwise ``explanation``
     is ``None`` and ``command`` is the command every block holds.
+
+    ``platform`` is the system the places were chosen for, a name from
+    :data:`PLATFORMS`. ``plain_note`` says in one sentence, without an address,
+    what the form follows and that it was not tried; ``after`` is what the owner
+    does in the application afterwards (``title``, ``text``, and ``desktop``:
+    whether it is a desktop app that has to be quit). Both are ``None`` for a
+    product that cannot be connected.
     """
 
     host: str
@@ -288,6 +366,9 @@ class HostConfig:
     source: str
     read: str
     command: tuple[str, ...] = ()
+    platform: str = "linux"
+    plain_note: str | None = None
+    after: Mapping[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """The configuration as JSON values, for an interface to show."""
@@ -298,6 +379,9 @@ class HostConfig:
             "blocks": [block.as_dict() for block in self.blocks],
             "notes": list(self.notes),
             "explanation": self.explanation,
+            "platform": self.platform,
+            "plain_note": self.plain_note,
+            "after": None if self.after is None else dict(self.after),
         }
 
 
@@ -431,11 +515,136 @@ def _shell(*words: str) -> str:
     return shlex.join(words)
 
 
+def _inside(value: Mapping[str, Any]) -> str:
+    """A JSON object with one member, written as that member alone, without the braces."""
+    lines = json.dumps(value, indent=2, ensure_ascii=False).split("\n")[1:-1]
+    return "\n".join(line[2:] for line in lines)
+
+
+def _mcp_servers_inner(command: Sequence[str]) -> dict[str, str]:
+    """The two pieces of :func:`_mcp_servers_json` for a file that holds other settings."""
+    entry = {SERVER_KEY: {"command": command[0], "args": list(command[1:])}}
+    return {"entry": _inside(entry), "section": _inside({"mcpServers": entry})}
+
+
 def _source_note(entry: KnownHost) -> str:
     return (
         f"This form follows {_DOCUMENTED_BY[entry.id]} ({entry.source}) as read on "
         f"{entry.read}. It has not been tried with the application itself."
     )
+
+
+def _plain_note(entry: KnownHost) -> str:
+    """What the form follows and that it was not tried, without the address of a page."""
+    if entry.id == "generic":
+        return (
+            "This follows the form most apps of this kind read. It has not been tried with "
+            "your app."
+        )
+    return (
+        f"This follows the published instructions for {entry.label}, as read on {entry.read}. "
+        f"It has not been tried with {entry.label} itself."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Where an application's settings file is on this computer
+# ---------------------------------------------------------------------------
+
+
+def platform_name() -> str:
+    """The system this program runs on, as a name from :data:`PLATFORMS`."""
+    return "macos" if sys.platform == "darwin" else "linux"
+
+
+def _platform(platform: str | None) -> str:
+    if platform is None:
+        return platform_name()
+    if platform not in PLATFORMS:
+        raise ValueError(f"the platform is one of {', '.join(PLATFORMS)}, not {platform!r:.40}")
+    return platform
+
+
+def settings_file(host: str, platform: str | None = None) -> tuple[Path, str] | None:
+    """The one settings file of the application ``host`` on this computer, and its format.
+
+    Returns the absolute path and ``"json"`` or ``"toml"``, or ``None`` for an
+    application the gate knows no such file of (and when the home directory
+    cannot be told). The path depends on the application, the system and the
+    home directory, and on nothing else: for Claude Desktop outside macOS it
+    lies under ``$XDG_CONFIG_HOME`` when that names an absolute path, else under
+    ``~/.config``. The file need not exist. Nothing is read here.
+    """
+    system = _platform(platform)
+    language = _SETTINGS_FORMAT.get(host)
+    if language is None:
+        return None
+    try:
+        home = Path.home()
+    except (RuntimeError, OSError):
+        return None
+    if not home.is_absolute():
+        return None
+    if host == "claude-desktop":
+        if system == "macos":
+            folder = home / "Library" / "Application Support" / "Claude"
+        else:
+            config_home = os.environ.get("XDG_CONFIG_HOME", "")
+            base = Path(config_home) if os.path.isabs(config_home) else home / ".config"
+            folder = base / "Claude"
+        return folder / "claude_desktop_config.json", language
+    return home / ".codex" / "config.toml", language
+
+
+def shown_path(path: str | os.PathLike[str]) -> str:
+    """``path`` as an owner reads it: ``~/...`` where it lies in the home directory."""
+    text = os.fspath(path)
+    try:
+        home = os.fspath(Path.home())
+    except (RuntimeError, OSError):
+        return text
+    if home != os.sep and text.startswith(home.rstrip(os.sep) + os.sep):
+        return "~" + text[len(home.rstrip(os.sep)) :]
+    return text
+
+
+def _where_here(entry: KnownHost, block: Block, platform: str) -> str | None:
+    """The one place of ``block`` that applies on this computer, or ``None``."""
+    if not block.where:
+        return None
+    if entry.id == "claude-desktop":
+        place = settings_file(entry.id, platform)
+        return None if place is None else shown_path(place[0])
+    return block.where[0] if len(block.where) == 1 else None
+
+
+def open_line(
+    path: str | os.PathLike[str], *, state: str, platform: str, language: str, text: str
+) -> str | None:
+    """One shell line that opens a settings file in the system's text editor, as text.
+
+    ``path`` is the absolute path of the file, ``state`` what a look at it found
+    (a state of :mod:`wdva.gate.hostcheck`), ``language`` its format (``"json"``
+    or ``"toml"``) and ``text`` the block that belongs into it. Where the file is
+    not there the line makes it first, holding ``{}`` for JSON and nothing for
+    TOML, and only then: it never changes a file that exists. On macOS it also
+    puts ``text`` on the clipboard where the whole text is what gets pasted.
+    ``None`` for a state in which there is nothing to open.
+
+    The line is for the owner to read and to run. This program runs none of it.
+    """
+    system = _platform(platform)
+    place = shlex.quote(os.fspath(path))
+    editor = "open -e" if system == "macos" else "xdg-open"
+    copy = f"; printf %s {shlex.quote(text)} | pbcopy" if system == "macos" else ""
+    if state == "no_file":
+        first = "echo '{}'" if language == "json" else ":"
+        return f'f={place}; [ -e "$f" ] || {first} > "$f"; {editor} "$f"{copy}'
+    if state == "empty" or (state == "other" and language == "toml"):
+        return f"{editor} {place}{copy}"
+    if state in ("other", "differs", "unreadable", "not_read"):
+        return f"{editor} {place}"
+    return None
 
 
 def _blocks(entry: KnownHost, command: Sequence[str]) -> tuple[tuple[Block, ...], tuple[str, ...]]:
@@ -483,6 +692,19 @@ def _blocks(entry: KnownHost, command: Sequence[str]) -> tuple[tuple[Block, ...]
             ),
         )
         notes = ("Use one of the two, not both.",)
+    elif entry.id == "chatgpt-desktop":
+        blocks = (
+            Block(
+                "Add this to ~/.codex/config.toml",
+                "toml",
+                _codex_toml(command),
+                ("~/.codex/config.toml",),
+            ),
+        )
+        notes = (
+            "The ChatGPT desktop app reads the same file as Codex, according to OpenAI's "
+            "documentation.",
+        )
     elif entry.id == "codex":
         blocks = (
             Block(
@@ -537,14 +759,23 @@ def _explanation(entry: KnownHost) -> str:
     )
 
 
-def render(host: str, *, client: str, store: str | os.PathLike[str] | None) -> HostConfig:
+def render(
+    host: str,
+    *,
+    client: str,
+    store: str | os.PathLike[str] | None,
+    platform: str | None = None,
+) -> HostConfig:
     """What connects the application ``host`` to the gate under the name ``client``.
 
-    ``host`` is an id from :data:`KNOWN_HOSTS`. Raises :class:`ValueError` for
-    an unknown one and for a client name that cannot be used.
+    ``host`` is an id from :data:`KNOWN_HOSTS`. ``platform`` is the system the
+    places are chosen for, a name from :data:`PLATFORMS`; ``None`` means the one
+    this program runs on. Raises :class:`ValueError` for an unknown host or
+    platform and for a client name that cannot be used.
     """
     entry = known_host(host)
     check_client_name(client)
+    system = _platform(platform)
     if not entry.local_program:
         return HostConfig(
             host=entry.id,
@@ -555,19 +786,32 @@ def render(host: str, *, client: str, store: str | os.PathLike[str] | None) -> H
             explanation=_explanation(entry),
             source=entry.source,
             read=entry.read,
+            platform=system,
         )
     command = host_command(client, store)
     blocks, notes = _blocks(entry, command)
+    inner = _mcp_servers_inner(command)
+    title, text, desktop = _AFTER[entry.id]
     return HostConfig(
         host=entry.id,
         label=entry.label,
         local_program=True,
-        blocks=blocks,
+        blocks=tuple(
+            replace(
+                block,
+                where_here=_where_here(entry, block, system),
+                inner=inner if block.language == "json" else None,
+            )
+            for block in blocks
+        ),
         notes=notes,
         explanation=None,
         source=entry.source,
         read=entry.read,
         command=tuple(command),
+        platform=system,
+        plain_note=_plain_note(entry),
+        after={"title": title, "text": text, "desktop": desktop},
     )
 
 

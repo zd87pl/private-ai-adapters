@@ -81,6 +81,9 @@ class FakeService:
     def verify(self) -> Any:
         return self._did("verify")
 
+    def set_interface(self, *, view: str | None = None, setup: str | None = None) -> Any:
+        return self._did("set_interface", view=view, setup=setup)
+
     def activity(
         self,
         *,
@@ -149,6 +152,9 @@ class FakeService:
     def connect(self, *, name: str, host: str | None = None) -> Any:
         return self._did("connect", name=name, host=host)
 
+    def connect_check(self, *, name: str, host: str | None = None) -> Any:
+        return self._did("connect_check", name=name, host=host)
+
     def settings(self) -> Any:
         return self._did("settings")
 
@@ -170,6 +176,9 @@ class FakeService:
 
     def add_replaced_string(self, *, text: str) -> Any:
         return self._did("add_replaced_string", text=text)
+
+    def demo_again(self) -> Any:
+        return self._did("demo_again")
 
 
 SERVICE_METHODS = {name for name in vars(Service) if not name.startswith("_")}
@@ -597,6 +606,23 @@ ENDPOINTS: list[tuple[str, str, Any, str, dict[str, Any]]] = [
     ("POST", "/api/serving", {}, "set_serving", {"kinds": None, "paused": None}),
     ("POST", "/api/verify", {}, "verify", {}),
     (
+        "POST",
+        "/api/interface",
+        {"view": "basic"},
+        "set_interface",
+        {"view": "basic", "setup": None},
+    ),
+    ("POST", "/api/interface", {"setup": "done"}, "set_interface", {"view": None, "setup": "done"}),
+    (
+        "POST",
+        "/api/interface",
+        {"view": "pro", "setup": "done"},
+        "set_interface",
+        {"view": "pro", "setup": "done"},
+    ),
+    # A body without a field arrives at the service, which is the one to refuse it.
+    ("POST", "/api/interface", {}, "set_interface", {"view": None, "setup": None}),
+    (
         "GET",
         "/api/activity?limit=50&before=1188&app=claude-desktop&kind=release",
         None,
@@ -713,6 +739,27 @@ ENDPOINTS: list[tuple[str, str, Any, str, dict[str, Any]]] = [
         {"name": "claude-desktop", "host": "claude-code"},
     ),
     ("GET", "/api/apps/lm-studio/connect", None, "connect", {"name": "lm-studio", "host": None}),
+    (
+        "POST",
+        "/api/apps/claude-desktop/connect/check",
+        {"host": "claude-desktop"},
+        "connect_check",
+        {"name": "claude-desktop", "host": "claude-desktop"},
+    ),
+    (
+        "POST",
+        "/api/apps/lm-studio/connect/check",
+        {},
+        "connect_check",
+        {"name": "lm-studio", "host": None},
+    ),
+    (
+        "POST",
+        "/api/apps/lm-studio/connect/check",
+        None,
+        "connect_check",
+        {"name": "lm-studio", "host": None},
+    ),
     ("GET", "/api/settings", None, "settings", {}),
     (
         "POST",
@@ -733,6 +780,8 @@ ENDPOINTS: list[tuple[str, str, Any, str, dict[str, Any]]] = [
         "add_replaced_string",
         {"text": "Kowalski"},
     ),
+    ("POST", "/api/demo/again", None, "demo_again", {}),
+    ("POST", "/api/demo/again", {}, "demo_again", {}),
 ]
 
 
@@ -1243,6 +1292,18 @@ def test_changing_methods_on_static_paths_change_nothing(paired: Browser) -> Non
         ("GET", "/api/apps/../state"),
         ("GET", "/api/apps/claude-desktop/connect/"),
         ("POST", "/api/apps/claude-desktop/limit"),
+        # The three newer addresses answer the one method they were given, and no neighbour.
+        ("GET", "/api/interface"),
+        ("DELETE", "/api/interface"),
+        ("POST", "/api/interface/view"),
+        ("GET", "/api/apps/claude-desktop/connect/check"),
+        ("POST", "/api/apps/claude-desktop/connect"),
+        ("POST", "/api/apps/claude-desktop/connect/check/"),
+        ("POST", "/api/apps/claude-desktop/connect/check/file"),
+        ("POST", "/api/apps/..%2F..%2Fetc/connect/check"),
+        ("GET", "/api/demo/again"),
+        ("POST", "/api/demo"),
+        ("POST", "/api/demo/again/now"),
     ],
 )
 def test_unknown_paths_are_not_found(
@@ -1265,6 +1326,7 @@ def test_unknown_paths_are_not_found(
         "/api/activity?unknown=1",
         "/api/state?cursor=1",
         "/api/apps/claude-desktop/connect?host=a&host=b",
+        "/api/apps/claude-desktop/connect?path=%2Fetc%2Fpasswd",
         "/api/activity?app=%ff",
     ],
 )
@@ -1272,6 +1334,25 @@ def test_query_strings_that_do_not_fit_are_invalid(
     target: str, paired: Browser, service: FakeService
 ) -> None:
     answer = paired.call("GET", target)
+    assert (answer.status, answer.error()) == (400, "invalid")
+    assert service.calls == []
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "/api/interface?view=pro",
+        "/api/interface?setup=done",
+        "/api/apps/claude-desktop/connect/check?host=codex",
+        "/api/apps/claude-desktop/connect/check?path=%2Fetc%2Fpasswd",
+        "/api/demo/again?app=claude-desktop",
+    ],
+)
+def test_the_newer_addresses_take_nothing_from_the_address(
+    target: str, paired: Browser, service: FakeService
+) -> None:
+    # What these three take, they take from the body: a query is refused, not ignored.
+    answer = paired.call("POST", target, json_body={})
     assert (answer.status, answer.error()) == (400, "invalid")
     assert service.calls == []
 
@@ -1330,6 +1411,20 @@ def test_an_upload_needs_its_collection_and_name(
         ("/api/settings", {"approval": 5}),
         ("/api/replaced-strings", {"text": 4711}),
         ("/api/approvals/release", {"app": "lm-studio", "ref": "d-88b0e1aa9c11.1"}),
+        # The view and the word about setup are text, and the two are all there is.
+        ("/api/interface", {"view": 1}),
+        ("/api/interface", {"view": ["pro"]}),
+        ("/api/interface", {"setup": True}),
+        ("/api/interface", {"view": "pro", "stored": True}),
+        ("/api/interface", {"view": "pro", "path": "/tmp/elsewhere.json"}),
+        # The check takes the kind of application and nothing that could name a file.
+        ("/api/apps/claude-desktop/connect/check", {"host": ["claude-desktop"]}),
+        ("/api/apps/claude-desktop/connect/check", {"host": 7}),
+        ("/api/apps/claude-desktop/connect/check", {"path": "/etc/passwd"}),
+        ("/api/apps/claude-desktop/connect/check", {"host": "codex", "file": "~/.ssh/id_ed25519"}),
+        # Asking the played app again takes nothing at all.
+        ("/api/demo/again", {"app": "claude-desktop"}),
+        ("/api/demo/again", {"times": 3}),
     ],
 )
 def test_fields_that_do_not_fit_are_invalid(

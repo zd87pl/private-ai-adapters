@@ -41,6 +41,7 @@ def _cmd_app(args: argparse.Namespace) -> int:
         demo=args.demo,
         window=args.window,
         lock_after_hours=args.lock_after,
+        view=args.view,
     )
 
 
@@ -123,6 +124,16 @@ def add_gate_parser(subparsers: _SubParsers) -> None:
         default=8.0,
         metavar="HOURS",
         help="lock the store this long after it was unlocked (default: 8)",
+    )
+    p.add_argument(
+        "--view",
+        choices=("basic", "pro"),
+        default=None,
+        help=(
+            "open the interface in this view and keep the choice beside the store: basic "
+            "shows what is used every day, pro shows every setting (default: a new store "
+            "starts in basic, an existing one opens as it was left)"
+        ),
     )
     p.set_defaults(func=_cmd_app)
 

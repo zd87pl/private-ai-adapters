@@ -38,6 +38,7 @@ API_CALLS = {
     ("POST", "/api/reauth"),
     ("POST", "/api/serving"),
     ("POST", "/api/verify"),
+    ("POST", "/api/interface"),
     ("GET", "/api/activity"),
     ("GET", "/api/activity/<>"),
     ("GET", "/api/approvals"),
@@ -54,9 +55,11 @@ API_CALLS = {
     ("POST", "/api/grants"),
     ("POST", "/api/apps/<>/limits"),
     ("GET", "/api/apps/<>/connect"),
+    ("POST", "/api/apps/<>/connect/check"),
     ("GET", "/api/settings"),
     ("POST", "/api/settings"),
     ("POST", "/api/replaced-strings"),
+    ("POST", "/api/demo/again"),
 }
 
 # Ways a script could turn text into markup or into code.

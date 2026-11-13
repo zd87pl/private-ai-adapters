@@ -15,7 +15,9 @@ its vault, which is the same for every demo and guards invented documents
 only. The passphrase of a real vault is never printed. Where no agent
 application could connect (an older Python, or no MCP SDK) one more line says
 so after the address, in the words of the warning the page shows once the vault
-is unlocked.
+is unlocked. When a demo stops, one last line gives the command that starts
+the app on a vault of one's own (:func:`launch_command`); a real vault prints
+nothing at the end.
 
 Only the demo runs without pairing. Without it every program on the computer
 can load the page, be given the session and act as the owner there, also
@@ -30,6 +32,7 @@ import importlib
 import importlib.util
 import os
 import re
+import shlex
 import shutil
 import signal
 import sys
@@ -44,10 +47,10 @@ from wdva.gate import brand, hostconfig, paths
 from wdva.gate.app.api import ServiceError
 from wdva.gate.app.demo import DemoAgent, make_demo_store
 from wdva.gate.app.httpd import AppServer
-from wdva.gate.app.service import MAX_HOURS, MIN_HOURS, GateService, connect_problem
+from wdva.gate.app.service import MAX_HOURS, MIN_HOURS, VIEWS, GateService, connect_problem
 from wdva.gate.errors import GateError
 
-__all__ = ["DEMO_LINE_NOTE", "DEMO_STORE_LINE", "run_app"]
+__all__ = ["DEMO_LINE_NOTE", "DEMO_STORE_LINE", "OWN_VAULT_LINE", "launch_command", "run_app"]
 
 DEMO_STORE_LINE = "a temporary demo store with invented documents"
 """What the start-up lines say instead of a path in demo mode."""
@@ -55,6 +58,10 @@ DEMO_STORE_LINE = "a temporary demo store with invented documents"
 DEMO_LINE_NOTE = "(the page shows it too; the passphrase of a real vault is never shown)"
 """What follows the passphrase on the start-up line that a demo adds."""
 
+OWN_VAULT_LINE = "To start with your own documents: "
+"""What the line printed when a demo stops begins with; the command follows."""
+
+_DEFAULT_LOCK_AFTER = 8.0  # hours; the default of --lock-after
 _PR_SET_DUMPABLE = 4
 _WINDOW_MODULE = "webview"  # the package pywebview, which is not a dependency
 _WAIT_SECONDS = 0.5
@@ -206,9 +213,64 @@ def _apps_line() -> str | None:
     return f"apps:  {words}{install}"
 
 
+def launch_command(
+    *,
+    store: str | os.PathLike[str] | None,
+    port: int = 0,
+    lock_after_hours: float = _DEFAULT_LOCK_AFTER,
+    open_browser: bool = True,
+    window: bool = False,
+) -> str | None:
+    """The command line that starts this installation of the app again, as one line of text.
+
+    It names the interpreter that runs this package by its full path, like the
+    command an agent application is given, so it works whatever is on ``PATH``.
+    ``store`` is the vault it opens, written as an absolute path; ``None``
+    leaves it out, which is the command for a vault of one's own in the usual
+    place (what a demo shows). The flags a run was started with follow: the
+    port when one was named, the hours when they are not the default,
+    ``--no-browser`` and ``--window``. It never holds ``--demo`` or ``--view``.
+
+    ``None`` when this Python cannot say where its interpreter is.
+    """
+    if not sys.executable:
+        return None
+    words = [sys.executable, "-m", "wdva", "gate", "app"]
+    if store is not None and os.fspath(store):
+        words += ["--store", str(paths.resolve_store(store))]
+    if port:
+        words += ["--port", str(port)]
+    if lock_after_hours != _DEFAULT_LOCK_AFTER:
+        hours = repr(float(lock_after_hours))
+        words += ["--lock-after", hours[:-2] if hours.endswith(".0") else hours]
+    if not open_browser:
+        words.append("--no-browser")
+    if window:
+        words.append("--window")
+    return shlex.join(words)
+
+
 def _say(line: str) -> None:
     sys.stdout.write(line + "\n")
     sys.stdout.flush()
+
+
+def _say_last(line: str) -> None:
+    """Print one more line as the app ends. Where the terminal has gone, nobody is told.
+
+    A line that could not be written must not be tried again when the program
+    ends, which would turn a clean end into an error: standard output is then
+    pointed at nothing.
+    """
+    try:
+        _say(line)
+    except (OSError, ValueError):
+        with contextlib.suppress(OSError, ValueError):
+            nowhere = os.open(os.devnull, os.O_WRONLY)
+            try:
+                os.dup2(nowhere, sys.stdout.fileno())
+            finally:
+                os.close(nowhere)
 
 
 def _explain(line: str) -> None:
@@ -224,7 +286,8 @@ def run_app(
     open_browser: bool = True,
     demo: bool = False,
     window: bool = False,
-    lock_after_hours: float = 8.0,
+    lock_after_hours: float = _DEFAULT_LOCK_AFTER,
+    view: str | None = None,
 ) -> int:
     """Start the app and block until it is stopped. Returns the process exit status.
 
@@ -236,14 +299,19 @@ def run_app(
     when the app stops. ``window`` shows the interface in its own window when
     pywebview is installed, and falls back to the browser when it is not, unless
     ``open_browser`` is false; the window asks for the pairing code like a
-    browser does.
+    browser does. ``view`` is the view of the interface to open in, ``"basic"``
+    or ``"pro"``: a vault that is created starts in it, and for a vault that
+    exists it is stored at once. ``None`` writes nothing at start.
 
     Ctrl-C, SIGTERM and SIGHUP lock the vault, stop the server and return 0.
+    A demo that stops prints the command that starts the app for real.
     """
     if not MIN_HOURS <= lock_after_hours <= MAX_HOURS:
         raise GateError(f"--lock-after takes {MIN_HOURS} to {MAX_HOURS:g} hours")
     if not 0 <= port <= 65535:
         raise GateError("--port takes a number from 0 to 65535")
+    if view is not None and view not in VIEWS:
+        raise GateError(f"--view takes {' or '.join(VIEWS)}")
     _harden()
     stop = _Stop()
     demo_directory: Path | None = None
@@ -256,8 +324,30 @@ def run_app(
             demo_alive = _hold(demo_directory)
             demo_passphrase = make_demo_store(demo_directory)
         path = demo_directory or paths.resolve_store(store)
+        # How to start this installation again: for a demo on a vault of one's own, so
+        # without the demo's temporary folder, and only with a place the person named.
+        again = launch_command(
+            store=(store or None) if demo else path,
+            port=port,
+            lock_after_hours=lock_after_hours,
+            open_browser=open_browser,
+            window=window,
+        )
+        agent: DemoAgent | None = None
+
+        def ask_again() -> None:
+            if agent is not None:
+                agent.ask_again()
+
         service = GateService(
-            path, demo=demo, demo_passphrase=demo_passphrase, lock_after_hours=lock_after_hours
+            path,
+            demo=demo,
+            demo_passphrase=demo_passphrase,
+            lock_after_hours=lock_after_hours,
+            view=view,
+            launch_command=again,
+            port_fixed=port != 0,
+            demo_again=ask_again if demo else None,
         )
 
         in_window = window and _window_available()
@@ -278,7 +368,7 @@ def run_app(
                 "is another program using it?"
             ) from exc
 
-        agent: DemoAgent | None = None
+        announced = False
         previous = _handle_signals(stop)
         try:
             if demo_passphrase is not None:
@@ -304,6 +394,7 @@ def run_app(
             if demo_passphrase is not None:
                 _say(f"demo passphrase: {demo_passphrase}   {DEMO_LINE_NOTE}")
             _say("Ctrl-C locks the vault and quits.")
+            announced = True
             if agent is not None:
                 agent.start()
             if in_window:
@@ -322,6 +413,8 @@ def run_app(
                 agent.stop()
             service.close(stop.reason)
             server.stop()
+            if demo and announced and again is not None:
+                _say_last(OWN_VAULT_LINE + again)
             _restore_signals(previous)
     finally:
         if demo_directory is not None:

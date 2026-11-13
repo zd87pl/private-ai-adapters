@@ -231,6 +231,7 @@ _ROUTES: tuple[_Route, ...] = (
     _Route("POST", "reauth", "reauth", fields=(_PASSPHRASE,)),
     _Route("POST", "serving", "set_serving", fields=(_text("kinds"), _Field("paused", "texts"))),
     _Route("POST", "verify", "verify"),
+    _Route("POST", "interface", "set_interface", fields=(_text("view"), _text("setup"))),
     _Route(
         "GET",
         "activity",
@@ -305,6 +306,7 @@ _ROUTES: tuple[_Route, ...] = (
     ),
     _Route("POST", "apps/<name>/limits", "set_app_limits", whole_body="limits"),
     _Route("GET", "apps/<name>/connect", "connect", query=(_text("host"),)),
+    _Route("POST", "apps/<name>/connect/check", "connect_check", fields=(_text("host"),)),
     _Route("GET", "settings", "settings"),
     _Route(
         "POST",
@@ -320,6 +322,7 @@ _ROUTES: tuple[_Route, ...] = (
     _Route(
         "POST", "replaced-strings", "add_replaced_string", fields=(_text("text", required=True),)
     ),
+    _Route("POST", "demo/again", "demo_again"),
 )
 
 

@@ -3,8 +3,9 @@
 """Where a store lives, and the paths inside it that are not sealed files.
 
 A store is one directory. Everything in it is a sealed file except ``run/``,
-which holds the lock file of the process that has the store open and, while the
-store is unlocked, the socket that agent applications are served through.
+which holds the lock file of the process that has the store open, while the
+store is unlocked the socket that agent applications are served through, and a
+small file in which the app keeps which view of its interface the owner uses.
 
 Nothing here creates, reads or changes a file.
 """
@@ -26,6 +27,7 @@ __all__ = [
     "SYNCED_FOLDER_NAMES",
     "check_socket_path",
     "default_store",
+    "interface_path",
     "lock_path",
     "looks_synced",
     "resolve_store",
@@ -121,6 +123,15 @@ def lock_path(store: str | os.PathLike[str]) -> Path:
 def socket_path(store: str | os.PathLike[str]) -> Path:
     """``<store>/run/gate.sock``: where an unlocked store is reached by agent applications."""
     return run_dir(store) / "gate.sock"
+
+
+def interface_path(store: str | os.PathLike[str]) -> Path:
+    """``<store>/run/interface.json``: which view of the interface the owner uses.
+
+    Not sealed, and written by the app alone: it holds two words about the
+    interface and nothing from the vault.
+    """
+    return run_dir(store) / "interface.json"
 
 
 def check_socket_path(store: str | os.PathLike[str]) -> Path:

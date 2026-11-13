@@ -39,7 +39,7 @@ pytestmark = pytest.mark.skipif(
 # The product's name comes from one place; the tests take it from there too.
 PRODUCT, SLUG = brand.PRODUCT, brand.SLUG
 
-LOCAL = ["claude-desktop", "claude-code", "codex", "openclaw", "generic"]
+LOCAL = ["claude-desktop", "claude-code", "chatgpt-desktop", "codex", "openclaw", "generic"]
 WEB_ONLY = ["chatgpt-web", "claude-web", "grok-web", "grok-bot"]
 
 # A store path with everything a configuration format has to escape.
@@ -174,8 +174,20 @@ def test_known_hosts_are_data_with_source_and_date() -> None:
         "hosted": True,
         "local_program": True,
     }
-    assert (by_id["codex"].label, by_id["codex"].destination) == (
-        "ChatGPT desktop app or Codex",
+    # The ChatGPT desktop app and Codex are two entries: who has only the former has no
+    # `codex` command to run.
+    assert len(KNOWN_HOSTS) == 10
+    assert by_id["chatgpt-desktop"].as_dict() == {
+        "id": "chatgpt-desktop",
+        "label": "ChatGPT desktop app",
+        "name": "chatgpt-desktop",
+        "destination": "OpenAI",
+        "hosted": True,
+        "local_program": True,
+    }
+    assert (by_id["codex"].label, by_id["codex"].name, by_id["codex"].destination) == (
+        "Codex",
+        "codex",
         "OpenAI",
     )
     assert (by_id["generic"].name, by_id["generic"].destination) == ("", "")
@@ -284,6 +296,7 @@ def test_each_application_gets_its_documented_shapes() -> None:
             )
         ],
         "claude-code": [("shell", ()), ("json", (".mcp.json",))],
+        "chatgpt-desktop": [("toml", ("~/.codex/config.toml",))],
         "codex": [("shell", ()), ("toml", ("~/.codex/config.toml",))],
         "openclaw": [("json5", ("~/.openclaw/openclaw.json",))],
         "generic": [("json", ()), ("shell", ())],
@@ -296,6 +309,20 @@ def test_each_application_gets_its_documented_shapes() -> None:
     assert any(
         "~/.grok/config.toml" in note and "ChatGPT desktop app" in note for note in codex.notes
     )
+    assert codex.notes[0] == "Use one of the two, not both."
+    assert [block.title for block in codex.blocks] == [
+        "Run this in a terminal",
+        "Or add this to ~/.codex/config.toml",
+    ]
+    # The ChatGPT desktop app gets the file alone: the same text, and no command to run.
+    chatgpt = render("chatgpt-desktop", client="a", store=PLAIN)
+    (only,) = chatgpt.blocks
+    assert (only.title, only.text) == ("Add this to ~/.codex/config.toml", codex.blocks[1].text)
+    assert chatgpt.notes[0] == (
+        "The ChatGPT desktop app reads the same file as Codex, according to OpenAI's documentation."
+    )
+    assert len(chatgpt.notes) == 2
+    assert chatgpt.source in chatgpt.notes[-1]
     desktop = render("claude-desktop", client="a", store=PLAIN)
     assert "Quit and restart Claude Desktop afterwards." in desktop.notes
     assert (
@@ -366,17 +393,288 @@ def test_the_values_for_an_interface_have_the_agreed_shape() -> None:
         config = render(host, client="my-app", store=AWKWARD)
         data = config.as_dict()
         assert json.loads(json.dumps(data)) == data
-        assert list(data) == ["host", "label", "local_program", "blocks", "notes", "explanation"]
+        assert list(data) == [
+            "host",
+            "label",
+            "local_program",
+            "blocks",
+            "notes",
+            "explanation",
+            "platform",
+            "plain_note",
+            "after",
+        ]
         assert data["host"] == host
         assert data["label"] == known_host(host).label
         assert data["local_program"] is (host in LOCAL)
         assert all(isinstance(note, str) and note for note in data["notes"])
         for block in data["blocks"]:
-            assert list(block) == ["title", "language", "text", "where"]
+            assert list(block) == ["title", "language", "text", "where", "where_here", "inner"]
             assert block["language"] in ("json", "json5", "toml", "shell")
             assert isinstance(block["where"], list)
+            assert block["where_here"] is None or isinstance(block["where_here"], str)
+            assert (block["inner"] is not None) is (block["language"] == "json")
         assert (data["explanation"] is None) is (host in LOCAL)
         assert bool(data["blocks"]) is (host in LOCAL)
+        assert data["platform"] in ("macos", "linux")
+        # What is said to a person who connects it; a product that cannot be connected has none.
+        assert (data["plain_note"] is not None) is (host in LOCAL)
+        assert (data["after"] is not None) is (host in LOCAL)
+        if host in LOCAL:
+            assert list(data["after"]) == ["title", "text", "desktop"]
+
+
+# -- what a person who connects an application is told beside the text ---------------------
+
+
+@pytest.fixture
+def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A home directory that belongs to the test, which does not exist: nothing is read here."""
+    place = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(place))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    return place
+
+
+def test_the_plain_note_names_no_page_and_the_note_with_the_address_stays() -> None:
+    for host in LOCAL:
+        config = render(host, client="my-app", store=PLAIN)
+        note = config.plain_note
+        assert note is not None
+        assert "://" not in note
+        assert "http" not in note
+        assert "Model Context Protocol" not in note
+        assert "MCP" not in note
+        if host == "generic":
+            assert note == (
+                "This follows the form most apps of this kind read. It has not been tried "
+                "with your app."
+            )
+        else:
+            assert note == (
+                f"This follows the published instructions for {config.label}, as read on "
+                f"2026-11-12. It has not been tried with {config.label} itself."
+            )
+        # The sheet that shows the source keeps its note, with the address.
+        assert config.source in config.notes[-1]
+        assert note not in config.notes
+    for host in WEB_ONLY:
+        config = render(host, client="my-app", store=PLAIN)
+        assert (config.plain_note, config.after) == (None, None)
+
+
+def test_what_to_do_in_the_application_afterwards_is_said_for_each() -> None:
+    told = {host: render(host, client="a", store=PLAIN).after for host in LOCAL}
+    assert told == {
+        "claude-desktop": {
+            "title": "Quit Claude Desktop, open it again, and paste the question into a new chat",
+            "text": "It reads its settings when it starts.",
+            "desktop": True,
+        },
+        "claude-code": {
+            "title": "Start a new Claude Code session and paste the question",
+            "text": "A session reads its settings when it starts.",
+            "desktop": False,
+        },
+        "chatgpt-desktop": {
+            "title": (
+                "Quit the ChatGPT desktop app, open it again, and paste the question into a "
+                "new chat"
+            ),
+            "text": "It reads its settings when it starts.",
+            "desktop": True,
+        },
+        "codex": {
+            "title": "Start a new Codex session and paste the question",
+            "text": "A session reads its settings when it starts.",
+            "desktop": False,
+        },
+        "openclaw": {
+            "title": "Restart OpenClaw and paste the question",
+            "text": "It reads its settings when it starts.",
+            "desktop": False,
+        },
+        "generic": {
+            "title": "Restart the app and paste the question",
+            "text": "Most apps read their settings when they start.",
+            "desktop": False,
+        },
+    }
+
+
+@pytest.mark.parametrize("store", [PLAIN, AWKWARD], ids=["space-and-accent", "awkward"])
+def test_the_pieces_for_a_file_with_other_settings_hold_the_same_entry(store: str) -> None:
+    command = expected_command("my-app", store)
+    seen = 0
+    for host in LOCAL:
+        for block in render(host, client="my-app", store=store).blocks:
+            if block.language != "json":
+                assert block.inner is None
+                continue
+            seen += 1
+            assert block.inner is not None
+            assert list(block.inner) == ["entry", "section"]
+            whole = json.loads(block.text)
+            # Each piece is the text of the block without the braces around it: put between
+            # braces it parses, and holds the one command.
+            entry = json.loads("{" + block.inner["entry"] + "}")
+            assert entry == whole["mcpServers"]
+            assert entry == {SLUG: {"command": command[0], "args": command[1:]}}
+            assert json.loads("{" + block.inner["section"] + "}") == whole
+            assert block.inner["entry"].startswith(f'"{SLUG}": {{\n  "command": ')
+            assert block.inner["section"].startswith(f'"mcpServers": {{\n  "{SLUG}": {{\n')
+            for piece in block.inner.values():
+                assert piece == piece.strip()
+                assert not piece.endswith(",")
+                assert piece in block.text.replace("\n  ", "\n") or piece in block.text.replace(
+                    "\n    ", "\n"
+                )
+    assert seen == 3  # Claude Desktop, Claude Code's project file, and the form most apps read
+
+
+def test_one_place_is_the_place_on_this_computer(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def place(platform: str) -> str | None:
+        block = render("claude-desktop", client="a", store=PLAIN, platform=platform).blocks[0]
+        return block.where_here
+
+    mac = "~/Library/Application Support/Claude/claude_desktop_config.json"
+    linux = "~/.config/Claude/claude_desktop_config.json"
+    where = render("claude-desktop", client="a", store=PLAIN).blocks[0].where
+    assert where[:2] == (mac, linux)
+    assert (place("macos"), place("linux")) == (mac, linux)
+    # Outside macOS the folder follows XDG_CONFIG_HOME when that names an absolute path.
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "settings of mine"))
+    assert place("linux") == "~/settings of mine/Claude/claude_desktop_config.json"
+    assert place("macos") == mac
+    monkeypatch.setenv("XDG_CONFIG_HOME", "/somewhere/else")
+    assert place("linux") == "/somewhere/else/Claude/claude_desktop_config.json"
+    for ignored in ("", "relative/place", "~/x"):
+        monkeypatch.setenv("XDG_CONFIG_HOME", ignored)
+        assert place("linux") == linux
+    monkeypatch.delenv("XDG_CONFIG_HOME")
+
+    for platform in hostconfig.PLATFORMS:
+        places = {
+            host: [
+                block.where_here
+                for block in render(host, client="a", store=PLAIN, platform=platform).blocks
+            ]
+            for host in LOCAL
+        }
+        assert places == {
+            "claude-desktop": [mac if platform == "macos" else linux],
+            "claude-code": [None, ".mcp.json"],
+            "chatgpt-desktop": ["~/.codex/config.toml"],
+            "codex": [None, "~/.codex/config.toml"],
+            "openclaw": ["~/.openclaw/openclaw.json"],
+            "generic": [None, None],
+        }
+        # Never the place on Windows, on which the app does not run.
+        for found in places.values():
+            assert not [text for text in found if text and ("%" in text or "\\" in text)]
+        assert render("codex", client="a", store=PLAIN, platform=platform).platform == platform
+    # Without a platform named: the one this runs on.
+    here = "macos" if sys.platform == "darwin" else "linux"
+    assert hostconfig.platform_name() == here
+    assert render("claude-desktop", client="a", store=PLAIN).platform == here
+    assert place(here) == render("claude-desktop", client="a", store=PLAIN).blocks[0].where_here
+    for unknown in ("windows", "darwin", "Linux", ""):
+        with pytest.raises(ValueError, match="platform"):
+            render("claude-desktop", client="a", store=PLAIN, platform=unknown)
+    assert not home.exists(), "saying where a file lies made something"
+
+
+def test_the_settings_file_is_fixed_by_the_application_and_the_home(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    claude = "claude_desktop_config.json"
+    assert hostconfig.settings_file("claude-desktop", "macos") == (
+        home / "Library" / "Application Support" / "Claude" / claude,
+        "json",
+    )
+    assert hostconfig.settings_file("claude-desktop", "linux") == (
+        home / ".config" / "Claude" / claude,
+        "json",
+    )
+    for host in ("chatgpt-desktop", "codex"):
+        for platform in hostconfig.PLATFORMS:
+            assert hostconfig.settings_file(host, platform) == (
+                home / ".codex" / "config.toml",
+                "toml",
+            )
+    for host in ("claude-code", "openclaw", "generic", *WEB_ONLY, "nothing", "", "../codex"):
+        assert hostconfig.settings_file(host, "linux") is None
+    with pytest.raises(ValueError, match="platform"):
+        hostconfig.settings_file("codex", "windows")
+    # A home that cannot be a place gives no file to look at.
+    monkeypatch.setenv("HOME", "relative/home")
+    assert hostconfig.settings_file("codex", "linux") is None
+    monkeypatch.setenv("HOME", str(home))
+
+    assert hostconfig.shown_path(home / "a b" / "c.json") == "~/a b/c.json"
+    assert hostconfig.shown_path(home / ".codex") == "~/.codex"
+    assert hostconfig.shown_path("/somewhere/else/c.json") == "/somewhere/else/c.json"
+    assert hostconfig.shown_path(str(home) + "-beside/c.json") == str(home) + "-beside/c.json"
+    assert not home.exists()
+
+
+def test_the_line_that_opens_a_settings_file_has_the_agreed_forms() -> None:
+    path = "/Users/me/Library/Application Support/Claude/it's.json"
+    text = '{\n  "mcpServers": {"x": "it\'s $HOME `id` %s \\n"}\n}'
+    file, copied = shlex.quote(path), shlex.quote(text)
+    assert shlex.split(file) == [path]
+    assert shlex.split(copied) == [text]
+
+    def line(state: str, platform: str, language: str) -> str | None:
+        return hostconfig.open_line(
+            path, state=state, platform=platform, language=language, text=text
+        )
+
+    copy = f"; printf %s {copied} | pbcopy"
+    assert line("no_file", "macos", "json") == (
+        f'f={file}; [ -e "$f" ] || echo \'{{}}\' > "$f"; open -e "$f"{copy}'
+    )
+    assert line("no_file", "macos", "toml") == (
+        f'f={file}; [ -e "$f" ] || : > "$f"; open -e "$f"{copy}'
+    )
+    assert line("empty", "macos", "json") == f"open -e {file}{copy}"
+    assert line("empty", "macos", "toml") == f"open -e {file}{copy}"
+    assert line("other", "macos", "toml") == f"open -e {file}{copy}"
+    assert line("other", "macos", "json") == f"open -e {file}"
+    # Elsewhere: the system's own opener, and nothing is put on a clipboard.
+    assert line("no_file", "linux", "json") == (
+        f'f={file}; [ -e "$f" ] || echo \'{{}}\' > "$f"; xdg-open "$f"'
+    )
+    assert line("no_file", "linux", "toml") == f'f={file}; [ -e "$f" ] || : > "$f"; xdg-open "$f"'
+    for state in ("empty", "other"):
+        for language in ("json", "toml"):
+            assert line(state, "linux", language) == f"xdg-open {file}"
+    for language in ("json", "toml"):
+        for state in ("differs", "unreadable", "not_read"):
+            assert line(state, "macos", language) == f"open -e {file}"
+            assert line(state, "linux", language) == f"xdg-open {file}"
+        # Nothing to open: the entry is there, or there is no folder, or no such file is known.
+        for state in ("present", "no_folder", "unsupported", "something else"):
+            assert line(state, "macos", language) is None
+            assert line(state, "linux", language) is None
+    with pytest.raises(ValueError, match="platform"):
+        line("no_file", "windows", "json")
+    # Only the line that finds no file makes one, and only behind a test that none is there.
+    for platform in hostconfig.PLATFORMS:
+        for language in ("json", "toml"):
+            for state in ("empty", "other", "differs", "unreadable", "not_read"):
+                made = line(state, platform, language)
+                assert made is not None
+                assert ">" not in made.replace(copied, "")
+            missing = line("no_file", platform, language)
+            assert missing is not None
+            assert missing.replace(copied, "").count(">") == 1
+            assert '[ -e "$f" ] || ' in missing
+            # No line removes, moves or overwrites anything.
+            for word in ("rm ", "mv ", "cp ", ">>", "tee", "sudo", "curl", "&&"):
+                assert word not in missing.replace(copied, "").replace(file, "")
 
 
 # -- what must not be in them -----------------------------------------------------
