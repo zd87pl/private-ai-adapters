@@ -58,6 +58,11 @@ htmlcov/
 dmypy.json
 .ruff_cache/
 
+# The browser walk-throughs (tests/browser/): their screenshots, and the
+# Playwright that "npm install --no-save" puts beside the repository's files
+/tests/browser/shots/
+/node_modules/
+
 # -----------------------------------------------------------------------------
 # Editors, notebooks and operating systems
 # -----------------------------------------------------------------------------

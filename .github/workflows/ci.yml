@@ -109,6 +109,66 @@ jobs:
       - name: Test the gate
         run: pytest tests/test_gate_*.py tests/test_api.py tests/test_docs.py
 
+  browser:
+    # The app's interface, walked in a real browser against the real app: on
+    # Linux in Chromium and on macOS in WebKit, the engine of Safari. The two
+    # walk-throughs are plain Node scripts (tests/browser/); they record no
+    # traces and leave screenshots, which are kept whether or not a step failed.
+    # The package is installed the way a user installs it, not in editable mode,
+    # so the interface that is walked is the one inside the built package.
+    name: Browser (${{ matrix.os }}, ${{ matrix.browser }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            browser: chromium
+            playwright-install: --with-deps chromium
+          - os: macos-latest
+            browser: webkit
+            playwright-install: webkit
+    env:
+      GATE_BROWSER: ${{ matrix.browser }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        id: python
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install (gate extras)
+        run: python -m pip install '.[gate]'
+      # Playwright is pinned: each release drives one build of each engine.
+      - name: Install Playwright
+        run: npm install --no-save playwright@1.63.0
+      - name: Install the browser
+        run: npx playwright install ${{ matrix.playwright-install }}
+      - name: Walk through the demo
+        id: demo
+        env:
+          GATE_PYTHON: ${{ steps.python.outputs.python-path }}
+        run: node tests/browser/journey_demo.js
+      - name: Walk through a new vault
+        # Also when the demo failed, so that one run shows everything that fails;
+        # not when the installation failed and the demo did not run at all.
+        if: ${{ !cancelled() && steps.demo.outcome != 'skipped' }}
+        env:
+          GATE_PYTHON: ${{ steps.python.outputs.python-path }}
+        run: node tests/browser/journey_real.js
+      - name: Upload the screenshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-${{ matrix.os }}-${{ matrix.browser }}
+          path: tests/browser/shots/
+          if-no-files-found: warn
+
   ml:
     name: ML (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
