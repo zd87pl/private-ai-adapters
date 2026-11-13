@@ -334,9 +334,23 @@ function noteSession(page, response) {
   );
 }
 
+/** How often the walk-through itself has reloaded a page, and how often it had when a request began. */
+const reloads = new WeakMap();
+const begunAt = new WeakMap();
+
+/**
+ * Reload a page. A request of the page that is under way at that moment is broken off by the
+ * reload, and some engines report it as failed: that is the walk-through's doing and no finding.
+ */
+async function reload(page, options) {
+  reloads.set(page, (reloads.get(page) || 0) + 1);
+  return page.reload(options);
+}
+
 /** Report what a page does wrong: console errors, page errors, failed requests, HTTP errors nobody announced. */
 function watch(page) {
   page.on('response', (response) => noteSession(page, response));
+  page.on('request', (request) => begunAt.set(request, reloads.get(page) || 0));
   // What still arrives from a page after the walk-through closed it is the closing, not the page.
   const silent = () => hushed || page.isClosed();
   page.on('console', (message) => {
@@ -359,7 +373,10 @@ function watch(page) {
   page.on('requestfailed', (request) => {
     if (silent() || appDown) return;
     const failure = request.failure();
-    problem(`request failed: ${request.method()} ${new URL(request.url()).pathname}${failure ? ` (${failure.errorText})` : ''}`);
+    const what = `${request.method()} ${new URL(request.url()).pathname}${failure ? ` (${failure.errorText})` : ''}`;
+    // Begun before a reload that the walk-through made and ended by it.
+    if ((begunAt.get(request) || 0) < (reloads.get(page) || 0)) note(`a reload by the walk-through broke off ${what}`);
+    else problem(`request failed: ${what}`);
   });
   page.on('response', (response) => {
     if (silent() || response.status() < 400) return;
@@ -516,6 +533,7 @@ module.exports = {
   pageReachedApp,
   problem,
   readOptions,
+  reload,
   run,
   shortDirectory,
   shot,

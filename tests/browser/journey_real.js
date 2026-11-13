@@ -44,6 +44,7 @@ const {
   openBrowser,
   pageReachedApp,
   readOptions,
+  reload,
   run,
   shortDirectory,
   shot,
@@ -943,7 +944,7 @@ run(async () => {
     await picture('32-first-question');
     // A reload stays on the step: where setting up stands is read from the vault, not kept in the page.
     const before = address();
-    await page.reload();
+    await reload(page);
     await card.locator('li.ask-step[data-key="ask-3"]').waitFor({ state: 'visible', timeout: 40000 });
     check(address() === before, `after a reload the address is ${address()}, not ${before}`);
     check(looks() === 1, 'a reload looked at the settings file');
