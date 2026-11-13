@@ -930,7 +930,9 @@ def test_what_a_killed_demo_left_is_removed_and_nothing_else(
     others = [
         left("demo-abcd1234"),  # not this program's name
         left(f"{prefix}abcd1234-kept"),  # nor the form of name it makes
-        left(f"{prefix}ABCD1234"),
+        # Capitals are not what mkdtemp makes. Other letters than the dead one's: a file
+        # system that ignores case (the default on macOS) would take them for one directory.
+        left(f"{prefix}MNOP1234"),
         left(f"{prefix}abcd123"),
         left(f"x{prefix}abcd1234"),
     ]
