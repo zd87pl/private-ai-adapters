@@ -153,7 +153,8 @@ const MODE_TEXT = {
 
 /** Change what one app may do with one collection, asking first when it widens access. */
 export async function changeGrant(ctx, app, collection, mode) {
-  const current = app.grants[collection] || "none";
+  // By the entry of the group itself: a group may be named like something every object has ("constructor").
+  const current = Object.prototype.hasOwnProperty.call(app.grants, collection) ? app.grants[collection] : "none";
   if (mode === current) return;
   const widens = mode === "read" || (mode === "approve" && current === "none");
   if (widens) {

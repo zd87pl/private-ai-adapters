@@ -83,7 +83,7 @@ function freshUi() {
     unlock: { passphrase: "", busy: false, error: "", shake: 0, waited: 0 },
     create: { passphrase: "", again: "", busy: false, error: "", shown: false },
     uploads: {},
-    notes: {},
+    notes: Object.create(null), // by group name, and a group may be named "constructor"
     limits: null,
     word: { text: "", busy: false, error: "" },
     openWarnings: new Set(),

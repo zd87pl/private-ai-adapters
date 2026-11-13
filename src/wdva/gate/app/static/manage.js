@@ -638,7 +638,8 @@ export async function removeApp(ctx, app) {
 }
 
 function grantRow(ctx, app, collection) {
-  const current = app.grants[collection.name] || "none";
+  // By the entry of the group itself: a group may be named like something every object has ("constructor").
+  const current = Object.prototype.hasOwnProperty.call(app.grants, collection.name) ? app.grants[collection.name] : "none";
   const closed = app.hosted && !collection.allow_hosted;
   return el(
     "div",

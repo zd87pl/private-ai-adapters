@@ -1140,6 +1140,19 @@ def test_a_sheet_that_opens_or_closes_over_the_cards_makes_release_wait_again() 
     assert 'ctx.ui.sheets > 0 ? "sheet" : "",' in around[: around.index("].join(")]
 
 
+def test_pro_reads_what_belongs_to_a_group_by_that_group_alone() -> None:
+    # The same in Pro. For a group named "constructor", `grants[name] || "none"` gave a function:
+    # the control on the Apps page showed no choice, and "Ask me each time" was sent without the
+    # sheet that says where the text goes.
+    read = scripts()
+    for name in ("manage.js", "sheets.js"):
+        assert not re.search(r"\.grants\[[^\]]+\]\s*\|\|", read[name]), name
+    assert "Object.prototype.hasOwnProperty.call(app.grants, collection.name)" in read["manage.js"]
+    assert "Object.prototype.hasOwnProperty.call(app.grants, collection)" in read["sheets.js"]
+    # What the owner has typed into the note of a group is kept by the group's name too.
+    assert "notes: Object.create(null)," in read["main.js"]
+
+
 def test_basic_reads_what_belongs_to_a_group_by_that_group_alone() -> None:
     # A group may be named by a word that every object of the page answers to ("constructor").
     # Read carelessly, such a name gives something that is neither an access nor a list of files,
