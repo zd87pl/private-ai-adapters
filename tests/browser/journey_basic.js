@@ -358,10 +358,12 @@ async function restart(walk, { ownerSeconds = walk.ownerSeconds, whileDown = nul
   const announced = expectHttp(401, '/api/state', { times: 5, optional: true });
   await page.locator('#pair-code').waitFor({ state: 'visible', timeout: 40000 });
   pageReachedApp();
-  withdraw(announced);
   await page.fill('#pair-code', walk.code);
   await page.locator('.gate-card button[type="submit"]').click();
   await page.locator('#unlock-passphrase').waitFor({ state: 'visible', timeout: WAIT });
+  // Only now: a question the page had already sent with its old session may be answered a moment
+  // after the page asks for the code. From here on the page has a new session, and a 401 is a finding.
+  withdraw(announced);
 }
 
 /**
