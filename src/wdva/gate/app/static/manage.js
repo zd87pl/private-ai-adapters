@@ -964,6 +964,7 @@ export function vaultView(ctx) {
           fact("Inside", `${count(facts.documents, "document", "documents")} in ${count(facts.collections, "collection", "collections")} · ${num(facts.characters)} characters`),
           fact("Copies of the files you added", facts.originals_kept > 0 ? `${num(facts.originals_kept)}, sealed like the text` : "None"),
           fact("Last entry of the record", `#${record.head_seq} ${record.head_hash}`, { mono: true }),
+          fact("Kept beside the vault, not sealed", "Which view you use, and whether setup was finished"),
         ),
         { key: "location" },
       ),

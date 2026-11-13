@@ -24,7 +24,7 @@
 'use strict';
 
 const fs = require('fs');
-const { WAIT, apiGet, check, deadline, decideApproval, eventually, expectHttp, finish, newPage, openBrowser, readOptions, run, shot, sleep, startApp, started, step, stopApp } = require('./common');
+const { FRAME, WAIT, apiGet, check, deadline, decideApproval, eventually, expectHttp, finish, newPage, openBrowser, readOptions, run, shot, sleep, startApp, started, step, stopApp, switchView } = require('./common');
 
 const options = readOptions({ ownerSeconds: 30 });
 
@@ -84,7 +84,10 @@ run(async () => {
 
   await step('the demo opens unlocked, with its badge, and without anything to set up', async () => {
     await page.goto(base);
-    await page.locator('aside.sidebar').waitFor({ state: 'visible', timeout: WAIT });
+    // The demo opens in the Basic view, with its badge. The walk from here on is through Pro.
+    await page.locator(FRAME.basic).waitFor({ state: 'visible', timeout: WAIT });
+    await page.locator('.topbar .brand .chip').waitFor({ state: 'visible', timeout: WAIT });
+    await switchView(page, 'pro');
     const product = await page.locator('meta[name="application-name"]').getAttribute('content');
     check(product && (await page.title()).includes(product), `the title does not carry the name of the app: ${await page.title()}`);
     await page.locator('.sidebar .brand .chip').waitFor({ state: 'visible', timeout: WAIT });

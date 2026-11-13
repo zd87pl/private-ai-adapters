@@ -1,0 +1,9 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Copyright 2025 Enclave -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <rect width="32" height="32" rx="8" fill="#0064d2"/>
+  <path d="M8.5 24V11.5M23.5 24V11.5" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/>
+  <path d="M8.5 13h15M8.5 21h15M13.5 13v8M18.5 13v8" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="24.5" cy="7.5" r="6.5" fill="#fff"/>
+  <circle cx="24.5" cy="7.5" r="5" fill="#d98a00"/>
+</svg>

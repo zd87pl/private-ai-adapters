@@ -380,10 +380,49 @@
   display: none;
 }
 
+/* The view, at the foot of the sidebar above the lock state: the same corner as on the Basic page. */
+.view-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.view-label {
+  color: var(--text-2);
+  font-size: var(--fs-s);
+  font-weight: 600;
+}
+
+.view-switch .icon-btn {
+  display: none;
+}
+
 .main {
   min-width: 0;
   padding: 0 var(--gutter) 72px;
   outline: none;
+}
+
+/* On a visit from Basic: the way back and the way to stay, above the page's head. */
+.visit-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  max-width: 1120px;
+  margin: 10px auto 0;
+  padding: 7px 8px 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+}
+
+.visit-text {
+  flex: 1 1 260px;
+  min-width: 0;
+  color: var(--text-2);
 }
 
 /* The title of the page and, while there is one, the bar above it: both stay in view. */
@@ -2144,23 +2183,35 @@
     padding: 16px 8px 12px;
   }
 
-  .brand {
+  .sidebar .brand {
     flex-direction: column;
     gap: 5px;
     padding: 0;
     justify-content: center;
   }
 
-  .brand .chip {
+  .sidebar .brand .chip {
     height: 15px;
     padding: 0 4px;
     font-size: 0.5625rem;
   }
 
-  .brand-name,
+  /* The view control becomes one button, as the six links became icons. */
+  .view-switch .view-label,
+  .view-switch .segmented {
+    display: none;
+  }
+
+  .view-switch .icon-btn {
+    display: inline-flex;
+    width: 40px;
+    height: 32px;
+  }
+
+  .sidebar .brand-name,
   .nav-label,
-  .lock-state,
-  .lock-now .btn-label {
+  .sidebar .lock-state,
+  .sidebar .lock-now .btn-label {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -2200,17 +2251,17 @@
     width: 100%;
   }
 
-  .lock-now {
+  .sidebar .lock-now {
     width: 40px;
     padding: 0;
   }
 
   /* One control at the foot: it shows the state and locks. */
-  .lock-now-act {
+  .sidebar .lock-now-act {
     display: none;
   }
 
-  .lock-now-state {
+  .sidebar .lock-now-state {
     display: block;
   }
 
@@ -2370,4 +2421,497 @@
 .upload-outside {
   display: block;
   padding-top: 4px;
+}
+
+/* -- the Basic page ----------------------------------------------------------------- */
+
+.basic {
+  --panel-width: 440px;
+  --column: 760px;
+  --gutter: 24px;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* The top bar and, while there is one, the bar that says what is wrong: both stay in view. */
+.basic-top {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: 0 var(--gutter);
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-veil);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  backdrop-filter: blur(20px) saturate(1.6);
+}
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 16px;
+  max-width: var(--column);
+  margin: 0 auto;
+  padding: 10px 0;
+}
+
+.topbar .brand {
+  padding: 0;
+}
+
+.topbar-lock {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+
+.topbar .lock-state {
+  display: inline;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.topbar .lock-state.is-unknown {
+  color: var(--red);
+  font-weight: 500;
+}
+
+/* The bar stands in the page's column, under the top bar. */
+.basic-bar {
+  max-width: var(--column);
+  margin: -8px auto 0;
+  padding-bottom: 10px;
+}
+
+.bar-text {
+  display: grid;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.offline-bar .btn .icon {
+  margin-top: 0;
+  color: inherit;
+}
+
+.copy-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.copy-line .code {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 9px;
+}
+
+/* "Copy" and "Copied" take the same room, so that nothing beside or below the button moves. */
+.copy-line .btn {
+  flex: none;
+  min-width: 82px;
+}
+
+.basic-main {
+  flex: 1;
+  min-width: 0;
+  padding: 0 var(--gutter) 40px;
+  outline: none;
+}
+
+.basic-main .page-body {
+  gap: 30px;
+  max-width: var(--column);
+  margin-top: 22px;
+}
+
+.basic-section {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 16px;
+}
+
+.section-title {
+  font-size: var(--fs-l);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.section-aside {
+  color: var(--text-2);
+  font-size: var(--fs-s);
+  font-variant-numeric: tabular-nums;
+}
+
+.basic-label {
+  color: var(--text-2);
+  font-size: var(--fs-s);
+  font-weight: 600;
+}
+
+/* The headline keeps its height whatever it says, and while it says nothing yet: one line,
+   two in a narrow window. Nothing under it moves when the number of waiting passages changes. */
+.basic-status {
+  min-block-size: 1.2em;
+  margin-top: -8px;
+  font-size: var(--fs-2xl);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  outline: none;
+}
+
+.approval-stack {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.approval-stack > .btn {
+  justify-self: start;
+}
+
+.basic-none,
+.basic-again {
+  color: var(--text-2);
+}
+
+.basic-hint {
+  color: var(--text-2);
+  font-size: var(--fs-s);
+}
+
+.basic-ask {
+  display: grid;
+  gap: 6px;
+}
+
+/* The line between what left since this unlock and what left before it. */
+.act-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 16px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--text-3);
+  font-size: var(--fs-s);
+  font-variant-numeric: tabular-nums;
+}
+
+.act-divider::before,
+.act-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+.act-divider + .act-item {
+  border-top: 1px solid var(--line-soft);
+}
+
+.act-none {
+  padding: 9px 16px;
+  color: var(--text-2);
+}
+
+.basic-under {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.basic-hints {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.basic-under .btn {
+  flex: none;
+}
+
+.basic-stops {
+  display: grid;
+  gap: 0;
+  margin-top: 6px;
+}
+
+.basic-stopped {
+  display: grid;
+  gap: 1px;
+}
+
+/* A sentence about calls that were stopped. It opens the newest such entry and reads as a line, not as an alarm. */
+.stop-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: calc(100% + 16px);
+  margin: 0 -8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.stop-row:hover {
+  background: var(--fill-hover);
+}
+
+.stop-row.is-selected {
+  background: var(--fill-selected);
+}
+
+.stop-row .icon {
+  margin-top: 1px;
+  color: var(--text-3);
+}
+
+.basic-fold,
+.panel-more {
+  display: flex;
+  margin-left: -8px;
+}
+
+.basic-docs {
+  padding: 12px 18px 8px;
+}
+
+.basic-doc-table .col-left {
+  width: 250px;
+  white-space: normal;
+}
+
+.doc-group {
+  display: block;
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.basic-app-list {
+  display: grid;
+  padding: 2px 18px;
+}
+
+.basic-app {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 13px 0;
+}
+
+.basic-app + .basic-app {
+  border-top: 1px solid var(--line-soft);
+}
+
+.basic-app-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.basic-app-name {
+  min-width: 0;
+  font-size: var(--fs-m);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.basic-app.is-idle .basic-app-name {
+  color: var(--text-2);
+}
+
+.basic-app-access {
+  font-weight: 500;
+}
+
+/* The place of the control: at the end of the line. */
+.basic-app-change,
+.basic-app-line > .btn {
+  margin-left: auto;
+}
+
+.basic-app-groups {
+  display: grid;
+  gap: 2px;
+  color: var(--text-2);
+}
+
+.basic-app-meter {
+  display: grid;
+  gap: 3px;
+  color: var(--text-2);
+  font-size: var(--fs-s);
+  font-variant-numeric: tabular-nums;
+}
+
+.basic-app-used {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+}
+
+.basic-app-used .meter {
+  flex: 0 0 150px;
+  margin-left: auto;
+}
+
+.basic-app-close {
+  color: var(--amber);
+}
+
+.basic-app-seen {
+  color: var(--text-2);
+  font-size: var(--fs-s);
+}
+
+.also-group {
+  display: grid;
+  gap: 4px;
+}
+
+.also-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.also-head .mini-title {
+  margin-bottom: 0;
+}
+
+.also-list {
+  display: grid;
+  gap: 4px;
+  padding-left: 18px;
+  list-style: disc;
+  color: var(--text-2);
+}
+
+.basic-foot {
+  display: grid;
+  gap: 10px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  color: var(--text-2);
+}
+
+.launch {
+  display: grid;
+  gap: 6px;
+}
+
+.basic-foot .gate-foot {
+  max-width: none;
+  text-align: left;
+}
+
+/* The view, in the bottom-left corner at every width. */
+.viewbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 8px var(--gutter);
+  border-top: 1px solid var(--line);
+  background: var(--bg-veil);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  backdrop-filter: blur(20px) saturate(1.6);
+}
+
+.viewbar-text {
+  flex: 1 1 300px;
+  min-width: 0;
+  color: var(--text-2);
+  font-size: var(--fs-s);
+}
+
+/* Messages stand above the bar with the view, not over it. */
+body:has(.viewbar) .toasts {
+  bottom: 64px;
+}
+
+@media (max-width: 640px) {
+  .basic-doc-table .col-added {
+    display: none;
+  }
+
+  .basic-doc-table .col-left {
+    width: 190px;
+  }
+}
+
+@media (max-width: 560px) {
+  .basic {
+    --gutter: 16px;
+  }
+
+  /* Two lines: the name; the lock state and "Lock now". */
+  .topbar .brand {
+    flex-basis: 100%;
+  }
+
+  .topbar-lock {
+    justify-content: space-between;
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .basic-status {
+    min-block-size: 2.4em;
+  }
+
+  /* The two answers stack, the careful one first. */
+  .basic .approval-actions {
+    flex-direction: column;
+  }
+
+  .basic .approval-actions .btn {
+    width: 100%;
+  }
+
+  .basic-app-used .meter {
+    flex-basis: 100%;
+  }
+
+  /* The sentence goes under the switch, so the bar is taller and the messages stand higher. */
+  .viewbar-text {
+    flex-basis: 100%;
+  }
+
+  body:has(.viewbar) .toasts {
+    bottom: 104px;
+  }
+
+  .basic .panel {
+    width: 100vw;
+  }
 }

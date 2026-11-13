@@ -95,6 +95,7 @@ function stateCard(ctx) {
 function startCard(ctx) {
   const data = ctx.data.apps;
   if (!data || ctx.state.demo) return null;
+  if (ctx.state.interface && ctx.state.interface.stored && ctx.state.interface.setup === "done") return null;
   const apps = data.apps;
   const documents = ctx.state.encryption ? ctx.state.encryption.documents : 0;
   const steps = [
@@ -165,8 +166,13 @@ const ASKS_NOTHING = new Set(["previous_session_unclean"]);
 /** What the owner has put away. It stays away until the page is loaded again. */
 const putAway = new Set();
 
-function warningList(ctx) {
-  const warnings = (ctx.state.warnings || []).filter((warning) => warning.code !== "both_kinds_served" && !putAway.has(warning.code));
+/**
+ * The notices of the state. Where a strip says that both kinds of apps are answered
+ * (Overview, Apps), that notice is left to the strip; a page without the strip passes
+ * `bothKinds` and shows it in the app's own words.
+ */
+export function warningList(ctx, { bothKinds = false } = {}) {
+  const warnings = (ctx.state.warnings || []).filter((warning) => (bothKinds || warning.code !== "both_kinds_served") && !putAway.has(warning.code));
   if (!warnings.length) return null;
   const pressing = warnings.some((warning) => !ASKS_NOTHING.has(warning.code));
   return el(
@@ -567,12 +573,47 @@ function connectionText(item) {
   return [`${item.transport || "Unknown"}, `, protocol];
 }
 
+/** The two blocks that say where an entry stands in the record: what it holds, and its place in the chain. */
+function recordBlocks(item) {
+  return [
+    el(
+      "section",
+      { class: "panel-section" },
+      el("h3", { class: "mini-title" }, "Entry"),
+      el(
+        "dl",
+        { class: "facts facts-tight" },
+        (item.details || []).map(([label, value]) => detailRow(sentence(String(label)), String(value))),
+        detailRow("Collections", item.collections && item.collections.length ? list(item.collections) : null),
+        detailRow("Reference", item.ref, true),
+        detailRow("Allowed by", item.rule ? RULE_TEXT[item.rule] || item.rule : null),
+        detailRow("Number for this app", item.client_seq ? `Release #${item.client_seq}` : null),
+        detailRow("Connection", connectionText(item)),
+      ),
+    ),
+    el(
+      "section",
+      { class: "panel-section" },
+      el("h3", { class: "mini-title", title: "Each entry holds the hash of the one before it" }, "Chain"),
+      el(
+        "dl",
+        { class: "facts facts-tight" },
+        detailRow("Entry hash", item.record_hash, true),
+        detailRow("Hash of the entry before", item.previous_hash, true),
+      ),
+    ),
+  ];
+}
+
 function panelBody(ctx, panel) {
   const item = panel.detail;
   if (panel.error) return note("red", panel.error);
   if (!item) return loadingBlock();
   const hosted = item.hosted === true;
   const refusal = item.kind === "refusal";
+  // On the Basic page the record's own figures stand behind one button.
+  const folded = ctx.route === "basic";
+  const open = folded && ctx.ui.panelMore === true;
   return [
     el(
       "div",
@@ -612,32 +653,24 @@ function panelBody(ctx, panel) {
           item.hosted === false ? el("p", { class: "gone" }, icon("mac"), el("span", null, "This text is with the app now. It stays on this Mac only if the app really is local.")) : null,
         )
       : null,
-    el(
-      "section",
-      { class: "panel-section" },
-      el("h3", { class: "mini-title" }, "Entry"),
-      el(
-        "dl",
-        { class: "facts facts-tight" },
-        (item.details || []).map(([label, value]) => detailRow(sentence(String(label)), String(value))),
-        detailRow("Collections", item.collections && item.collections.length ? list(item.collections) : null),
-        detailRow("Reference", item.ref, true),
-        detailRow("Allowed by", item.rule ? RULE_TEXT[item.rule] || item.rule : null),
-        detailRow("Number for this app", item.client_seq ? `Release #${item.client_seq}` : null),
-        detailRow("Connection", connectionText(item)),
-      ),
-    ),
-    el(
-      "section",
-      { class: "panel-section" },
-      el("h3", { class: "mini-title", title: "Each entry holds the hash of the one before it" }, "Chain"),
-      el(
-        "dl",
-        { class: "facts facts-tight" },
-        detailRow("Entry hash", item.record_hash, true),
-        detailRow("Hash of the entry before", item.previous_hash, true),
-      ),
-    ),
+    folded
+      ? el(
+          "div",
+          { class: "panel-more", key: "more" },
+          button("Record details", {
+            kind: "quiet",
+            small: true,
+            id: "panel-more",
+            expanded: open ? "true" : "false",
+            onclick: () => {
+              ctx.ui.panelMore = !open;
+              ctx.render();
+            },
+          }),
+        )
+      : null,
+    open ? el("p", { class: "panel-kicker", key: "number" }, `Entry #${panel.seq}`) : null,
+    !folded || open ? recordBlocks(item) : null,
   ];
 }
 
@@ -651,7 +684,8 @@ export function detailPanel(ctx) {
     el(
       "header",
       { class: "panel-head" },
-      el("span", { class: "panel-kicker" }, `Entry #${panel.seq}`),
+      // The number of the entry belongs to the record's own figures: on the Basic page it is with them.
+      el("span", { class: "panel-kicker" }, ctx.route === "basic" ? null : `Entry #${panel.seq}`),
       iconButton("x", "Close the details", { onclick: () => ctx.closePanel() }),
     ),
     el("div", { class: "panel-scroll", key: `p-${panel.seq}` }, panelBody(ctx, panel)),
@@ -908,19 +942,45 @@ function grantedLine(ctx, item) {
   );
 }
 
-export function approvalsView(ctx) {
+/**
+ * The cards of the passages that wait, the lines of what was just decided, and what
+ * was approved and not read yet. Every screen that shows a card gets it from here.
+ *
+ * `limit` is how many cards and lines are drawn at most (all of them without it);
+ * `more` in the answer is how many waiting passages were left out. `around` is one
+ * text made of everything near the cards that the caller can change: a bar above
+ * them, a panel beside them, whether all are shown. Whenever the cards are not those
+ * of the last draw, or not in their places, or `around` differs from the last draw,
+ * "Release once" waits again. Null while the list of approvals is not in.
+ */
+export function approvalCards(ctx, { limit = null, around = "" } = {}) {
   const data = ctx.data.approvals;
-  if (!data) return { title: "Approvals", body: loadingBlock() };
+  if (!data) return null;
   const entries = approvalEntries(ctx, data.waiting);
-  // Whenever the cards are not the ones of the last draw, or not in their places, releasing waits again.
-  const signature = entries.map((entry) => (entry.item ? approvalKey(entry.item) : `done ${pairKey(entry.done.item)}`)).join("\n\n");
+  const shown = limit === null ? entries : entries.slice(0, limit);
+  const signature = [around].concat(shown.map((entry) => (entry.item ? approvalKey(entry.item) : `done ${pairKey(entry.done.item)}`))).join("\n\n");
   if (signature !== ctx.ui.approvalSignature) {
     ctx.ui.approvalSignature = signature;
     disarm(ctx);
   }
   const granted = data.granted || [];
+  return {
+    cards: shown.map((entry, index) => (entry.item ? approvalCard(ctx, entry.item, index) : decidedLine(ctx, entry.done))),
+    more: entries.slice(shown.length).filter((entry) => entry.item).length,
+    granted: granted.length
+      ? card("Approved, not read yet", el("ul", { class: "granted-list" }, granted.map((item) => grantedLine(ctx, item))), { key: "granted" })
+      : null,
+  };
+}
+
+export function approvalsView(ctx) {
+  const data = ctx.data.approvals;
+  if (!data) return { title: "Approvals", body: loadingBlock() };
+  // During a visit from Basic a bar stands above the page; when it goes, the cards move up.
+  const visiting = Boolean(ctx.state.interface && ctx.state.interface.view === "basic");
+  const drawn = approvalCards(ctx, { around: visiting ? "visit" : "" });
   const body = [];
-  if (!entries.length) {
+  if (!drawn.cards.length) {
     body.push(
       el(
         "section",
@@ -933,11 +993,9 @@ export function approvalsView(ctx) {
       ),
     );
   } else {
-    body.push(entries.map((entry, index) => (entry.item ? approvalCard(ctx, entry.item, index) : decidedLine(ctx, entry.done))));
+    body.push(drawn.cards);
   }
-  if (granted.length) {
-    body.push(card("Approved, not read yet", el("ul", { class: "granted-list" }, granted.map((item) => grantedLine(ctx, item))), { key: "granted" }));
-  }
+  if (drawn.granted) body.push(drawn.granted);
   return {
     title: "Approvals",
     lead: data.waiting.length ? "Each approval is for one passage, one app, one time. An approval that is not used expires." : null,

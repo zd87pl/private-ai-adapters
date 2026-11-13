@@ -186,6 +186,9 @@ async function unlock(ctx) {
     const state = await api.unlock(form.passphrase);
     form.passphrase = "";
     form.busy = false;
+    form.waited = 0;
+    // Unlocked here, a vault whose view is Basic opens on the Basic page, whatever the address named.
+    if (state.interface && state.interface.view === "basic") ctx.navigate("basic");
     ctx.applyState(state);
     await ctx.refresh();
   } catch (error) {
@@ -203,6 +206,11 @@ export function lockedScreen(ctx) {
   const state = ctx.state;
   const form = ctx.ui.unlock;
   const record = state.record;
+  // Two things differ where the view that is kept is Basic: the newest entry of the record is
+  // one of the record's own figures and is left to Pro, and a page that saw the vault lock says
+  // what became of the passages that were waiting then.
+  const basic = Boolean(state.interface && state.interface.view === "basic");
+  const waited = basic ? form.waited || 0 : 0;
   return gateScreen(
     ctx,
     "locked",
@@ -229,7 +237,7 @@ export function lockedScreen(ctx) {
         { class: "seal-facts" },
         el("div", null, el("dt", null, "Sealed files"), el("dd", null, num(state.store.sealed_files))),
         el("div", null, el("dt", null, "Size"), el("dd", null, bytes(state.store.sealed_bytes))),
-        record && record.head_seq
+        !basic && record && record.head_seq
           ? el(
               "div",
               { title: "The newest entry of the record of what was released: its number and the start of its hash" },
@@ -238,6 +246,15 @@ export function lockedScreen(ctx) {
             )
           : null,
       ),
+      waited > 0
+        ? el(
+            "p",
+            { class: "note", id: "locked-waiting" },
+            waited === 1
+              ? "1 passage was waiting when the vault locked. It was not released. If an app still needs one, it will ask again after you unlock."
+              : `${num(waited)} passages were waiting when the vault locked. They were not released. If an app still needs one, it will ask again after you unlock.`,
+          )
+        : null,
       demoPassphraseNote(state.demo_passphrase, () => {
         form.passphrase = state.demo_passphrase;
         form.error = "";
@@ -405,7 +422,10 @@ export function createScreen(ctx) {
 
 function finish(ctx) {
   ctx.onboarding = null;
-  ctx.navigate("overview");
+  // A vault whose view is Basic opens on the Basic page, with the focus on its headline; any other on Overview.
+  const basic = Boolean(ctx.state.interface && ctx.state.interface.view === "basic");
+  ctx.navigate(basic ? "basic" : "overview");
+  if (basic) ctx.ui.focusId = "basic-status";
   // The last step is a long card: the vault opens at its top, not where that card was left.
   window.scrollTo(0, 0);
   ctx.refresh();

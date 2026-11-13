@@ -25,6 +25,8 @@ export function button(label, options = {}) {
       "aria-label": options.label,
       "aria-describedby": options.describedby,
       "aria-pressed": options.pressed,
+      // For a button that unfolds something below it: "true" or "false".
+      "aria-expanded": options.expanded,
     },
     glyph ? icon(glyph) : null,
     label ? el("span", { class: "btn-label" }, label) : null,
@@ -41,6 +43,7 @@ export function iconButton(glyph, label, options = {}) {
       disabled: options.disabled,
       title: label,
       "aria-label": label,
+      id: options.id,
       key: options.key,
     },
     icon(glyph),

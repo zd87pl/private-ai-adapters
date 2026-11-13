@@ -95,6 +95,14 @@ REQUIRED_SENTENCES = [
     "strings. Add each one you want replaced.",
     "Add a word or number that must never leave",
     "unverified",
+    # Where the documents are not told apart by collection: the Basic page and the first run.
+    "Text that ${app.name} receives from your documents is sent to ${app.destination} "
+    "and cannot be recalled.",
+    "Text that an app receives from your documents is sent to the company behind the app "
+    "and cannot be recalled.",
+    "After you release a passage, the app gets it when it asks again. If it does not ask by "
+    "itself, tell it: \u201ctry again\u201d.",
+    "A name is a label: ${PRODUCT} cannot check which program is really asking.",
 ]
 
 # Words that belong to the engine and stay out of what the owner reads. "MCP" may
@@ -184,6 +192,23 @@ def parsed(path: Path) -> Elements:
     parser.feed(read(path))
     parser.close()
     return parser
+
+
+def function_body(code: str, head: str) -> str:
+    """One top-level function of a script, from the line ``head`` to the brace that closes it."""
+    start = code.index(head)
+    return code[start : code.index("\n}\n", start)]
+
+
+def class_names(code: str) -> set[str]:
+    """Every class a script gives an element, whether as one text or as a list of them."""
+    names: set[str] = set()
+    for text in re.findall(r'\bclass: "([^"]*)"', code):
+        names.update(text.split())
+    for listed in re.findall(r"\bclass: \[([^\]]*)\]", code):
+        for text in re.findall(r'"([^"]*)"', listed):
+            names.update(text.split())
+    return names
 
 
 # -- what is in the directory -----------------------------------------------------
@@ -532,12 +557,22 @@ def test_a_release_cannot_be_pressed_through() -> None:
     assert decide.count("disarm(ctx);") >= 2, "the cards are ready at once after a decision"
     assert "ctx.ui.decided.set(key" in decide, "a decided card leaves its place at once"
     # Every change of the cards makes "Release once" wait again, and it waits from the start.
+    # The check is in the one function that draws cards, so it holds on every screen with a card.
+    cards = function_body(views, "export function approvalCards(ctx, ")
     assert re.search(
         r"if \(signature !== ctx\.ui\.approvalSignature\) \{\s*"
         r"ctx\.ui\.approvalSignature = signature;\s*disarm\(ctx\);",
-        views,
+        cards,
     )
-    assert "releaseArmedAt: Number.POSITIVE_INFINITY," in without_comments(scripts()["main.js"])
+    # What stands around the cards is part of what is compared: a bar that comes or goes, a panel.
+    assert "const signature = [around].concat(shown.map(" in cards
+    main = without_comments(scripts()["main.js"])
+    assert "releaseArmedAt: Number.POSITIVE_INFINITY," in main
+    # Opening a page with cards counts as the cards appearing anew.
+    route = function_body(main, "function onRoute() {")
+    for opened in ('if (name === "approvals") {', 'if (name === "basic" || name === "setup") {'):
+        after = route[route.index(opened) :]
+        assert "ctx.ui.approvalSignature = null;" in after[: after.index("\n  }\n")], opened
     wait = re.search(r"const ARM_MS = (\d+);", views)
     assert wait is not None
     assert int(wait.group(1)) >= 1000
@@ -548,6 +583,49 @@ def test_a_release_cannot_be_pressed_through() -> None:
     assert second[0] == "Release once"
     assert "kind:" not in first[1]
     assert "kind:" not in second[1]
+    # A decision is sent from this one module, and the two buttons are drawn nowhere else.
+    assert "api.release(" in views
+    assert "api.dismiss(" in views
+    for name, source in scripts().items():
+        if name == "views.js":
+            continue
+        code = without_comments(source)
+        assert "api.release(" not in code, f"{name} releases a passage itself"
+        assert "api.dismiss(" not in code, f"{name} decides about a passage itself"
+        assert "approval-actions" not in code, f"{name} draws the buttons of a card itself"
+    basic = without_comments(scripts()["basic.js"])
+    assert re.search(r'import \{[^}]*\bapprovalCards\b[^}]*\} from "\./views\.js";', basic)
+
+
+def test_approval_cards_are_drawn_by_one_function() -> None:
+    sources = {name: without_comments(source) for name, source in scripts().items()}
+    views = sources["views.js"]
+    assert 'export function approvalCards(ctx, { limit = null, around = "" } = {}) {' in views
+    cards = function_body(views, "export function approvalCards(ctx, ")
+    assert "approvalCard(ctx, entry.item, index)" in cards
+    assert "decidedLine(ctx, entry.done)" in cards
+    assert 'card("Approved, not read yet"' in cards
+    # The Approvals page of Pro gets its cards from there and draws none itself.
+    page = function_body(views, "export function approvalsView(ctx) {")
+    assert "approvalCards(ctx, {" in page
+    assert "approvalCard(" not in page
+    assert "decidedLine(" not in page
+    assert views.count("approvalCard(ctx,") == 2  # where it is defined, and inside approvalCards
+    # So does the Basic page. The step "First question" joins this list when it shows a card.
+    for name in ("basic.js",):
+        assert "approvalCards(ctx, {" in sources[name], f"{name} does not show the cards"
+    # No other script gives an element the class of a card.
+    assert "approval" in class_names(views)
+    for name, code in sources.items():
+        if name != "views.js":
+            assert "approval" not in class_names(code), f"{name} draws a card of its own"
+            assert "decided" not in class_names(code), f"{name} draws a decided line of its own"
+
+
+def test_the_class_reader_tells_a_card_from_what_only_begins_like_one() -> None:
+    sample = 'el("div", { class: "approval-stack" }); el("p", { class: ["x", a && "y z"] })'
+    assert class_names(sample) == {"approval-stack", "x", "y", "z"}
+    assert "approval" in class_names('{ class: "card approval", key: k }')
 
 
 # -- the name, the demo's passphrase, and what the page cannot know -----------------
@@ -757,6 +835,263 @@ def test_a_new_vault_is_told_what_to_do_next_in_order() -> None:
     assert "if (next < 0) return null;" in card
     # Only the next step offers its action, so the order is the order they are done in.
     assert card.count('index === next ? el("a"') == 1
+
+
+# -- the Basic page and the two views -----------------------------------------------
+
+
+def test_basic_changes_only_what_it_can_express() -> None:
+    # Limits, the settings of the vault, which kinds of apps are answered, pausing, the words
+    # to replace and removing a collection are Pro's. Basic says them and has no call for them.
+    basic = without_comments(scripts()["basic.js"])
+    for call in (
+        "api.setAppLimits(",
+        "api.setSettings(",
+        "api.setServing(",
+        "api.addReplacedString(",
+        "api.removeCollection(",
+    ):
+        assert call not in basic, f"the Basic page calls {call}"
+
+
+def test_basic_attributes_to_stored_names() -> None:
+    # A row, a sum or a rule names an app by the name it has in the vault. The readable name of
+    # a listed program ("Claude Desktop") is for the list of apps and for instructions only.
+    basic = without_comments(scripts()["basic.js"])
+    assert re.search(r"\.label\b", basic) is None, "the Basic page reads the label of something"
+    assert re.search(r"\.known\b", basic) is None, "the Basic page reads the list of programs"
+
+
+def test_basic_says_what_pro_set_from_answers_of_the_app() -> None:
+    basic = without_comments(scripts()["basic.js"])
+    # Whether a limit is an app's own is read by comparing two answers, and whether the vault's
+    # figures are those of a new vault is an answer too: the page holds no copy of such values.
+    assert "app.limits[key] !== settings.defaults[key]" in basic
+    assert "settings.changed_from_new.length > 0" in basic
+    assert re.search(r"\b\d{1,3},\d{3}\b", "\n".join(quoted_texts(scripts()["basic.js"]))) is None
+    numbers = {int(found) for found in re.findall(r"(?<![\w.])\d{3,}(?![\w.])", basic)}
+    assert numbers <= {2000, 86400000}, "a figure of the vault is written into the Basic page"
+    # A control for an app's access stands only where one value describes the whole vault, and
+    # an app is added on the page only where that will stay so.
+    assert 'groups.length > 1 ? proLink("Change in Pro", "#/apps"' in basic
+    assert "const expressible = groups.length <= 1 && !apps.some((app) => !app.hosted);" in basic
+    assert 'proLink("Add an app (in Pro)", "#/apps", { id: "basic-add-app" })' in basic
+    # A link into Pro is an address and nothing else.
+    link = function_body(basic, "function proLink(text, href, props = {}) {")
+    assert "onclick" not in link
+    assert 'return el("a", Object.assign({ class: "link", href }, props), text);' in link
+
+
+def test_first_run_and_basic_name_no_protocol() -> None:
+    for name in ("gateway.js", "basic.js"):
+        for text in quoted_texts(scripts()[name]):
+            for word in ("MCP", "Model Context Protocol", "://"):
+                assert word not in text, f"{name} shows {word!r}: {text[:80]!r}"
+
+
+def test_sentences_that_are_not_true_are_absent() -> None:
+    # "Nothing can leave" stands in the three places of Pro where no app exists, and nowhere
+    # new: with an app, or with a search answer, something can.
+    standing = {"views.js": 2, "manage.js": 1}
+    for name, source in scripts().items():
+        shown = "\n".join(quoted_texts(source)).lower()
+        assert shown.count("nothing can leave") == standing.get(name, 0), name
+        for phrase in ("always replaced", "ran out unused", "is connected", "recommended"):
+            assert phrase not in shown, f"{name} says {phrase!r}"
+
+
+def test_no_browser_permission_is_asked() -> None:
+    for name, source in scripts().items():
+        code = without_comments(source)
+        for word in (
+            "Notification",
+            "requestPermission",
+            "navigator.permissions",
+            "serviceWorker",
+            "PushManager",
+        ):
+            assert word not in code, f"{name} uses {word}"
+
+
+def test_nothing_but_the_drop_zone_takes_a_drop() -> None:
+    for name, source in scripts().items():
+        code = without_comments(source)
+        if name != "manage.js":
+            assert "ondrop:" not in code, f"{name} takes dropped files"
+    manage = without_comments(scripts()["manage.js"])
+    assert manage.count("ondrop:") == 1
+    zone = function_body(manage, "export function dropZone(ctx, collection, options = {}) {")
+    assert "ondrop:" in zone
+
+
+def test_the_view_has_two_labels_and_no_toast() -> None:
+    main = without_comments(scripts()["main.js"])
+    options = re.search(r"const VIEW_OPTIONS = \[(.*?)\];", main, re.S)
+    assert options is not None
+    assert re.findall(r'\{ value: "(\w+)", label: "([^"]+)"', options.group(1)) == [
+        ("basic", "Basic"),
+        ("pro", "Pro"),
+    ]
+    # Neither view is called by a word that ranks it.
+    shown = "\n".join("\n".join(quoted_texts(source)) for source in scripts().values()).lower()
+    for word in ("advanced", "upgrade", "simple view", "expert", "premium"):
+        assert word not in shown, f"a script says {word!r}"
+    # One control is built from the two, for both views, with the view on screen selected.
+    choice = function_body(main, "function viewChoice(shown) {")
+    assert (
+        'segmented({ name: "view", legend: "View", value: shown, options: VIEW_OPTIONS, '
+        "onchange: chooseView })"
+    ) in choice
+    assert main.count("viewChoice(") == 3  # its definition, the sidebar of Pro, the bar of Basic
+    assert 'viewChoice("pro")' in function_body(main, "function viewSwitch() {")
+    assert "viewSwitch()," in function_body(main, "function sidebar() {")
+    assert 'viewChoice("basic")' in function_body(main, "function basicShell() {")
+    # Keeping the view says nothing when it worked: the screen is the answer.
+    assert main.count("api.setInterface(") == 1
+    keep = function_body(main, "async function keepView(view) {")
+    kept, failed = keep.split("} catch (error) {")
+    assert "applyState(await api.setInterface({ view }));" in kept
+    assert "toast" not in kept
+    assert "toastError(error);" in failed
+    for head in ("async function chooseView(view) {", "async function stayInPro() {"):
+        assert "toast" not in function_body(main, head), head
+    # A visit to Pro, when the view that is kept is Basic already, keeps nothing.
+    choose = function_body(main, "async function chooseView(view) {")
+    assert "const known = Boolean(kept && kept.stored && kept.view === view);" in choose
+    assert "if (!known && !(await keepView(view))) return;" in choose
+
+
+def test_the_six_pages_are_pro_whatever_view_is_kept() -> None:
+    main = without_comments(scripts()["main.js"])
+    route = function_body(main, "function routeFromHash() {")
+    named = route.index("if (Object.prototype.hasOwnProperty.call(VIEWS, name)) return name;")
+    basic = route.index('if (name === "basic") return "basic";')
+    assert named < basic < route.index("return defaultRoute();")
+    # Only an address that names no page is decided by the view that is kept.
+    fallback = function_body(main, "function defaultRoute() {")
+    assert 'return kept && kept.view === "basic" ? "basic" : "overview";' in fallback
+    screen = function_body(main, "function screen() {")
+    assert screen.index("return lockedScreen(ctx);") < screen.index('if (ctx.route === "basic")')
+    assert 'if (ctx.route === "basic") return basicShell();' in screen
+    # What the Basic page lists is asked for by kind, never picked from the newest entries.
+    assert 'left: () => api.activity({ limit: LEFT_FIRST, kind: "release" }),' in main
+    assert 'api.activity({ limit: STOPS_PAGE, kind: "refusal" })' in main
+    assert 'basic: ["apps", "approvals", "settings", "documents", "left", "stops"],' in main
+
+
+def test_the_tab_shows_that_a_passage_waits() -> None:
+    main = without_comments(scripts()["main.js"])
+    paint = function_body(main, "function paint() {")
+    assert "const waiting = state && state.today ? state.today.approvals_waiting : 0;" in paint
+    assert 'const wanted = waiting > 0 ? "favicon-waiting.svg" : "favicon.svg";' in paint
+    assert "document.querySelector('link[rel=\"icon\"]')" in paint
+    # Every picture a script names is a file of the interface.
+    names = {path.name for path in STATIC.iterdir()}
+    for name, source in scripts().items():
+        for picture in re.findall(r'"([\w.-]+\.svg)"', without_comments(source)):
+            assert picture in names, f"{name} names {picture}, which is not a file of the interface"
+    page = read(STATIC / "index.html")
+    assert '<link rel="icon" href="favicon.svg" type="image/svg+xml">' in page
+    # The icon with the dot is the icon, and a dot.
+    plain = read(STATIC / "favicon.svg").strip().removesuffix("</svg>")
+    assert read(STATIC / "favicon-waiting.svg").startswith(plain)
+
+
+def test_the_top_bar_of_basic_claims_no_state_of_the_vault_while_the_app_does_not_answer() -> None:
+    main = without_comments(scripts()["main.js"])
+    bar = function_body(main, "function topbar() {")
+    assert "const unknown = ctx.offline;" in bar
+    assert 'if (unknown) lock = "State unknown";' in bar
+    assert bar.index('if (unknown) lock = "State unknown";') < bar.index("else if (state.locks_at)")
+    assert 'class: ["lock-state", unknown && "is-unknown"]' in bar
+    # The bar that says what is wrong is drawn by the Basic page itself, in the block that stays
+    # in view, and with the command only for a vault that this command would open again.
+    basic = without_comments(scripts()["basic.js"])
+    bars = function_body(basic, "export function basicBars(ctx, problem) {")
+    assert bars.count('class: "offline-bar", role: "alert"') == 2
+    assert "const command = ctx.state.demo ? null : launch.command;" in bars
+    assert 'copyLine(ctx, "bar-launch-copy", command,' in bars
+    assert basic.count('class: "offline-bar"') == 2
+    shell = function_body(main, "function basicShell() {")
+    assert 'el("div", { class: "basic-top", key: "top" }, topbar(), bar ?' in shell
+    assert ["position: sticky" in rule for rule in css_rules("app.css", ".basic-top")] == [True]
+    assert ["position: sticky" in rule for rule in css_rules("app.css", ".viewbar")] == [True]
+
+
+def test_the_locked_screen_says_in_both_views_what_is_visible_without_the_key() -> None:
+    gateway = without_comments(scripts()["gateway.js"])
+    screen = function_body(gateway, "export function lockedScreen(ctx) {")
+    assert 'const basic = Boolean(state.interface && state.interface.view === "basic");' in screen
+    # In Basic the newest entry of the record is left out. The two figures and the sentence
+    # that explains them are there in both views.
+    assert "!basic && record && record.head_seq" in screen
+    for fact in ('el("dt", null, "Sealed files")', 'el("dt", null, "Size")'):
+        line = next(line for line in screen.splitlines() if fact in line)
+        assert "basic" not in line
+    assert (
+        'foot: "While locked, apps get one answer: the vault is locked. The number and sizes of '
+        'the sealed files are visible without the key; what is in them is not."'
+    ) in screen
+    # What waited when the vault locked is said only by a page that saw it lock.
+    assert "const waited = basic ? form.waited || 0 : 0;" in screen
+    main = without_comments(scripts()["main.js"])
+    seen = function_body(main, "function applyState(next, force = false) {")
+    locking = seen[seen.index("if (wasOpen && !isOpen) {") :]
+    assert locking.index("forget();") < locking.index("ctx.ui.unlock.waited = waited;")
+    assert main.count(".waited = ") == 1
+    assert "form.waited = 0;" in function_body(gateway, "async function unlock(ctx) {")
+
+
+def test_getting_started_stays_away_once_setup_is_done() -> None:
+    # A vault whose file says that setup is done does not get the list back when its last
+    # document is removed. A vault without the file keeps the list as it was: `stored` is false.
+    views = without_comments(scripts()["views.js"])
+    card = function_body(views, "function startCard(ctx) {")
+    pinned = "if (!data || ctx.state.demo) return null;"
+    added = (
+        "if (ctx.state.interface && ctx.state.interface.stored && "
+        'ctx.state.interface.setup === "done") return null;'
+    )
+    assert card.index(pinned) < card.index(added) < card.index("const steps = [")
+
+
+def test_the_vault_page_says_where_the_view_is_kept() -> None:
+    manage = without_comments(scripts()["manage.js"])
+    page = function_body(manage, "export function vaultView(ctx) {")
+    record = page.index('fact("Last entry of the record"')
+    kept = page.index(
+        'fact("Kept beside the vault, not sealed", '
+        '"Which view you use, and whether setup was finished")'
+    )
+    assert record < kept < page.index('{ key: "location" }')
+
+
+def test_the_details_fold_the_record_on_the_basic_page() -> None:
+    views = without_comments(scripts()["views.js"])
+    body = function_body(views, "function panelBody(ctx, panel) {")
+    assert 'const folded = ctx.route === "basic";' in body
+    assert "const open = folded && ctx.ui.panelMore === true;" in body
+    button = body[body.index('button("Record details", {') :]
+    assert 'id: "panel-more",' in button[:200]
+    assert 'expanded: open ? "true" : "false",' in button[:200]
+    assert "!folded || open ? recordBlocks(item) : null," in body
+    # What left, where it went and that it cannot be taken back are never behind the button.
+    fold = body.index("folded\n")
+    for shown in (
+        '"The exact text that left"',
+        "This text is with ${item.destination} now.",
+        "unverified",
+    ):
+        assert 0 < body.index(shown) < fold, shown
+    blocks = function_body(views, "function recordBlocks(item) {")
+    assert '"Entry"' in blocks
+    assert '"Chain"' in blocks
+    # Each entry starts folded, and opening or closing the details is told to the cards.
+    main = without_comments(scripts()["main.js"])
+    assert "ctx.ui.panelMore = false;" in function_body(main, "function openPanel(seq, ")
+    basic = without_comments(scripts()["basic.js"])
+    around = basic[basic.index("const around = [") :]
+    assert 'ctx.panel ? "panel" : "",' in around[: around.index("].join(")]
 
 
 # -- what the interface says ------------------------------------------------------

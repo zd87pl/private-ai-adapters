@@ -42,6 +42,23 @@ export function grantSentence(app, collection) {
   );
 }
 
+/** The same, where no one app is meant: what holds for every app that sends text to a provider. */
+export const GENERAL_SENTENCE = "Text that an app receives from your documents is sent to the company behind the app and cannot be recalled.";
+
+/**
+ * The sentence for one app where the documents are not told apart by collection:
+ * the Basic page and the first run, which say "your documents".
+ */
+export function basicGrantSentence(app) {
+  if (app.hosted) {
+    return `Text that ${app.name} receives from your documents is sent to ${app.destination} and cannot be recalled.`;
+  }
+  return (
+    `${PRODUCT} cannot check that this app is local. If it uses a cloud model, or has tools that send ` +
+    "data out, text it receives from your documents leaves this Mac."
+  );
+}
+
 // -- the passphrase again -----------------------------------------------------------
 
 let reauthOpen = null;
@@ -451,7 +468,7 @@ export async function loadConnect(view, update) {
  * at a space and never inside an option such as "--store". Only a word that is
  * longer than a whole line wraps inside itself (the style sheet sees to that).
  */
-function codeWords(text) {
+export function codeWords(text) {
   return String(text)
     .split(/(\s+)/)
     .filter(Boolean)

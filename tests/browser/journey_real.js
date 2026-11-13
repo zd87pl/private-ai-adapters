@@ -26,6 +26,7 @@
 const fs = require('fs');
 const path = require('path');
 const {
+  FRAME,
   WAIT,
   agentCall,
   apiGet,
@@ -48,6 +49,7 @@ const {
   started,
   step,
   stopApp,
+  switchView,
   withdraw,
 } = require('./common');
 
@@ -314,6 +316,13 @@ run(async () => {
     await second.waitFor({ state: 'visible', timeout: WAIT });
     await picture('04-first-run-app');
     await second.locator('.gate-actions .btn-quiet').click();
+    // A new vault opens in the Basic view. The walk from here on is through Pro: the view is switched
+    // once, without a message, and the six pages are where they were.
+    await page.locator(FRAME.basic).waitFor({ state: 'visible', timeout: WAIT });
+    check((await state()).interface.view === 'basic', `a new vault starts in the view ${JSON.stringify((await state()).interface)}`);
+    await switchView(page, 'pro');
+    check((await state()).interface.view === 'pro', 'the switch did not keep the view');
+    check((await count('.visit-bar')) === 0 && (await count('#toasts .toast')) === 0, 'the switch to Pro left a bar or a message');
     await page.locator('.card-start').waitFor({ state: 'visible', timeout: WAIT });
     await startIsAt(1, '#/documents');
     check((await count('.start-step.is-next a.btn')) === 1, 'more than one next step is offered');
@@ -842,6 +851,9 @@ run(async () => {
     check(JSON.parse(text).mcpServers && text.includes(second), `the configuration does not name this vault: ${text}`);
     await picture('31-first-run-connect');
     await done.locator('.gate-actions .btn-primary').click();
+    // This vault is new too, so it opens on the Basic page; what follows is checked in Pro.
+    await page.locator(FRAME.basic).waitFor({ state: 'visible', timeout: WAIT });
+    await switchView(page, 'pro');
     await page.locator('.card-start').waitFor({ state: 'visible', timeout: WAIT });
     await startIsAt(4, '#/apps');
     const apps = await get('/api/apps');

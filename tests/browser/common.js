@@ -406,6 +406,15 @@ async function decideApproval(page, key, action) {
   }, 45000);
 }
 
+/** What tells the two views apart: the Basic page has a bar at its top, Pro a sidebar. */
+const FRAME = { basic: 'header.topbar[data-key="topbar"]', pro: 'aside.sidebar' };
+
+/** Press "Basic" or "Pro" in the view control of the page that is open, and wait for that view. */
+async function switchView(page, view) {
+  await page.locator('label.segment', { has: page.locator(`input[name="view"][value="${view}"]`) }).click();
+  await page.locator(FRAME[view]).waitFor({ state: 'visible', timeout: WAIT });
+}
+
 /** GET one address of the app's API with the session of `page`. Returns the parsed answer. */
 async function apiGet(page, base, pathname) {
   const headers = { Accept: 'application/json' };
@@ -485,6 +494,7 @@ function run(main) {
 }
 
 module.exports = {
+  FRAME,
   WAIT,
   agentCall,
   apiGet,
@@ -509,5 +519,6 @@ module.exports = {
   started,
   step,
   stopApp,
+  switchView,
   withdraw,
 };
