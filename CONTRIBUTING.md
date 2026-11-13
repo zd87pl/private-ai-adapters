@@ -116,11 +116,19 @@ twine check --strict dist/*
 
 CI (`.github/workflows/ci.yml`) runs all of the above on every pull request and
 on pushes to `main`: lint and types; the core tests on Linux, macOS and Windows
-with only the core install; the full suite with the ML stack on Linux, on macOS
+with only the core install; the tests of the app (`wdva gate`) on Linux and
+macOS with the `gate` extra; the full suite with the ML stack on Linux, on macOS
 on Apple Silicon, and against the oldest supported version of every dependency;
 and a build of the wheel, which is then installed into a clean environment and
 smoke-tested. If you raise a dependency's minimum version in `pyproject.toml`,
 raise the matching pin in the `ml-minimum` job too.
+
+One job is not covered by `pytest`: "Browser" walks the app's interface in a
+real browser against the real app, on Linux in Chromium and on macOS in WebKit.
+Its two scripts and how to run them are in
+[tests/browser/README.md](tests/browser/README.md). They find things by the
+ids, class names and `data-key` values of the interface, so a change under
+`src/wdva/gate/app/static/` may need a change there.
 
 ## Project principles
 
