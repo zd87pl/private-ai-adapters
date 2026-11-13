@@ -1,0 +1,263 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2025 Enclave
+"""Starting the app: the interface server, the service behind it, and a clean end.
+
+:func:`run_app` is what ``wdva gate app`` runs. It builds the service for one
+store directory, binds the interface to a port on ``127.0.0.1``, prints where
+to find it and waits. Ctrl-C, or a signal that asks the program to end, locks
+the vault before the program stops, so that the record says how the session
+ended.
+
+The start-up lines are the only thing written to standard output. With pairing
+they include the code that a browser must present; the address that is opened
+or printed never carries a secret.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import importlib
+import importlib.util
+import shutil
+import signal
+import sys
+import tempfile
+import threading
+from pathlib import Path
+from types import FrameType
+
+from wdva._version import __version__
+from wdva.gate import messages, paths
+from wdva.gate.app.api import ServiceError
+from wdva.gate.app.demo import DemoAgent, make_demo_store
+from wdva.gate.app.httpd import AppServer
+from wdva.gate.app.service import MAX_HOURS, MIN_HOURS, GateService
+from wdva.gate.errors import GateError
+
+__all__ = ["DEMO_STORE_LINE", "run_app"]
+
+DEMO_STORE_LINE = "a temporary demo store with invented documents"
+"""What the start-up lines say instead of a path in demo mode."""
+
+_PR_SET_DUMPABLE = 4
+_WINDOW_MODULE = "webview"  # the package pywebview, which is not a dependency
+_WAIT_SECONDS = 0.5
+
+
+class _Stop:
+    """Set when the program is asked to end; remembers why."""
+
+    def __init__(self) -> None:
+        self.event = threading.Event()
+        self.reason = "close"
+
+    def ask(self, reason: str) -> None:
+        if not self.event.is_set():
+            self.reason = reason
+        self.event.set()
+
+    def wait(self) -> None:
+        # In short waits, so that a signal is noticed on every system.
+        while not self.event.wait(_WAIT_SECONDS):
+            pass
+
+
+def _harden() -> None:
+    """Ask the system not to write this process's memory to disk when it crashes.
+
+    Core dumps are switched off, and on Linux the process is marked as not
+    dumpable. Both are best effort and nothing depends on them: a program
+    running under the same account has other ways to the key.
+    """
+    with contextlib.suppress(Exception):
+        import resource
+
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    if sys.platform.startswith("linux"):
+        with contextlib.suppress(Exception):
+            import ctypes
+
+            ctypes.CDLL(None, use_errno=True).prctl(_PR_SET_DUMPABLE, 0, 0, 0, 0)
+
+
+def _demo_directory() -> Path:
+    """A new, empty, private directory for the demo store, short enough for its socket."""
+    directory = Path(tempfile.mkdtemp(prefix="wdva-gate-demo-"))
+    try:
+        paths.check_socket_path(directory)
+    except GateError:
+        shutil.rmtree(directory, ignore_errors=True)
+        directory = Path(tempfile.mkdtemp(prefix="wdva-", dir="/tmp"))
+    return directory
+
+
+def _open_browser(url: str) -> None:
+    """Open the interface in the default browser. The address carries no secret."""
+    with contextlib.suppress(Exception):
+        import webbrowser
+
+        webbrowser.open(url)
+
+
+def _window_available() -> bool:
+    try:
+        return importlib.util.find_spec(_WINDOW_MODULE) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _show_window(url: str) -> bool:
+    """Show the interface in a window of its own until it is closed. Experimental.
+
+    Needs the package pywebview. Returns False when the window could not be
+    opened; this function was never run on the machine it was written on.
+    """
+    try:
+        webview = importlib.import_module(_WINDOW_MODULE)
+        webview.create_window(messages.APP_NAME, url)
+        webview.start()
+    except Exception:
+        return False
+    return True
+
+
+def _say(line: str) -> None:
+    sys.stdout.write(line + "\n")
+    sys.stdout.flush()
+
+
+def _explain(line: str) -> None:
+    with contextlib.suppress(OSError, ValueError):
+        sys.stderr.write(line + "\n")
+        sys.stderr.flush()
+
+
+def run_app(
+    *,
+    store: str | None,
+    port: int = 0,
+    open_browser: bool = True,
+    demo: bool = False,
+    window: bool = False,
+    lock_after_hours: float = 8.0,
+) -> int:
+    """Start the app and block until it is stopped. Returns the process exit status.
+
+    ``store`` is the store directory; ``None`` means the one named by
+    ``WDVA_GATE_STORE``, else the per-user location. ``port`` 0 picks a free
+    port. With ``demo`` the store is a temporary one with invented documents:
+    it is unlocked at once, an agent is played against it, and it is removed
+    when the app stops. ``window`` shows the interface in its own window when
+    pywebview is installed, and falls back to the browser when it is not.
+
+    Ctrl-C, SIGTERM and SIGHUP lock the vault, stop the server and return 0.
+    """
+    if not MIN_HOURS <= lock_after_hours <= MAX_HOURS:
+        raise GateError(f"--lock-after takes {MIN_HOURS} to {MAX_HOURS:g} hours")
+    if not 0 <= port <= 65535:
+        raise GateError("--port takes a number from 0 to 65535")
+    _harden()
+    stop = _Stop()
+    demo_directory: Path | None = None
+    try:
+        passphrase = ""
+        if demo:
+            demo_directory = _demo_directory()
+            passphrase = make_demo_store(demo_directory)
+        path = demo_directory or paths.resolve_store(store)
+        service = GateService(path, demo=demo, lock_after_hours=lock_after_hours)
+
+        in_window = window and _window_available()
+        if window and not in_window:
+            _explain("pywebview is not installed: the interface opens in the browser instead.")
+        try:
+            # Without pairing the page itself carries the session: only for the demo,
+            # and for a window that this program opens itself.
+            server = AppServer(
+                service, port=port, pairing=not (demo or in_window), version=__version__, demo=demo
+            )
+        except OSError as exc:
+            raise GateError(
+                f"the interface cannot listen on port {port} of this computer; "
+                "is another program using it?"
+            ) from exc
+
+        agent: DemoAgent | None = None
+        previous = _handle_signals(stop)
+        try:
+            if demo:
+                try:
+                    service.unlock(passphrase=passphrase)
+                except ServiceError as exc:
+                    raise GateError(
+                        f"the demo store could not be unlocked: {exc.message}"
+                    ) from None
+                agent = DemoAgent(service.backend)
+            server.start()
+            _say(f"{messages.APP_NAME} {__version__}")
+            _say(f"store: {DEMO_STORE_LINE if demo else path}")
+            _say(f"open:  {server.url}")
+            if server.pairing_code is not None:
+                _say(
+                    f"pairing code: {server.pairing_code}   "
+                    "(type it into the page; anyone who can read this terminal can pair)"
+                )
+            _say("Ctrl-C locks the vault and quits.")
+            if agent is not None:
+                agent.start()
+            if in_window:
+                if _show_window(server.url):
+                    stop.ask("close")
+                else:
+                    _explain("The window could not be opened: using the browser instead.")
+                    _open_browser(server.url)
+            elif open_browser:
+                _open_browser(server.url)
+            stop.wait()
+        except KeyboardInterrupt:
+            stop.ask("interrupt")
+        finally:
+            if agent is not None:
+                agent.stop()
+            service.close(stop.reason)
+            server.stop()
+            _restore_signals(previous)
+    finally:
+        if demo_directory is not None:
+            shutil.rmtree(demo_directory, ignore_errors=True)
+    return 0
+
+
+_Handlers = dict[int, object]
+
+
+def _handle_signals(stop: _Stop) -> _Handlers:
+    """Make Ctrl-C and the signals that end a program lock the vault first.
+
+    Returns what was installed before, for :func:`_restore_signals`. Outside
+    the main thread nothing can be installed, and nothing is.
+    """
+    previous: _Handlers = {}
+    if threading.current_thread() is not threading.main_thread():
+        return previous
+
+    def interrupted(signum: int, frame: FrameType | None) -> None:
+        stop.ask("interrupt")
+
+    def ended(signum: int, frame: FrameType | None) -> None:
+        stop.ask("signal")
+
+    wanted = [(signal.SIGINT, interrupted), (signal.SIGTERM, ended)]
+    hangup = getattr(signal, "SIGHUP", None)
+    if hangup is not None:
+        wanted.append((hangup, ended))
+    for number, handler in wanted:
+        with contextlib.suppress(OSError, ValueError):
+            previous[number] = signal.signal(number, handler)
+    return previous
+
+
+def _restore_signals(previous: _Handlers) -> None:
+    for number, handler in previous.items():
+        with contextlib.suppress(OSError, ValueError, TypeError):
+            signal.signal(number, handler)  # type: ignore[arg-type]

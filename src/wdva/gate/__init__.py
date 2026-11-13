@@ -18,6 +18,7 @@ Importing this package needs only the core install. The MCP server lives in
 
 from __future__ import annotations
 
+from wdva.gate.core import Gate, PassageChangedError, UnknownPassageError
 from wdva.gate.errors import (
     ApprovalError,
     GateError,
@@ -27,18 +28,50 @@ from wdva.gate.errors import (
     StoreBusyError,
     StoreFormatError,
 )
+from wdva.gate.policy import HostedGrantError, Policy
+from wdva.gate.store import (
+    DocumentInfo,
+    DocumentRefusedError,
+    Store,
+    StoreInfo,
+    StoreLocationError,
+    StoreLock,
+    UnknownDocumentError,
+    check_passphrase,
+    init_store,
+    open_store,
+    store_info,
+    take_lock,
+)
 from wdva.gate.types import Backend, Caller, Preview, Reply
 
 __all__ = [
     "ApprovalError",
     "Backend",
     "Caller",
+    "DocumentInfo",
+    "DocumentRefusedError",
+    "Gate",
     "GateError",
+    "HostedGrantError",
     "KeeperUnavailableError",
     "LedgerError",
+    "PassageChangedError",
+    "Policy",
     "PolicyError",
     "Preview",
     "Reply",
+    "Store",
     "StoreBusyError",
     "StoreFormatError",
+    "StoreInfo",
+    "StoreLocationError",
+    "StoreLock",
+    "UnknownDocumentError",
+    "UnknownPassageError",
+    "check_passphrase",
+    "init_store",
+    "open_store",
+    "store_info",
+    "take_lock",
 ]
