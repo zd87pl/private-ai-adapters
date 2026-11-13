@@ -206,9 +206,9 @@
   color: #fff;
 }
 
+/* A part that is done carries a check in the colour of text. Green is kept for what is sealed. */
 .step.is-done .step-dot {
-  background: var(--green-soft);
-  color: var(--green);
+  color: var(--text-2);
 }
 
 .shake-0 {

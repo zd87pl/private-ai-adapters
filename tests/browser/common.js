@@ -1,4 +1,5 @@
-// What the two walk-throughs of the app share (journey_demo.js, journey_real.js).
+// What the three walk-throughs of the app share (journey_demo.js, journey_real.js,
+// journey_basic.js).
 //
 // Nothing in this file knows a step. It reads the options from the environment,
 // starts and stops the app through launch_app.py, opens the browser engine that
@@ -12,7 +13,10 @@
 //     running script inside the page. The session is a token that the app tells the
 //     page and the page sends in a header (never a cookie: a browser sends cookies
 //     to every port of 127.0.0.1). `watch` notes the token as the page is told it,
-//     and `apiGet` sends it the way the page does.
+//     and `apiGet` sends it the way the page does;
+//   - what a button copied is read back from the clipboard only where the engine lets a
+//     test do that (Chromium). Everywhere the text is compared with what the page shows
+//     beside the button, which is what the button copies (`pressCopy`).
 
 'use strict';
 
@@ -80,6 +84,8 @@ let shotsDirectory = null;
 let currentPage = null;
 /** Above zero while a screenshot is being taken. */
 let shooting = 0;
+/** Above zero while a walk-through loads a page again. */
+let reloading = 0;
 
 function check(condition, message) {
   if (!condition) throw new Error(message);
@@ -135,6 +141,10 @@ async function eventually(probe, timeout = WAIT, what = 'what was waited for did
 
 /**
  * A screenshot into the directory of this run. Running animations are put at their end first.
+ * With `whole` the picture holds the whole page and not only what the window shows of it:
+ * the window is made as tall as the page for the moment of the picture, so that a bar that
+ * sticks to an edge of the window stands where the page begins or ends, as it would in a
+ * window of that height. Afterwards the window has its size again and the page its place.
  *
  * In WebKit Playwright adds a style element to the page for the length of each
  * screenshot. The app's content security policy allows no inline style, so the
@@ -142,13 +152,26 @@ async function eventually(probe, timeout = WAIT, what = 'what was waited for did
  * the app. The page is asked one more thing afterwards so that every such report
  * has arrived before the picture counts as taken.
  */
-async function shot(page, name) {
+async function shot(page, name, { whole = false } = {}) {
   if (!shotsDirectory) return;
   shooting += 1;
+  const size = page.viewportSize();
+  let scrolled = null;
   try {
+    if (whole && size) {
+      const measured = await page.evaluate(() => [document.documentElement.scrollHeight, window.scrollY]);
+      if (measured[0] > size.height) {
+        scrolled = measured[1];
+        await page.setViewportSize({ width: size.width, height: measured[0] });
+      }
+    }
     await page.screenshot({ path: path.join(shotsDirectory, `${name}.png`), animations: 'disabled' });
     await page.title();
   } finally {
+    if (scrolled !== null) {
+      await page.setViewportSize(size).catch(() => {});
+      await page.evaluate((y) => window.scrollTo(0, y), scrolled).catch(() => {});
+    }
     shooting -= 1;
   }
 }
@@ -334,23 +357,9 @@ function noteSession(page, response) {
   );
 }
 
-/** How often the walk-through itself has reloaded a page, and how often it had when a request began. */
-const reloads = new WeakMap();
-const begunAt = new WeakMap();
-
-/**
- * Reload a page. A request of the page that is under way at that moment is broken off by the
- * reload, and some engines report it as failed: that is the walk-through's doing and no finding.
- */
-async function reload(page, options) {
-  reloads.set(page, (reloads.get(page) || 0) + 1);
-  return page.reload(options);
-}
-
 /** Report what a page does wrong: console errors, page errors, failed requests, HTTP errors nobody announced. */
 function watch(page) {
   page.on('response', (response) => noteSession(page, response));
-  page.on('request', (request) => begunAt.set(request, reloads.get(page) || 0));
   // What still arrives from a page after the walk-through closed it is the closing, not the page.
   const silent = () => hushed || page.isClosed();
   page.on('console', (message) => {
@@ -371,12 +380,10 @@ function watch(page) {
     if (!silent()) problem(`page error: ${firstLine(error)}`);
   });
   page.on('requestfailed', (request) => {
-    if (silent() || appDown) return;
+    // A page that is loaded again breaks off what it was asking at that moment: that is the reload, not the page.
+    if (silent() || appDown || reloading > 0) return;
     const failure = request.failure();
-    const what = `${request.method()} ${new URL(request.url()).pathname}${failure ? ` (${failure.errorText})` : ''}`;
-    // Begun before a reload that the walk-through made and ended by it.
-    if ((begunAt.get(request) || 0) < (reloads.get(page) || 0)) note(`a reload by the walk-through broke off ${what}`);
-    else problem(`request failed: ${what}`);
+    problem(`request failed: ${request.method()} ${new URL(request.url()).pathname}${failure ? ` (${failure.errorText})` : ''}`);
   });
   page.on('response', (response) => {
     if (silent() || response.status() < 400) return;
@@ -400,6 +407,18 @@ async function newPage(browser, options) {
   watch(page);
   currentPage = page;
   return page;
+}
+
+/** Load a page again, as the owner does with the button of the browser. What the page was asking at that moment breaks off, which is no finding. */
+async function reload(page) {
+  reloading += 1;
+  try {
+    await page.reload();
+    // Every report about the page that was left has arrived once the new one has answered a question.
+    await page.title();
+  } finally {
+    reloading -= 1;
+  }
 }
 
 /** Close a page and its context without counting what breaks off as a finding. */
@@ -445,6 +464,150 @@ async function apiGet(page, base, pathname) {
   const response = await page.context().request.get(new URL(pathname, base).href, { headers, timeout: WAIT });
   if (!response.ok()) throw new Error(`GET ${pathname} answered ${response.status()}`);
   return response.json();
+}
+
+/**
+ * Lock the vault the way a second window of the owner does: with the same request, under
+ * the session of `page`. The page that is open learns of it at its next question, as it
+ * does when the vault locks by itself.
+ */
+async function lockElsewhere(page, base) {
+  const headers = { Accept: 'application/json', 'Content-Type': 'application/json', 'X-WDVA-Gate': '1' };
+  const session = await sessions.get(page.context());
+  if (session) headers['X-WDVA-Session'] = session;
+  const response = await page.context().request.post(new URL('/api/lock', base).href, { headers, data: {}, timeout: WAIT });
+  if (!response.ok()) throw new Error(`POST /api/lock answered ${response.status()}`);
+}
+
+/** Whether the element has the focus of its page. */
+function focused(locator) {
+  return locator.evaluate((node) => node === document.activeElement);
+}
+
+/**
+ * Press a button that copies `text`, and see that it did. The page says "Copied" on the
+ * button once the text is on the clipboard. Where the engine lets a test read the
+ * clipboard (Chromium), it is read back and compared. An engine that lets no page copy
+ * without a person at the keyboard makes the page say so in a red message: that is noted
+ * and fails nothing, and the caller has compared `text` with what the page shows.
+ */
+async function pressCopy(page, options, button, text) {
+  const says = async () => ((await button.textContent()) || '').trim();
+  if (options.browser === 'chromium') {
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(page.url()).origin });
+    await button.click();
+    await eventually(async () => (await says()) === 'Copied', WAIT, 'the button does not say that the text was copied');
+    const held = await page.evaluate(() => navigator.clipboard.readText());
+    check(held === text, `the clipboard holds other text than the page shows: ${JSON.stringify(held.slice(0, 120))}`);
+    return;
+  }
+  // A refusal is said in a red message. One from an earlier step may still be up: it goes by itself.
+  const refusals = () => page.locator('#toasts .toast-red').count();
+  await eventually(async () => (await refusals()) === 0, WAIT, 'a red message of an earlier step stayed up');
+  await button.click();
+  const outcome = await eventually(async () => {
+    if ((await says()) === 'Copied') return 'says that the text was copied';
+    if ((await refusals()) > 0) return 'says that copying is not allowed here';
+    return null;
+  }, 8000).catch(() => 'says nothing');
+  note(`clipboard in ${options.browser}: after "Copy" the page ${outcome}; this engine gives a test no way to read the clipboard, so its content is not checked`);
+}
+
+/**
+ * Count what a person does on `page`, for the count of what the first run costs:
+ * presses, the addresses the page was at, the fields that were typed into, the file
+ * dialogs that opened. Call it before the page is loaded.
+ *
+ * A press is a click the page received, whoever made it and on whatever. A click on a
+ * label that the browser passes on to the label's control is one press. An address is
+ * counted without what follows its "?". Nothing counts before `start()`. `aside(body)`
+ * runs a part of the walk that is not on the path being counted, and says so by being
+ * there: everything else between `start()` and `stop()` counts.
+ */
+async function pressCounter(page) {
+  const counter = { presses: [], addresses: [], typed: [], dialogs: 0, on: false };
+  const place = (hash) => {
+    const address = String(hash || '').split('?')[0];
+    if (address && !counter.addresses.includes(address)) counter.addresses.push(address);
+  };
+  await page.exposeBinding('__walkCount', (_source, kind, what) => {
+    if (!counter.on) return;
+    if (kind === 'press') counter.presses.push(String(what));
+    else if (kind === 'typed' && !counter.typed.includes(String(what))) counter.typed.push(String(what));
+    else if (kind === 'place') place(what);
+  });
+  await page.addInitScript(() => {
+    const report = (kind, what) => {
+      if (typeof window.__walkCount === 'function') window.__walkCount(kind, what);
+    };
+    const words = (node) => {
+      const control = (node.closest && node.closest('button, a, label, input, select, textarea')) || node;
+      const text = String(control.innerText || control.value || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+      return `${String(control.tagName).toLowerCase()}${control.id ? `#${control.id}` : ''} "${text}"`;
+    };
+    // The control a label has just been clicked for: the browser clicks it next, in the same turn.
+    let passedOn = null;
+    document.addEventListener(
+      'click',
+      (event) => {
+        const target = event.target;
+        if (target === passedOn) return;
+        const label = target && target.closest ? target.closest('label') : null;
+        if (label && label.control && label.control !== target) {
+          passedOn = label.control;
+          setTimeout(() => {
+            passedOn = null;
+          }, 0);
+        }
+        report('press', words(target));
+      },
+      true,
+    );
+    document.addEventListener(
+      'input',
+      (event) => {
+        const field = event.target;
+        const typed = 'textarea, input:not([type]), input[type="text"], input[type="password"], input[type="number"], input[type="search"]';
+        if (field && field.matches && field.matches(typed)) report('typed', field.id || field.name || String(field.tagName).toLowerCase());
+      },
+      true,
+    );
+    window.addEventListener('hashchange', () => report('place', window.location.hash));
+    report('place', window.location.hash);
+  });
+  page.on('filechooser', () => {
+    if (counter.on) counter.dialogs += 1;
+  });
+  // What the page has told so far is in before the counting changes: one more question to the page sees to that.
+  const settle = () => page.title().catch(() => {});
+  counter.start = async () => {
+    await settle();
+    counter.on = true;
+    place(new URL(page.url()).hash);
+  };
+  counter.stop = async () => {
+    await settle();
+    counter.on = false;
+  };
+  /** Forget what was counted, for a second count on the same page. */
+  counter.reset = () => {
+    counter.presses.length = 0;
+    counter.addresses.length = 0;
+    counter.typed.length = 0;
+    counter.dialogs = 0;
+  };
+  counter.aside = async (body) => {
+    await settle();
+    const was = counter.on;
+    counter.on = false;
+    try {
+      return await body();
+    } finally {
+      await settle();
+      counter.on = was;
+    }
+  };
+  return counter;
 }
 
 // -- the end --------------------------------------------------------------------------
@@ -527,10 +690,14 @@ module.exports = {
   eventually,
   expectHttp,
   finish,
+  focused,
+  lockElsewhere,
   newPage,
   note,
   openBrowser,
   pageReachedApp,
+  pressCopy,
+  pressCounter,
   problem,
   readOptions,
   reload,

@@ -8,8 +8,8 @@ Uses ``RemoteGate``, which is what ``wdva gate mcp --client CLIENT`` uses: it ha
 no key and reaches the app through the vault's local socket. Prints the reply
 as one JSON object.
 
-Run by ``journey_real.js`` in this directory. It is not a test module and pytest
-does not collect it.
+Run by ``journey_real.js`` and ``journey_basic.js`` in this directory. It is not
+a test module and pytest does not collect it.
 """
 
 from __future__ import annotations

@@ -772,6 +772,18 @@ def css_rules(name: str, selector: str) -> list[str]:
     return re.findall(rf"(?m)^\s*{re.escape(selector)} \{{\n([^}}]*)\}}", css)
 
 
+def test_on_the_steps_of_setting_up_green_is_kept_for_what_is_sealed() -> None:
+    # A check on these screens says "done", "found" or "arrived", never "sealed": the part of
+    # the stepper that is done, the number of the first line once the entry is in the settings
+    # file, the mark beside the first request. None of them is drawn in green. (The check
+    # beside a file that was sealed is.)
+    for selector in (".step-dot", ".step.is-done .step-dot", ".ask-num", ".ask-wait-glyph"):
+        rules = css_rules("app.css", selector)
+        assert rules, selector
+        assert all("--green" not in rule for rule in rules), selector
+    assert ["var(--green)" in rule for rule in css_rules("app.css", ".upload-done .icon")] == [True]
+
+
 def test_the_bar_that_says_what_is_wrong_stands_above_the_title_and_covers_nothing() -> None:
     # It used to lie over the top of the page (position: fixed), and so over the title.
     css = without_comments(read(STATIC / "app.css"))

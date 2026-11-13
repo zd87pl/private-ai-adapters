@@ -78,7 +78,11 @@ run(async () => {
   const apps = () => apiGet(page, base, '/api/apps');
   const approvals = () => apiGet(page, base, '/api/approvals');
   const activity = async () => (await apiGet(page, base, '/api/activity?limit=200')).items;
-  const picture = (name) => shot(page, `demo-${name}`);
+  /** A picture of the page once the messages in its corner have gone, so that they cover nothing of it. */
+  const picture = async (name) => {
+    await eventually(async () => (await page.locator('#toasts .toast').count()) === 0, WAIT).catch(() => {});
+    await shot(page, `demo-${name}`);
+  };
   const go = async (route) => {
     await page.click(`a.nav-item[href="#/${route}"]`);
     await page.locator(`.page-body[data-key="view-${route}"]`).waitFor({ state: 'attached', timeout: WAIT });
@@ -175,6 +179,8 @@ run(async () => {
     check((await guide.locator('.guide-text').first().textContent()).includes(`under the name ${HONEST},`), 'the guide does not name the app by its stored name');
     check((await page.locator('.btn-primary').count()) === 0, 'a button is filled while a passage waits');
     check((await card.boundingBox()).y < (await guide.boundingBox()).y, 'the guide stands above the card');
+    // The picture shows the card as it is once "Release once" can be pressed, a moment after it appeared.
+    await card.locator('button[data-key="release"]:not(.is-waiting)').waitFor({ state: 'visible', timeout: WAIT });
     await picture('00b-your-turn');
 
     // "Don't release". The played app is not told, and no clock makes it ask again.

@@ -11,8 +11,9 @@ file", at the settings file of an AI app) never meets the settings of a
 program on this computer. That folder is the one ``GATE_HOME`` names; without
 it a temporary folder is made and removed again when the app ends.
 
-Run by the walk-throughs in this directory (``journey_demo.js`` and
-``journey_real.js``). It is not a test module and pytest does not collect it.
+Run by the walk-throughs in this directory (``journey_demo.js``,
+``journey_real.js`` and ``journey_basic.js``). It is not a test module and
+pytest does not collect it.
 """
 
 from __future__ import annotations

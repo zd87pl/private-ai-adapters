@@ -127,7 +127,7 @@ raise the matching pin in the `ml-minimum` job too.
 
 One job is not covered by `pytest`: "Browser" walks the app's interface in a
 real browser against the real app, on Linux in Chromium and on macOS in WebKit.
-Its two scripts and how to run them are in
+Its three scripts and how to run them are in
 [tests/browser/README.md](tests/browser/README.md). They find things by the
 ids, class names and `data-key` values of the interface, so a change under
 `src/wdva/gate/app/static/` may need a change there.

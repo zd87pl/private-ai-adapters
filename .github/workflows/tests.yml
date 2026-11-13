@@ -103,14 +103,19 @@ jobs:
 
   browser:
     # The app's interface, walked in a real browser against the real app: on
-    # Linux in Chromium and on macOS in WebKit, the engine of Safari. The two
+    # Linux in Chromium and on macOS in WebKit, the engine of Safari. The three
     # walk-throughs are plain Node scripts (tests/browser/); they record no
     # traces and leave screenshots, which are kept whether or not a step failed.
     # The package is installed the way a user installs it, not in editable mode,
     # so the interface that is walked is the one inside the built package.
+    #
+    # On a development machine the three take about 1, 2 and 2 minutes in
+    # Chromium. Each ends itself with a failure when it has not finished in 6,
+    # 10 and 12 minutes, so the limit of the job leaves room for all three to
+    # say what went wrong.
     name: Browser (${{ matrix.os }}, ${{ matrix.browser }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -153,6 +158,11 @@ jobs:
         env:
           GATE_PYTHON: ${{ steps.python.outputs.python-path }}
         run: node tests/browser/journey_real.js
+      - name: Walk through the first run and the Basic view
+        if: ${{ !cancelled() && steps.demo.outcome != 'skipped' }}
+        env:
+          GATE_PYTHON: ${{ steps.python.outputs.python-path }}
+        run: node tests/browser/journey_basic.js
       - name: Upload the screenshots
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
