@@ -161,8 +161,9 @@ def test_what_is_not_the_name_stays_under_any_name() -> None:
 
 # file, the literal as it stands in the source: why it does not follow brand.py
 SPELLED_OUT = {
-    ("brand.py", '"WDVA Gate"'): "the one place",
-    ("brand.py", '"wdva-gate"'): "the one place",
+    ("brand.py", '"Locktender"'): "the one place",
+    ("brand.py", '"locktender"'): "the one place",
+    ("paths.py", '"wdva-gate"'): "the store directory's earlier name, still looked for",
     ("messages.py", '"wdva_status"'): "file format: what a record calls the tool",
     ("messages.py", '"wdva_search"'): "file format: what a record calls the tool",
     ("messages.py", '"wdva_read"'): "file format: what a record calls the tool",
@@ -176,9 +177,9 @@ SPELLED_OUT = {
 
 
 def test_the_name_is_spelled_out_only_where_this_list_says() -> None:
-    # Fixed to today's name on purpose: after a rename this list is the map of what was
-    # left behind, and each entry says why it may stay.
-    forms = re.compile(r"WDVA Gate|wdva-gate|wdva_(?:status|search|read)|wdva_gate")
+    # Fixed to today's name and to the one before it on purpose: after a rename this list is
+    # the map of what was left behind, and each entry says why it may stay.
+    forms = re.compile(r"[Ll]ocktender|WDVA Gate|wdva-gate|wdva_(?:status|search|read)|wdva_gate")
     found: set[tuple[str, str]] = set()
     for path in sorted((PACKAGE / "gate").rglob("*.py")):
         source = path.read_text(encoding="utf-8")
