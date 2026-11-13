@@ -9,8 +9,9 @@ adapter, and load it straight from ciphertext into memory.
 
 **Status:** alpha (0.2.0a1), not independently audited, vault format v1 ([specification](docs/FORMAT.md)).
 
-**New, in preview:** [WDVA Gate](#wdva-gate-preview), a local app that lets AI agents search and read
-your sealed documents inside limits you set, and shows you everything that left.
+**New, in preview:** [Locktender](#locktender-preview), a local app that puts a lock, a meter and a
+record between your private documents and AI apps. It bounds and shows what leaves. It cannot
+recall it.
 
 ## Why
 
@@ -124,15 +125,57 @@ learned memory, not a database. Check `loss_after`, test recall on questions who
 know, and use retrieval (RAG) when you need exact, attributable answers
 ([more in the guide](docs/GUIDE.md#training)).
 
-## WDVA Gate (preview)
+## Locktender (preview)
 
-A local app between your sealed documents and AI agents such as Claude Desktop, Claude Code, the
-ChatGPT desktop app or a local model. It is being built on this branch; see the changelog for what
-works today.
+Locktender is a local app in this package that stands between your private documents and the AI
+apps on your computer: a lock, a meter and a record. It seals a copy of each document you add in
+an encrypted vault; apps such as Claude Desktop, Claude Code, Codex, the ChatGPT desktop app or a
+local model can search the vault and read single passages inside limits you set, and you see the
+exact text of everything that left. It is not a wall: text that was released to a hosted AI app
+is with that app's provider, and nothing can recall it.
+
+![The Basic page of an unlocked vault: the headline "Nothing is waiting for you", the rows under "What left the vault", and under "Documents" and "Apps" one app that is set to "Ask me each time"](docs/images/gate-basic.png)
+
+You use it in your browser, on a page that has two views of the same vault. **Basic** is one page
+with what you use every day: what waits for your approval, what left the vault, your documents
+and your apps. **Pro** is six pages with every setting. A new vault opens in Basic, after a first
+run in four steps, "Passphrase", "App", "Documents" and "First question": you choose a
+passphrase, say which AI app you use, add a document, and ask that app a first question.
+
+Try the demo. It runs on invented documents and plays an AI app against them, and a guide on its
+page says where the demo is and what you can do next. Locktender runs on macOS and Linux and
+needs Python 3.11 or newer:
 
 ```bash
+pip install "wdva[gate] @ git+https://github.com/zd87pl/private-ai-adapters"
 wdva gate app --demo
 ```
+
+**What it does**
+
+- Seals a copy of each document you add in a vault that only your passphrase opens. While it is
+  locked, an app gets one answer: the vault is locked.
+- Meters what apps receive: search results and single passages of at most 800 characters, inside
+  limits per app, per kind of app and per document, with your approval passage by passage where
+  you ask for it. The first run asks for it: an app added there is set to "Ask me each time".
+- Records every result with its exact text before it is handed over, and shows it to you.
+
+**What it does not do**
+
+- Recall anything, or tell who is calling. App names are labels: any program running under your
+  account can call under a name you registered.
+- Guard the file you added. Locktender seals a copy; the original stays where it was, not
+  encrypted. An AI app that was given the folder it lies in, or that can run commands under your
+  account, reads it there and does not need Locktender for it. According to Anthropic's own
+  pages (this was not tried), Claude in Cowork can read the files in [the folders you
+  connected](https://support.claude.com/en/articles/13364135), and Claude Code reads files in
+  [its working folder](https://code.claude.com/docs/en/permissions) without asking. So a document
+  is behind the lock only while its original is in no folder that an AI app can read.
+- Serve assistants on the web or on a phone. And it is a preview: nobody has yet used it by hand
+  on a Mac or in a real conversation with one of the apps, and it has not been audited.
+
+Installing it, the first run, the two views, connecting each app, daily use and every limit:
+[docs/GATE.md](docs/GATE.md).
 
 ## Python API
 
@@ -195,12 +238,14 @@ print(AdapterBundle.load("my-adapter.wdva", key=key).summary())  # what the key 
 | `wdva unseal VAULT -o DIR` | Decrypt a vault back to a **plaintext** PEFT directory | core |
 | `wdva rekey VAULT` | Re-encrypt under `--new-key-file` or `--new-passphrase` | core |
 | `wdva destroy-key FILE` | Overwrite and delete a key file (crypto-shredding, with its [limits](docs/THREAT_MODEL.md#crypto-shredding)) | core |
+| `wdva gate app` | Start [Locktender](#locktender-preview); `--demo` runs it on invented documents, `--view basic` or `--view pro` chooses the view. `wdva gate mcp` is the program an AI app starts, `wdva gate config HOST` prints the configuration for one app ([docs/GATE.md](docs/GATE.md#command-reference)) | `gate` |
 
 `wdva COMMAND --help` lists every option. **Credentials** come from `--key-file PATH`, from
 `--passphrase` (an interactive prompt), or from the environment: `WDVA_KEY_FILE`, then `WDVA_KEY`
 (64 hex characters), then `WDVA_PASSPHRASE`. A key is never accepted as a command-line argument,
 because arguments end up in shell history and in process listings; option abbreviation is switched
-off so that `--key HEX` cannot pass as `--key-file`.
+off so that `--key HEX` cannot pass as `--key-file`. The `gate` commands read none of the three
+variables: the passphrase of a Locktender vault is typed into its page and nowhere else.
 
 ## LangChain
 
@@ -290,8 +335,13 @@ model and is really applied, encrypted metadata, hot-swapping, and one tool for 
 ## Documentation
 
 - [docs/GUIDE.md](docs/GUIDE.md): installation, keys, training, inference, PEFT interop, troubleshooting, FAQ
-- [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md): what is protected, from whom, and what is not
+- [docs/GATE.md](docs/GATE.md): Locktender, the app between your private documents and AI apps:
+  installing it, connecting each app, daily use, limits, troubleshooting
+- [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md): what is protected, from whom, and what is not, for
+  adapter vaults and, in a section of its own, for Locktender
 - [docs/FORMAT.md](docs/FORMAT.md): the vault format, normative, with test vectors
+- [docs/GATE_FORMAT.md](docs/GATE_FORMAT.md): what Locktender keeps on disk and what travels on
+  its local connections: the store directory, the record, the texts an AI app receives
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): module map, design decisions, testing strategy
 - [examples/](examples/): runnable scripts with recorded output
 - [docs/recordings/](docs/recordings/): the complete output of the runs quoted on this page
