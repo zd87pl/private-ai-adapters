@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import stat
@@ -410,6 +411,81 @@ def test_independent_decoder_agrees_with_the_spec(key: SecretKey) -> None:
     blob = seal(payload, passphrase="pässwörd", scrypt_n=FAST_SCRYPT)
     assert reference_unseal(blob, passphrase="pässwörd") == payload
     assert reference_unseal(KAT_KEYED, key=bytes(range(32))) == b"weight-delta vault adapters"
+
+
+def _hkdf_sha256(master: bytes, salt: bytes, info: bytes) -> bytes:
+    """HKDF (RFC 5869) for one 32-byte output, with nothing but the standard library."""
+    extracted = hmac.new(salt, master, hashlib.sha256).digest()
+    return hmac.new(extracted, info + b"\x01", hashlib.sha256).digest()
+
+
+def test_a_second_library_opens_a_vault(key: SecretKey) -> None:
+    """libsodium opens what this package seals, and refuses what it would refuse.
+
+    The reference decoder above is written from the specification but uses the
+    cipher of the library the package itself uses. Here nothing is shared: the
+    keys come from HKDF and scrypt in the standard library, and the cipher is
+    libsodium's XChaCha20-Poly1305 (through PyNaCl). So the name of the
+    algorithm in the header is checked against a second implementation.
+    """
+    bindings = pytest.importorskip("nacl.bindings")
+    exceptions = pytest.importorskip("nacl.exceptions")
+
+    def open_with_libsodium(blob: bytes, master: bytes) -> bytes:
+        (header_len,) = struct.unpack(">I", blob[5:9])
+        associated = blob[: 9 + header_len]
+        header = json.loads(blob[9 : 9 + header_len])
+        assert header["alg"] == "XChaCha20-Poly1305"
+        salt = base64.b64decode(header["salt"])
+        commitment = _hkdf_sha256(master, salt, b"wdva/v1/key-commitment")
+        assert commitment == base64.b64decode(header["commit"])
+        plaintext: bytes = bindings.crypto_aead_xchacha20poly1305_ietf_decrypt(
+            blob[9 + header_len :],  # ciphertext followed by the 16-byte tag
+            associated,
+            base64.b64decode(header["nonce"]),
+            _hkdf_sha256(master, salt, b"wdva/v1/encryption-key"),
+        )
+        return plaintext
+
+    payload = os.urandom(4097)
+    raw_key = bytes.fromhex(key.hex())
+    sealed = seal(payload, key=key, public_metadata={"note": "second library"})
+    assert open_with_libsodium(sealed, raw_key) == payload
+    assert open_with_libsodium(KAT_KEYED, bytes(range(32))) == b"weight-delta vault adapters"
+
+    # A passphrase vault: scrypt from the standard library gives the master key.
+    sealed_pw = seal(payload, passphrase="pässwörd", scrypt_n=FAST_SCRYPT)
+    pw = json.loads(sealed_pw[9 : 9 + struct.unpack(">I", sealed_pw[5:9])[0]])["pw"]
+    master = hashlib.scrypt(
+        unicodedata.normalize("NFKC", "pässwörd").encode("utf-8"),
+        salt=base64.b64decode(pw["salt"]),
+        n=pw["n"],
+        r=pw["r"],
+        p=pw["p"],
+        maxmem=2**28,
+        dklen=32,
+    )
+    assert open_with_libsodium(sealed_pw, master) == payload
+
+    # The other direction: what libsodium seals with the same layout, the package opens.
+    (header_len,) = struct.unpack(">I", sealed[5:9])
+    header = json.loads(sealed[9 : 9 + header_len])
+    resealed = sealed[: 9 + header_len] + bindings.crypto_aead_xchacha20poly1305_ietf_encrypt(
+        b"sealed by libsodium",
+        sealed[: 9 + header_len],
+        base64.b64decode(header["nonce"]),
+        _hkdf_sha256(raw_key, base64.b64decode(header["salt"]), b"wdva/v1/encryption-key"),
+    )
+    assert unseal(resealed, key=key).payload == b"sealed by libsodium"
+
+    # And both refuse the same damage: one flipped bit in the header or in the text.
+    for position in (20, len(sealed) - 40):
+        damaged = bytearray(sealed)
+        damaged[position] ^= 1
+        with pytest.raises((exceptions.CryptoError, AssertionError, ValueError)):
+            open_with_libsodium(bytes(damaged), raw_key)
+        with pytest.raises((IntegrityError, VaultFormatError, WrongKeyError)):
+            unseal(bytes(damaged), key=key)
 
 
 def test_header_is_canonical_json(key: SecretKey) -> None:

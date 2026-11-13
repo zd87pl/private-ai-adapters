@@ -62,7 +62,9 @@ mcp = [
 gate = ["wdva[mcp,pdf]"]
 all = ["wdva[ml,pdf,langchain,mcp]"]
 # Enough to run the test suite. ML tests are skipped unless `ml` is installed too.
-test = ["pytest>=8", "pytest-cov>=5"]
+# PyNaCl gives the vault tests a second, independent cipher implementation
+# (libsodium) to check the format against; the package itself does not use it.
+test = ["pytest>=8", "pytest-cov>=5", "pynacl>=1.5"]
 dev = [
     "wdva[all,test]",
     "ruff>=0.17",
