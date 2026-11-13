@@ -120,6 +120,9 @@ function schedule() {
 function sidebar() {
   const state = ctx.state;
   const waiting = state.today ? state.today.approvals_waiting : 0;
+  // While the app does not answer, what this page last heard of the vault may no longer
+  // hold: the foot then says that it does not know, not what it knew.
+  const unknown = ctx.offline;
   return el(
     "aside",
     { class: "sidebar", key: "sidebar" },
@@ -156,13 +159,20 @@ function sidebar() {
       { class: "sidebar-foot" },
       el(
         "div",
-        { class: "lock-state", title: state.locks_at ? `Unlocked. Locks itself ${at(state.locks_at, ctx.now)}.` : "Unlocked" },
-        el("span", { class: "lock-glyph" }, icon("unlock")),
+        {
+          class: ["lock-state", unknown && "is-unknown"],
+          title: unknown
+            ? `${PRODUCT} is not answering, so this page cannot tell whether the vault is unlocked.`
+            : state.locks_at
+              ? `Unlocked. Locks itself ${at(state.locks_at, ctx.now)}.`
+              : "Unlocked",
+        },
+        el("span", { class: "lock-glyph" }, icon(unknown ? "warning" : "unlock")),
         el(
           "span",
           { class: "lock-text" },
-          el("span", { class: "lock-title" }, "Unlocked"),
-          el("span", { class: "lock-sub" }, state.locks_at ? `Locks itself ${at(state.locks_at, ctx.now)}` : "Until you lock it"),
+          el("span", { class: "lock-title" }, unknown ? "State unknown" : "Unlocked"),
+          el("span", { class: "lock-sub" }, unknown ? `${PRODUCT} is not answering` : state.locks_at ? `Locks itself ${at(state.locks_at, ctx.now)}` : "Until you lock it"),
         ),
       ),
       el(
@@ -172,10 +182,14 @@ function sidebar() {
           class: ["btn", "btn-default", "btn-block", "lock-now", ctx.ui.locking && "is-busy"],
           onclick: lockNow,
           disabled: ctx.ui.locking,
-          title: state.locks_at ? `Unlocked until ${at(state.locks_at, ctx.now).replace(/^(at|on) /, "")}. Lock now` : "Unlocked. Lock now",
+          title: unknown
+            ? `${PRODUCT} is not answering. Lock now`
+            : state.locks_at
+              ? `Unlocked until ${at(state.locks_at, ctx.now).replace(/^(at|on) /, "")}. Lock now`
+              : "Unlocked. Lock now",
         },
         icon("lock", "lock-now-act"),
-        icon("unlock", "lock-now-state"),
+        icon(unknown ? "warning" : "unlock", "lock-now-state"),
         el("span", { class: "btn-label" }, "Lock now"),
       ),
     ),
@@ -197,21 +211,26 @@ function shell() {
     el(
       "main",
       { class: "main", id: "main", tabindex: -1 },
-      ctx.offline
-        ? el("div", { class: "offline-bar", role: "alert", key: "offline" }, icon("warning"), el("span", null, `${PRODUCT} is not answering. Is it still running in its terminal? What you see may be out of date.`))
-        : loadProblem()
-          ? el("div", { class: "offline-bar", role: "alert", key: "load-error" }, icon("warning"), el("span", null, `This page could not be brought up to date: ${loadProblem()} Trying again.`))
-          : null,
+      // What is wrong with the page stands above its title, in the block that stays in view.
       el(
-        "header",
-        { class: "page-head", key: "head" },
+        "div",
+        { class: "page-top", key: "top" },
+        ctx.offline
+          ? el("div", { class: "offline-bar", role: "alert", key: "offline" }, icon("warning"), el("span", null, `${PRODUCT} is not answering. Is it still running in its terminal? What you see may be out of date.`))
+          : loadProblem()
+            ? el("div", { class: "offline-bar", role: "alert", key: "load-error" }, icon("warning"), el("span", null, `This page could not be brought up to date: ${loadProblem()} Trying again.`))
+            : null,
         el(
-          "div",
-          { class: "page-heading" },
-          el("h1", { class: "page-title" }, view.title),
-          view.lead ? el("p", { class: "page-lead" }, view.lead) : null,
+          "header",
+          { class: "page-head", key: "head" },
+          el(
+            "div",
+            { class: "page-heading" },
+            el("h1", { class: "page-title" }, view.title),
+            view.lead ? el("p", { class: "page-lead" }, view.lead) : null,
+          ),
+          view.actions ? el("div", { class: "page-actions" }, view.actions) : null,
         ),
-        view.actions ? el("div", { class: "page-actions" }, view.actions) : null,
       ),
       el("div", { class: "page-body", key: `view-${ctx.route}` }, view.body),
     ),

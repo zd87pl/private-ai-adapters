@@ -21,8 +21,10 @@ from wdva.gate import brand, hostconfig
 from wdva.gate.hostconfig import (
     INSTALL_LINE,
     KNOWN_HOSTS,
+    REPOSITORY,
     check_client_name,
     host_command,
+    install_line,
     known_host,
     missing_sdk_error,
     render,
@@ -183,7 +185,9 @@ def test_known_hosts_are_data_with_source_and_date() -> None:
 
 def test_an_unknown_application_is_refused() -> None:
     for host in ("cursor", "", "Claude-Desktop", "claude-desktop ", "x" * 500):
-        with pytest.raises(ValueError, match="not an application the gate knows") as raised:
+        with pytest.raises(
+            ValueError, match=f"not an application {re.escape(brand.PRODUCT)} knows"
+        ) as raised:
             render(host, client="my-app", store=PLAIN)
         assert len(str(raised.value)) < 300
         with pytest.raises(ValueError, match="choose from claude-desktop"):
@@ -492,6 +496,29 @@ def test_the_missing_sdk_error_carries_the_one_install_line() -> None:
         + INSTALL_LINE
     )
     assert shlex.split(INSTALL_LINE)[:2] == ["pip", "install"]
+
+
+def test_every_install_line_names_the_repository_which_is_written_in_one_place() -> None:
+    # The package is not on PyPI: `pip install "wdva[pdf]"` would find nothing.
+    assert REPOSITORY == "git+https://github.com/zd87pl/private-ai-adapters"
+    assert install_line("gate") == INSTALL_LINE
+    assert install_line("pdf") == f'pip install "wdva[pdf] @ {REPOSITORY}"'
+    assert shlex.split(install_line("pdf")) == ["pip", "install", f"wdva[pdf] @ {REPOSITORY}"]
+    # The extras the lines name are extras the package has.
+    project = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    extras = project.read_text(encoding="utf-8").split("[project.optional-dependencies]")[1]
+    for extra in ("gate", "pdf"):
+        assert re.search(rf"^{extra} = \[", extras.split("[project.scripts]")[0], re.M), extra
+    # One place: no other module of the gate spells the address out.
+    package = Path(hostconfig.__file__).resolve().parent
+    address = REPOSITORY.split("://", 1)[1]
+    holders = [
+        path.relative_to(package).as_posix()
+        for path in sorted(package.rglob("*.py"))
+        if address in path.read_text(encoding="utf-8")
+    ]
+    assert holders == ["hostconfig.py"]
+    assert Path(hostconfig.__file__).read_text(encoding="utf-8").count(address) == 1
 
 
 def test_sdk_status_matches_this_environment() -> None:

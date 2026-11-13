@@ -263,18 +263,27 @@ export function field({ label, id, control, hint, error, action }) {
 
 /**
  * Where the browser can, the messages sit in the layer above sheets. They are put
- * there once, and again whenever a sheet has been opened over them.
+ * there once, and again whenever a sheet has been opened over them: when the next
+ * message comes, and when a sheet opens while messages are showing.
  */
 function lift(host) {
   if (typeof host.showPopover !== "function" || !host.hasAttribute("popover")) return;
   try {
     const shown = host.matches(":popover-open");
     if (shown && !document.querySelector("dialog[open]")) return;
+    // Shown again, the messages that are there must not arrive a second time.
+    for (const item of host.children) item.classList.add("is-settled");
     if (shown) host.hidePopover();
     host.showPopover();
   } catch (_error) {
     host.removeAttribute("popover");
   }
+}
+
+/** A sheet has opened: the messages that are showing stay readable above it and its backdrop. */
+function liftOverSheet() {
+  const host = document.getElementById("toasts");
+  if (host && host.children.length) lift(host);
 }
 
 /** A short message at the bottom of the window that goes away by itself. */
@@ -341,6 +350,7 @@ export function openSheet(build, options = {}) {
   openSheets.add(sheet);
   sheet.update();
   dialog.showModal();
+  liftOverSheet();
   return sheet;
 }
 

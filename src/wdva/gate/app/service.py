@@ -122,6 +122,7 @@ __all__ = [
     "NOT_REGISTERED",
     "OWNER_MODE",
     "GateService",
+    "connect_problem",
 ]
 
 OWNER_MODE = timedelta(minutes=10)
@@ -322,6 +323,30 @@ def _spoken(claimed: Any) -> str | None:
     said = _mapping(claimed)
     parts = [said.get("name"), said.get("version")]
     return " ".join(part for part in parts if isinstance(part, str) and part) or None
+
+
+def connect_problem(status: Mapping[str, Any]) -> tuple[str, str, list[str]] | None:
+    """Why no agent application can connect in this environment, or ``None`` when one can.
+
+    ``status`` is what :func:`wdva.gate.hostconfig.sdk_status` returned. The answer is the
+    code of the warning, what is wrong in words that follow "Apps", and the command that
+    puts it right, if there is one. The warning of an unlocked vault and the start-up
+    line of the app are both made from it.
+    """
+    if status.get("python") is False:
+        return (
+            "python_too_old",
+            "cannot connect: the program they start needs Python 3.11 or newer, and "
+            f"{brand.PRODUCT} runs on an older one.",
+            [],
+        )
+    if status.get("sdk") is False:
+        return (
+            "no_sdk",
+            f"cannot connect yet: the MCP SDK is not installed where {brand.PRODUCT} runs.",
+            [hostconfig.INSTALL_LINE],
+        )
+    return None
 
 
 def _kdf(scrypt_n: int | None) -> str:
@@ -1325,19 +1350,10 @@ class GateService:
                 f"{'is' if len(unreadable) == 1 else 'are'} left out of every search.",
                 unreadable,
             )
-        if session.sdk.get("python") is False:
-            warn(
-                "python_too_old",
-                "Apps cannot connect: the program they start needs Python 3.11 or newer, and "
-                f"{brand.PRODUCT} runs on an older one.",
-            )
-        elif session.sdk.get("sdk") is False:
-            warn(
-                "no_sdk",
-                f"Apps cannot connect yet: the MCP SDK is not installed where {brand.PRODUCT} "
-                "runs.",
-                [hostconfig.INSTALL_LINE],
-            )
+        problem = connect_problem(session.sdk)
+        if problem is not None:
+            code, words, command = problem
+            warn(code, f"Apps {words}", command)
         return warnings
 
     # -- creating, unlocking, locking ---------------------------------------------------

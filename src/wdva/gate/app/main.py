@@ -12,7 +12,10 @@ The start-up lines are the only thing written to standard output. With pairing
 they include the code that a page must present; the address that is opened
 or printed never carries a secret. A demo adds one line with the passphrase of
 its vault, which is the same for every demo and guards invented documents
-only. The passphrase of a real vault is never printed.
+only. The passphrase of a real vault is never printed. Where no agent
+application could connect (an older Python, or no MCP SDK) one more line says
+so after the address, in the words of the warning the page shows once the vault
+is unlocked.
 
 Only the demo runs without pairing. Without it every program on the computer
 can load the page, be given the session and act as the owner there, also
@@ -37,11 +40,11 @@ from pathlib import Path
 from types import FrameType
 
 from wdva._version import __version__
-from wdva.gate import brand, paths
+from wdva.gate import brand, hostconfig, paths
 from wdva.gate.app.api import ServiceError
 from wdva.gate.app.demo import DemoAgent, make_demo_store
 from wdva.gate.app.httpd import AppServer
-from wdva.gate.app.service import MAX_HOURS, MIN_HOURS, GateService
+from wdva.gate.app.service import MAX_HOURS, MIN_HOURS, GateService, connect_problem
 from wdva.gate.errors import GateError
 
 __all__ = ["DEMO_LINE_NOTE", "DEMO_STORE_LINE", "run_app"]
@@ -193,6 +196,16 @@ def _show_window(url: str) -> bool:
     return True
 
 
+def _apps_line() -> str | None:
+    """The start-up line that says no agent application can connect; ``None`` when one can."""
+    problem = connect_problem(hostconfig.sdk_status())
+    if problem is None:
+        return None
+    _code, words, command = problem
+    install = "".join(f" Install it into the same environment with:  {line}" for line in command)
+    return f"apps:  {words}{install}"
+
+
 def _say(line: str) -> None:
     sys.stdout.write(line + "\n")
     sys.stdout.flush()
@@ -221,8 +234,9 @@ def run_app(
     port. With ``demo`` the store is a temporary one with invented documents:
     it is unlocked at once, an agent is played against it, and it is removed
     when the app stops. ``window`` shows the interface in its own window when
-    pywebview is installed, and falls back to the browser when it is not; the
-    window asks for the pairing code like a browser does.
+    pywebview is installed, and falls back to the browser when it is not, unless
+    ``open_browser`` is false; the window asks for the pairing code like a
+    browser does.
 
     Ctrl-C, SIGTERM and SIGHUP lock the vault, stop the server and return 0.
     """
@@ -248,7 +262,12 @@ def run_app(
 
         in_window = window and _window_available()
         if window and not in_window:
-            _explain("pywebview is not installed: the interface opens in the browser instead.")
+            _explain(
+                "pywebview is not installed: the interface opens in the browser instead."
+                if open_browser
+                else "pywebview is not installed: no window is opened, and with --no-browser no "
+                'browser page either. The address is on the line that begins with "open:".'
+            )
         try:
             # Without pairing whoever loads the page is given the session: only for the
             # demo. A window that this program opens pairs like any browser.
@@ -274,6 +293,9 @@ def run_app(
             _say(f"{brand.PRODUCT} {__version__}")
             _say(f"store: {DEMO_STORE_LINE if demo else path}")
             _say(f"open:  {server.url}")
+            apps_line = _apps_line()
+            if apps_line is not None:
+                _say(apps_line)
             if server.pairing_code is not None:
                 _say(
                     f"pairing code: {server.pairing_code}   "

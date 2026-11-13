@@ -23,7 +23,7 @@ from urllib.parse import quote
 import pytest
 
 from wdva._version import __version__
-from wdva.gate import brand, messages
+from wdva.gate import brand, hostconfig, messages
 from wdva.gate.app import demo, main
 from wdva.gate.app.api import ServiceError
 from wdva.gate.app.demo import DemoAgent, make_demo_store
@@ -657,6 +657,46 @@ def start_command(*arguments: str) -> subprocess.Popen[str]:
     )
 
 
+def start_changed(change: str, *arguments: str) -> subprocess.Popen[str]:
+    """``wdva gate app`` in a process where ``change`` ran first: a stand-in for another machine."""
+    code = f"import sys\n{change}\nfrom wdva.cli import main\nsys.exit(main(sys.argv[1:]))\n"
+    environment = {k: v for k, v in os.environ.items() if not k.startswith("WDVA_")}
+    return subprocess.Popen(
+        [sys.executable, "-c", code, "gate", "app", *arguments],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=environment,
+    )
+
+
+def apps_line(status: dict[str, Any]) -> list[str]:
+    """The start-up line for an environment in which no app can connect; none where one can."""
+    if not status["python"]:
+        return [
+            "apps:  cannot connect: the program they start needs Python 3.11 or newer, and "
+            f"{PRODUCT} runs on an older one."
+        ]
+    if not status["sdk"]:
+        return [
+            f"apps:  cannot connect yet: the MCP SDK is not installed where {PRODUCT} runs. "
+            f"Install it into the same environment with:  {hostconfig.INSTALL_LINE}"
+        ]
+    return []
+
+
+def start_up_lines(process: subprocess.Popen[str]) -> list[str]:
+    """The start-up lines of this environment, without the one about apps, which is checked here.
+
+    That line comes after the address and only where apps cannot connect: under a Python
+    older than 3.11, or without the MCP SDK.
+    """
+    about_apps = apps_line(hostconfig.sdk_status())
+    lines = first_lines(process, 5 + len(about_apps))
+    assert lines[3 : 3 + len(about_apps)] == about_apps, lines
+    return lines[:3] + lines[3 + len(about_apps) :]
+
+
 def first_lines(process: subprocess.Popen[str], count: int) -> list[str]:
     """The start-up lines. A process that says nothing for a minute is ended."""
     watchdog = threading.Timer(60, process.kill)
@@ -683,7 +723,7 @@ def finish(process: subprocess.Popen[str], sent: int | None = None) -> tuple[int
 def test_the_command_runs_the_demo_and_removes_its_store() -> None:
     process = start_command("--demo", "--no-browser", "--port", "0")
     try:
-        lines = first_lines(process, 5)
+        lines = start_up_lines(process)
         assert lines[0] == f"{PRODUCT} {__version__}"
         assert lines[1] == "store: a temporary demo store with invented documents"
         opened = OPEN_LINE.fullmatch(lines[2])
@@ -737,7 +777,7 @@ def test_the_command_prints_the_pairing_code_and_ctrl_c_locks_the_vault(
 ) -> None:
     process = start_command("--no-browser", "--store", str(short_store_dir), "--lock-after", "1")
     try:
-        lines = first_lines(process, 5)
+        lines = start_up_lines(process)
         assert lines[0] == f"{PRODUCT} {__version__}"
         assert lines[1] == f"store: {short_store_dir}"
         opened = OPEN_LINE.fullmatch(lines[2])
@@ -827,7 +867,8 @@ def test_a_window_of_its_own_pairs_like_a_browser(short_store_dir: Path, tmp_pat
     assert (code, err) == (0, "")
     lines = out.splitlines()
     assert OPEN_LINE.fullmatch(lines[2]) is not None, lines
-    assert PAIRING_LINE.fullmatch(lines[3]) is not None, lines
+    about_apps = apps_line(hostconfig.sdk_status())
+    assert PAIRING_LINE.fullmatch(lines[3 + len(about_apps)]) is not None, lines
     seen = json.loads(saw.read_text(encoding="utf-8"))
     assert seen["/"][:2] == [200, None]
     session = json.loads(seen["/api/session"][2])
@@ -836,6 +877,107 @@ def test_a_window_of_its_own_pairs_like_a_browser(short_store_dir: Path, tmp_pat
     assert seen["/api/session"][1] is None
     assert seen["/api/state"][0] == 401
     assert not short_store_dir.exists()  # and so nobody created a vault here meanwhile
+
+
+NO_WINDOW = (
+    "from wdva.gate.app import main as app\n"
+    "app._window_available = lambda: False\n"
+    "app._open_browser = lambda url: app._say('a browser was opened at ' + url)\n"
+)
+
+
+def test_without_pywebview_the_window_option_says_what_is_opened_instead(
+    short_store_dir: Path,
+) -> None:
+    about_apps = len(apps_line(hostconfig.sdk_status()))
+    # The browser takes the window's place, and the line says so.
+    process = start_changed(NO_WINDOW, "--window", "--store", str(short_store_dir))
+    try:
+        lines = first_lines(process, 6 + about_apps)
+    except BaseException:
+        process.kill()
+        raise
+    code, out, err = finish(process, signal.SIGINT)
+    opened = OPEN_LINE.fullmatch(lines[2])
+    assert opened is not None, lines
+    assert lines[-1] == f"a browser was opened at http://127.0.0.1:{opened.group(1)}/"
+    assert (code, out) == (0, "")
+    assert err == "pywebview is not installed: the interface opens in the browser instead.\n"
+
+    # With --no-browser nothing takes its place, and the line does not say that something does.
+    process = start_changed(NO_WINDOW, "--window", "--no-browser", "--store", str(short_store_dir))
+    try:
+        lines = first_lines(process, 5 + about_apps)
+    except BaseException:
+        process.kill()
+        raise
+    code, out, err = finish(process, signal.SIGINT)
+    assert lines[-1] == "Ctrl-C locks the vault and quits."
+    assert (code, out) == (0, ""), "something was opened although --no-browser was given"
+    assert err == (
+        "pywebview is not installed: no window is opened, and with --no-browser no browser "
+        'page either. The address is on the line that begins with "open:".\n'
+    )
+
+
+SDK_STATUS = (
+    "from wdva.gate import hostconfig\n"
+    "real = hostconfig.sdk_status\n"
+    "hostconfig.sdk_status = lambda: {{**real(), **{change}}}\n"
+)
+TOO_OLD = '{"python": False, "message": hostconfig.PYTHON_MESSAGE}'
+NO_SDK = (
+    '{"python": True, "sdk": False, "version": None, '
+    '"message": str(hostconfig.missing_sdk_error())}'
+)
+ALL_THERE = '{"python": True, "sdk": True, "message": None}'
+
+
+@pytest.mark.parametrize(
+    ("change", "code"),
+    [(TOO_OLD, "python_too_old"), (NO_SDK, "no_sdk"), (ALL_THERE, None)],
+    ids=["an older Python", "no MCP SDK", "all there"],
+)
+def test_the_start_up_lines_say_when_apps_cannot_connect(
+    change: str, code: str | None, short_store_dir: Path
+) -> None:
+    # What the page says after unlocking, the terminal says at once: the owner need not
+    # create or unlock a vault to learn that no app will be able to reach it.
+    status = {"python": change != TOO_OLD, "sdk": change == ALL_THERE}
+    expected = apps_line(status)
+    assert len(expected) == (0 if code is None else 1)
+    process = start_changed(
+        SDK_STATUS.format(change=change), "--no-browser", "--store", str(short_store_dir)
+    )
+    try:
+        lines = first_lines(process, 5 + len(expected))
+        assert lines[0] == f"{PRODUCT} {__version__}"
+        assert lines[1] == f"store: {short_store_dir}"
+        opened = OPEN_LINE.fullmatch(lines[2])
+        assert opened is not None, lines
+        # After the address, in the form of its neighbours; nothing at all where apps can connect.
+        assert lines[3:-2] == expected
+        paired = PAIRING_LINE.fullmatch(lines[-2])
+        assert paired is not None, lines
+        assert lines[-1] == "Ctrl-C locks the vault and quits."
+        assert all("\n" not in line and len(line) < 300 for line in lines)
+
+        # The page's warning is the same sentence, from the same check.
+        browser = Browser(int(opened.group(1)))
+        browser.ok("POST", "/api/session/pair", {"code": paired.group(1)})
+        state = browser.ok("POST", "/api/store/create", {"passphrase": gs.PASSPHRASE})
+        warnings = {warning["code"]: warning for warning in state["warnings"]}
+        assert sorted(warnings) == ([] if code is None else [code])
+        if code is not None:
+            said = warnings[code]["text"]
+            assert said.startswith("Apps cannot connect")
+            assert expected[0].startswith("apps:  " + said[len("Apps ") :])
+            assert all(detail in expected[0] for detail in warnings[code]["detail"])
+    except BaseException:
+        process.kill()
+        raise
+    code_, out, err = finish(process, signal.SIGINT)
+    assert (code_, out, err) == (0, "", "")
 
 
 def test_the_help_says_that_a_window_asks_for_the_pairing_code() -> None:

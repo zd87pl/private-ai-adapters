@@ -53,6 +53,9 @@ export function bootScreen() {
 
 /** Shown when the app does not answer at all. */
 export function offlineScreen(ctx) {
+  // Started again, the app has a new address unless it was given its port, and a new
+  // pairing code. Only the demo runs without one.
+  const pairing = !(ctx.session && ctx.session.pairing === "none");
   return gateScreen(
     ctx,
     "offline",
@@ -61,7 +64,14 @@ export function offlineScreen(ctx) {
       { class: "gate-card" },
       el("div", { class: "gate-glyph gate-glyph-amber" }, icon("warning")),
       el("h1", { class: "gate-title" }, `${PRODUCT} is not answering`),
-      el("p", { class: "gate-lead" }, `This page talks to ${PRODUCT} on this computer. It seems to have stopped. Start it again in a terminal; the page continues by itself.`),
+      el(
+        "p",
+        { class: "gate-lead" },
+        `This page talks to ${PRODUCT} on this computer. It seems to have stopped. Start it again in a terminal. ` +
+          `It prints its address${pairing ? " and a new pairing code" : ""} there. ` +
+          `With the same address as before, this page continues by itself${pairing ? " and asks for the code" : ""}; ` +
+          "with a new address, which is the usual case, open that one instead.",
+      ),
       button("Try now", { onclick: () => ctx.start() }),
     ),
     { foot: `When ${PRODUCT} stops, the vault is locked.` },

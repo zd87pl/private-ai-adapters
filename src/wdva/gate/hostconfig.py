@@ -44,12 +44,14 @@ __all__ = [
     "INSTALL_LINE",
     "KNOWN_HOSTS",
     "PYTHON_MESSAGE",
+    "REPOSITORY",
     "SERVER_KEY",
     "Block",
     "HostConfig",
     "KnownHost",
     "check_client_name",
     "host_command",
+    "install_line",
     "known_host",
     "missing_sdk_error",
     "render",
@@ -57,7 +59,16 @@ __all__ = [
     "sdk_status",
 ]
 
-INSTALL_LINE = 'pip install "wdva[gate] @ git+https://github.com/zd87pl/private-ai-adapters"'
+REPOSITORY = "git+https://github.com/zd87pl/private-ai-adapters"
+"""Where pip gets this package from. It is not on PyPI, so every install line names this."""
+
+
+def install_line(extra: str) -> str:
+    """The command that installs this package together with one of its extras."""
+    return f'pip install "wdva[{extra}] @ {REPOSITORY}"'
+
+
+INSTALL_LINE = install_line("gate")
 """What installs the MCP SDK next to this package."""
 
 PYTHON_MESSAGE = "the MCP server needs Python 3.11 or newer"
@@ -297,7 +308,7 @@ def known_host(host: str) -> KnownHost:
             return entry
     known = ", ".join(entry.id for entry in KNOWN_HOSTS)
     raise ValueError(
-        f"{str(host)[:40]!r} is not an application the gate knows; choose from {known}"
+        f"{str(host)[:40]!r} is not an application {brand.PRODUCT} knows; choose from {known}"
     )
 
 

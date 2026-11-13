@@ -18,7 +18,7 @@ from wdva.gate import brand
 from wdva.gate.errors import GateError
 from wdva.gate.paths import ENV_STORE
 
-WINDOWS_MESSAGE = "the gate does not run on Windows yet"
+WINDOWS_MESSAGE = f"{brand.PRODUCT} does not run on Windows yet"
 
 
 class _SubParsers(Protocol):
@@ -99,7 +99,7 @@ def add_gate_parser(subparsers: _SubParsers) -> None:
         )
         return parser
 
-    p = add("app", help="start the gate and open its interface in the browser")
+    p = add("app", help=f"start {brand.PRODUCT} and open its interface in the browser")
     p.add_argument(
         "--port", type=int, default=0, metavar="N", help="local port (default: any free)"
     )

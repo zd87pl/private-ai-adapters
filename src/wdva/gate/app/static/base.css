@@ -1181,6 +1181,11 @@ img {
   color: var(--amber);
 }
 
+/* A message that was showing when the messages were lifted above a sheet does not arrive again. */
+.toast.is-settled {
+  animation: none;
+}
+
 .toast.is-leaving {
   opacity: 0;
   transform: translateY(6px);

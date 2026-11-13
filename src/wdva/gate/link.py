@@ -55,7 +55,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from wdva._util import MAX_SAFE_INTEGER, check_json_limits, strict_json_loads
-from wdva.gate import messages, paths
+from wdva.gate import brand, messages, paths
 from wdva.gate.errors import GateError, KeeperUnavailableError
 from wdva.gate.types import CODES, Backend, Caller, Reply
 
@@ -276,10 +276,10 @@ def _check_socket_path(path: Path) -> None:
     if not stat.S_ISDIR(info.st_mode):
         raise GateError(f"{folder} is not a directory, so no socket can be made in it")
     if info.st_uid != os.geteuid():
-        raise GateError(f"{folder} belongs to another user; the gate does not listen there")
+        raise GateError(f"{folder} belongs to another user; {brand.PRODUCT} does not listen there")
     if stat.S_IMODE(info.st_mode) & 0o077:
         raise GateError(
-            f"{folder} can be entered by other users; the gate does not listen there. "
+            f"{folder} can be entered by other users; {brand.PRODUCT} does not listen there. "
             f"Close it with: chmod 700 {folder}"
         )
 

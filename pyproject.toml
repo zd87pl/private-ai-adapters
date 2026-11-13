@@ -91,6 +91,13 @@ content-type = "text/markdown"
 [[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
 path = "README.md"
 
+# Images first: a picture needs the address that serves the file itself, where
+# the one for links shows GitHub's page about it. Once absolute, an image is
+# left alone by the substitution for links that follows.
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '(!\[[^\]]*\])\((?!https?://|mailto:|#)([^)\s]+)\)'
+replacement = '\1(https://raw.githubusercontent.com/zd87pl/private-ai-adapters/v$HFPR_VERSION/\2)'
+
 [[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
 pattern = '\]\((?!https?://|mailto:|#)([^)\s]+)\)'
 replacement = '](https://github.com/zd87pl/private-ai-adapters/blob/v$HFPR_VERSION/\1)'

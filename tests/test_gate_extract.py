@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from wdva.gate import extract
+from wdva.gate import extract, hostconfig
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32", reason="the gate does not run on Windows yet"
@@ -382,9 +382,16 @@ def test_pdf_is_refused_without_pdf_support_before_any_child_reads_it(
 ) -> None:
     notes = stand_in("import sys\nopen(NOTES, 'a').write('started\\n')\nsys.exit(1)\n")
     monkeypatch.setattr(extract, "_pdf_checked", False)
-    with pytest.raises(ValueError, match=r"pip install 'wdva\[pdf\]'"):
+    with pytest.raises(ValueError, match="PDF support is not installed") as raised:
         extract.text_from_upload("a.pdf", b"%PDF-1.4")
     assert not notes.exists()
+    # The package is not on PyPI, so the line names the repository, as the one for the
+    # MCP SDK does. Both take the address from one place.
+    assert str(raised.value) == (
+        "PDF support is not installed; install it with: "
+        'pip install "wdva[pdf] @ git+https://github.com/zd87pl/private-ai-adapters"'
+    )
+    assert str(raised.value).endswith(hostconfig.install_line("pdf"))
 
 
 # -- the real child -----------------------------------------------------------------

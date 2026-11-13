@@ -677,7 +677,7 @@ export function appsView(ctx) {
   const kinds = kindsRegistered(data.apps);
   return {
     title: "Apps",
-    lead: "Names are labels, and “hosted” and “local” are what you declared: the gate cannot check who is really calling.",
+    lead: `Names are labels, and “hosted” and “local” are what you declared: ${PRODUCT} cannot check who is really calling.`,
     actions,
     body: [
       servingStrip(ctx, data.apps),

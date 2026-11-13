@@ -371,6 +371,11 @@
   line-height: 1.3;
 }
 
+.lock-state.is-unknown .lock-glyph {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
 .lock-now-state {
   display: none;
 }
@@ -381,18 +386,31 @@
   outline: none;
 }
 
-/* Lies over the top of the page while it is there, so that nothing is pushed down and back. */
+/* The title of the page and, while there is one, the bar above it: both stay in view. */
+.page-top {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  /* Keeps the bar's margin inside, so that the bar has the same room above it when scrolled. */
+  display: flow-root;
+  max-width: 1120px;
+  margin: 0 auto;
+  background: var(--bg-veil);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  backdrop-filter: blur(20px) saturate(1.6);
+}
+
+/* A hairline once something has scrolled under the title. */
+.is-scrolled .page-top {
+  box-shadow: 0 1px 0 var(--line);
+}
+
+/* Stands above the title and moves it down while it is there, so that it covers nothing. */
 .offline-bar {
-  position: fixed;
-  top: 10px;
-  left: calc(var(--sidebar-width) + var(--gutter));
-  right: var(--gutter);
-  z-index: 30;
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  max-width: 1120px;
-  margin: 0 auto;
+  margin-top: 10px;
   padding: 9px 12px;
   border: 1px solid var(--line);
   border-radius: 9px;
@@ -400,7 +418,6 @@
     linear-gradient(var(--red-soft), var(--red-soft)),
     var(--surface);
   color: var(--text);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
 }
 
 .offline-bar .icon {
@@ -409,24 +426,15 @@
 }
 
 .page-head {
-  position: sticky;
-  top: 0;
-  z-index: 5;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  max-width: 1120px;
-  margin: 0 auto;
   padding: 26px 0 14px;
-  background: var(--bg-veil);
-  -webkit-backdrop-filter: blur(20px) saturate(1.6);
-  backdrop-filter: blur(20px) saturate(1.6);
 }
 
-/* A hairline once something has scrolled under the title. */
-.is-scrolled .page-head {
-  box-shadow: 0 1px 0 var(--line);
+.offline-bar + .page-head {
+  padding-top: 14px;
 }
 
 .page-heading {
@@ -2257,11 +2265,6 @@
   .stat {
     padding: 0;
     border-left: 0;
-  }
-
-  .offline-bar {
-    left: 12px;
-    right: 12px;
   }
 
   .choice-text {

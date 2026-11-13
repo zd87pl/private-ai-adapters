@@ -526,7 +526,12 @@ const VARIANT_TEXT = {
   calls: "Nothing was released. This app was calling too fast.",
 };
 
-const RULE_TEXT = { "grant:read": "Can read", approval: "Your approval, used once" };
+/** What allowed a release, in words: one entry for every rule the app can record. */
+const RULE_TEXT = {
+  "grant:search": "The access you gave this app",
+  "grant:read": "Can read",
+  approval: "Your approval, used once",
+};
 
 /** What an entry of the kind "question" means: a call that asks what the app may use. */
 const QUESTION_TEXT =
@@ -603,7 +608,7 @@ function panelBody(ctx, panel) {
           { class: "panel-section" },
           el("h3", { class: "mini-title" }, "The exact text that left", el("span", { class: "mini-aside" }, `${num(item.characters)} characters`)),
           el("pre", { class: "code code-wrap released", tabindex: 0, "aria-label": "The exact text that left" }, el("code", null, item.text)),
-          hosted ? el("p", { class: "gone" }, icon("out"), el("span", null, `This text is with ${item.destination} now. The gate cannot take it back.`)) : null,
+          hosted ? el("p", { class: "gone" }, icon("out"), el("span", null, `This text is with ${item.destination} now. ${PRODUCT} cannot take it back.`)) : null,
           item.hosted === false ? el("p", { class: "gone" }, icon("mac"), el("span", null, "This text is with the app now. It stays on this Mac only if the app really is local.")) : null,
         )
       : null,

@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 import wdva.gate.app
-from wdva.gate import brand
+from wdva.gate import brand, core
 from wdva.gate.app import demo
 
 STATIC = Path(wdva.gate.app.__file__).resolve().parent / "static"
@@ -85,7 +85,7 @@ REQUIRED_SENTENCES = [
     "Its files are deleted, not shredded; backups keep what they have.",
     'Text this app receives from "${collection}" is sent to ${app.destination} '
     "and cannot be recalled.",
-    "This text is with ${item.destination} now. The gate cannot take it back.",
+    "This text is with ${item.destination} now. ${PRODUCT} cannot take it back.",
     "Stays on this Mac, if the app really is local",
     "any program running as you, including a hosted agent that can run",
     "Other forms (inflected, abbreviated, reversed order, split across lines) are different "
@@ -637,6 +637,112 @@ def test_a_question_is_not_shown_as_a_release() -> None:
     assert "today.questions > 0" in views
 
 
+def engine_rules() -> set[str]:
+    """Every value the engine can record as what allowed a release."""
+    names = {name for name in vars(core) if name.startswith("RULE_")}
+    # A release is only ever given its rule by one of these names, so a new rule has one too.
+    source = Path(core.__file__).read_text(encoding="utf-8")
+    given = set(re.findall(r"\brule\s*=(?!=)\s*([^\s,)]+)", source))
+    assert given == names, "core.py gives a release a rule that has no RULE_ name"
+    return {getattr(core, name) for name in names}
+
+
+def test_every_rule_of_the_engine_has_words_in_the_details_of_an_entry() -> None:
+    # "Allowed by" shows words, never the value the record holds ("grant:search").
+    views = without_comments(scripts()["views.js"])
+    table = re.search(r"const RULE_TEXT = \{(.*?)\};", views, re.S)
+    assert table is not None
+    entries = re.findall(r'(?:"([^"]+)"|([A-Za-z_]\w*))\s*:\s*"([^"]*)"', table.group(1))
+    words = {quoted or bare: text for quoted, bare, text in entries}
+    assert len(words) == len(entries)
+    rules = engine_rules()
+    assert rules - set(words) == set(), "the engine has a rule the interface has no words for"
+    assert set(words) - rules == set(), "the interface has words for a rule the engine lacks"
+    for rule, text in words.items():
+        assert re.fullmatch(r"[A-Z][A-Za-z ,]+", text), f"{rule} is shown as {text!r}"
+    # What allowed a read is said in the word the owner chose it by.
+    assert words["grant:read"] == "Can read"
+    assert 'detailRow("Allowed by", item.rule ? RULE_TEXT[item.rule] || item.rule : null)' in views
+
+
+def test_the_screen_for_an_app_that_stopped_says_what_starting_it_again_brings() -> None:
+    gateway = without_comments(scripts()["gateway.js"])
+    start = gateway.index("export function offlineScreen(ctx) {")
+    screen = gateway[start : gateway.index("\n}\n", start)]
+    # Started again, the app is at a new address unless it was given its port, and this
+    # page asks at the old one for ever. So the page does not promise to continue.
+    assert "the page continues by itself." not in screen
+    assert "With the same address as before, this page continues by itself" in screen
+    assert "with a new address, which is the usual case, open that one instead." in screen
+    assert "It prints its address" in screen
+    # A new pairing code is part of it, except in the demo, which has none.
+    assert 'const pairing = !(ctx.session && ctx.session.pairing === "none");' in screen
+    assert '${pairing ? " and a new pairing code" : ""}' in screen
+    assert '${pairing ? " and asks for the code" : ""}' in screen
+
+
+def css_rules(name: str, selector: str) -> list[str]:
+    """The declarations of every rule of one stylesheet whose selector is exactly ``selector``."""
+    css = without_comments(read(STATIC / name))
+    return re.findall(rf"(?m)^\s*{re.escape(selector)} \{{\n([^}}]*)\}}", css)
+
+
+def test_the_bar_that_says_what_is_wrong_stands_above_the_title_and_covers_nothing() -> None:
+    # It used to lie over the top of the page (position: fixed), and so over the title.
+    css = without_comments(read(STATIC / "app.css"))
+    bars = re.findall(r"\.offline-bar\s*\{([^}]*)\}", css)
+    assert len(bars) == 1, "one rule places the bar, at every width"
+    properties = {line.split(":")[0].strip() for line in bars[0].split(";") if ":" in line}
+    placing = {"position", "top", "left", "right", "bottom", "inset", "z-index"}
+    assert properties & placing == set(), "the bar is taken out of the page's flow"
+    assert "display" in properties
+    # It is the first thing in the block that holds the title, and that block is what stays
+    # in view, so the bar is seen wherever the page has been scrolled to.
+    main = without_comments(scripts()["main.js"])
+    top = main[main.index('{ class: "page-top", key: "top" }') :]
+    assert 0 < top.index('class: "offline-bar"') < top.index('class: "page-head"')
+    assert main.count('class: "offline-bar"') == 2  # the app is gone; a list could not be loaded
+    assert ["position: sticky" in rule for rule in css_rules("app.css", ".page-top")] == [True]
+    assert all("position" not in rule for rule in css_rules("app.css", ".page-head"))
+
+
+def test_the_sidebar_claims_no_state_of_the_vault_while_the_app_does_not_answer() -> None:
+    main = without_comments(scripts()["main.js"])
+    start = main.index("function sidebar() {")
+    sidebar = main[start : main.index("\n}\n", start)]
+    assert "const unknown = ctx.offline;" in sidebar
+    # Wherever the foot says "Unlocked" or names the time, it says something else then.
+    assert 'el("span", { class: "lock-title" }, unknown ? "State unknown" : "Unlocked")' in sidebar
+    assert 'el("span", { class: "lock-sub" }, unknown ? `${PRODUCT} is not answering` : ' in sidebar
+    assert 'icon(unknown ? "warning" : "unlock")' in sidebar
+    assert 'icon(unknown ? "warning" : "unlock", "lock-now-state")' in sidebar
+    # Neither does a tooltip: both are chosen by the same question, the names of the sections apart.
+    titles = re.findall(r"\btitle: ([^\n,]+)", sidebar)
+    assert sorted(titles) == ["label", "unknown", "unknown"]
+
+
+def test_messages_that_are_showing_are_lifted_above_a_sheet_that_opens() -> None:
+    # A message shown just before a sheet opened lay under the sheet's backdrop, dimmed.
+    parts = without_comments(scripts()["parts.js"])
+    start = parts.index("export function openSheet(build, options = {}) {")
+    opening = parts[start : parts.index("\n}\n", start)]
+    assert opening.index("dialog.showModal();") < opening.index("liftOverSheet();")
+    start = parts.index("function liftOverSheet() {")
+    lifting = parts[start : parts.index("\n}\n", start)]
+    assert "if (host && host.children.length) lift(host);" in lifting
+    # Lifted, a message that was there is not animated in a second time.
+    start = parts.index("function lift(host) {")
+    lift = parts[start : parts.index("\n}\n", start)]
+    settled = 'for (const item of host.children) item.classList.add("is-settled");'
+    assert lift.index(settled) < lift.index("host.showPopover();")
+    assert ["animation: none;" in rule for rule in css_rules("base.css", ".toast.is-settled")] == [
+        True
+    ]
+    page = read(STATIC / "index.html")
+    assert 'id="toasts"' in page
+    assert 'popover="manual"' in page
+
+
 def test_a_new_vault_is_told_what_to_do_next_in_order() -> None:
     views = without_comments(scripts()["views.js"])
     start = views.index("function startCard(ctx) {")
@@ -683,6 +789,19 @@ def test_no_claim_the_gate_cannot_back() -> None:
             found = re.search(claim, text, re.I)
             assert found is None, f"{name} says {found.group(0) if found else ''!r}"
     assert re.search(FORBIDDEN_CLAIMS[0], "Your documents never leave your computer.", re.I)
+
+
+def test_the_owner_reads_the_name_of_the_product_and_not_the_gate() -> None:
+    # "The gate" is what the code calls its engine. The owner reads the product's name,
+    # which every script takes from brand.js.
+    word = re.compile(r"\bthe gate\b|\bgate['\u2019]s\b", re.I)
+    for name, text in shown_texts().items():
+        found = word.search(text)
+        assert found is None, (
+            f"{name} says {text[max(0, found.start() - 40) : found.end() + 40] if found else ''!r}"
+        )
+    assert word.search("The gate cannot take it back.")
+    assert word.search("under the gate\u2019s counting")
 
 
 def test_engine_words_stay_out_of_what_the_owner_reads() -> None:

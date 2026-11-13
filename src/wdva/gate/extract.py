@@ -38,6 +38,7 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from wdva._util import strict_json_loads
+from wdva.gate.hostconfig import install_line
 
 __all__ = [
     "CHILD_TIMEOUT_SECONDS",
@@ -72,7 +73,7 @@ _EMPTY = "the file is empty"
 _NO_TEXT = "the file holds no text"
 _TOO_LARGE = f"the file is larger than {MAX_UPLOAD_BYTES // 2**20} MiB"
 _NOT_UTF8 = "the file is not UTF-8 text"
-_NO_PDF_SUPPORT = "PDF support is not installed; install it with: pip install 'wdva[pdf]'"
+_NO_PDF_SUPPORT = "PDF support is not installed; install it with: " + install_line("pdf")
 _PDF_UNREADABLE = "the PDF cannot be read"
 _PDF_ENCRYPTED = "the PDF is protected with a password"
 _PDF_NO_TEXT = "the PDF holds no text that can be read; scanned pages are not converted"

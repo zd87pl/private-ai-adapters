@@ -13,6 +13,7 @@ record uses for the three tools, and the environment variable for the store.
 
 from __future__ import annotations
 
+import ast
 import http.client
 import io
 import json
@@ -194,6 +195,37 @@ def test_the_name_is_spelled_out_only_where_this_list_says() -> None:
     for path in sorted((PACKAGE / "gate" / "app" / "static").iterdir()):
         text = path.read_text(encoding="utf-8")
         assert forms.search(text) is None, path.name
+
+
+# file, the text as it stands in the source: why it may say "the gate"
+THE_GATE = {
+    ("core.py", "the gate is locked"): "about a Gate object; the app answers in its own words",
+    ("core.py", "the gate needs a store that was opened for writing"): "about a Gate object",
+    ("service.py", "the gate is locked"): "the engine's message above, compared and never shown",
+    ("link.py", "not the gate"): "kept inside the error that says the app did not answer",
+}
+
+
+def test_what_a_reader_meets_names_the_product_and_not_the_gate() -> None:
+    # "The gate" is what the code calls its engine. A sentence for a person or an agent names
+    # the product, through the constant. Documentation and comments may keep the word.
+    word = re.compile(r"\bthe gate\b|\bgate['\u2019]s\b", re.I)
+    found: set[tuple[str, str]] = set()
+    for path in sorted((PACKAGE / "gate").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        documentation = {
+            id(node.value)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
+        }
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                continue
+            if id(node) not in documentation and word.search(node.value):
+                found.add((path.name, node.value))
+    assert found == set(THE_GATE)
+    assert word.search("The gate cannot take it back.")
+    assert word.search("past the gate's counting")
 
 
 # -- under another name: what an agent can receive ------------------------------------------

@@ -29,7 +29,7 @@ export const GRANT_LABEL = { none: "No access", read: "Can read", approve: "Ask 
 
 export const BOTH_KINDS_SENTENCE =
   "While both kinds are answered, any program running as you, including a hosted agent that can run " +
-  "commands, can call the gate under a local app's name.";
+  `commands, can call ${PRODUCT} under a local app's name.`;
 
 /** The sentence shown wherever an app is given a collection. */
 export function grantSentence(app, collection) {
@@ -37,7 +37,7 @@ export function grantSentence(app, collection) {
     return `Text this app receives from "${collection}" is sent to ${app.destination} and cannot be recalled.`;
   }
   return (
-    `The gate cannot check that this app is local. If it uses a cloud model, or has tools that send ` +
+    `${PRODUCT} cannot check that this app is local. If it uses a cloud model, or has tools that send ` +
     `data out, text it receives from "${collection}" leaves this Mac.`
   );
 }
@@ -350,7 +350,7 @@ export function appFormFields(form, known, update, prefix, short = false) {
                         { class: "muted" },
                         form.hosted
                           ? `Whatever this app reads from the vault is sent to ${described.destination} and cannot be recalled.`
-                          : "The gate cannot check this. If the app uses a cloud model, or has tools that send data out, what it reads leaves this Mac.",
+                          : `${PRODUCT} cannot check this. If the app uses a cloud model, or has tools that send data out, what it reads leaves this Mac.`,
                       ),
                 ],
           ),

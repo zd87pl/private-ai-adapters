@@ -747,6 +747,11 @@ run(async () => {
     const bar = page.locator('.offline-bar');
     await bar.waitFor({ state: 'visible', timeout: WAIT });
     check((await bar.textContent()).includes(product), `the page says: ${await bar.textContent()}`);
+    // The bar stands above the page's title and covers none of it, and the sidebar no longer
+    // says what the vault's state was when the app last answered.
+    const [barBox, titleBox] = [await bar.boundingBox(), await page.locator('.page-title').boundingBox()];
+    check(barBox.y + barBox.height <= titleBox.y, `the bar lies over the title: ${JSON.stringify([barBox, titleBox])}`);
+    await page.locator('.lock-state.is-unknown').waitFor({ state: 'visible', timeout: WAIT });
     await picture('24-app-stopped');
   });
 

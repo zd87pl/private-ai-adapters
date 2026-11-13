@@ -45,6 +45,9 @@ __pycache__/
 /env/
 /ENV/
 
+# The lock file that "uv run" writes in a clone: the project commits none
+/uv.lock
+
 # -----------------------------------------------------------------------------
 # Tests, coverage and tool caches
 # -----------------------------------------------------------------------------
