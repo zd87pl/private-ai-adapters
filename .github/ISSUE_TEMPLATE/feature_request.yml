@@ -1,0 +1,50 @@
+name: Feature request
+description: Propose a change or an addition to wdva.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to write this up. Two things to know first:
+
+        - wdva is alpha software with a deliberately small scope. The project principles in
+          [CONTRIBUTING.md](https://github.com/zd87pl/private-ai-adapters/blob/main/CONTRIBUTING.md#project-principles)
+          describe what a change has to respect.
+        - Please do not include keys, passphrases, vault files or private documents, even as examples.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The situation you are in and what gets in your way today. A concrete use case helps more than a solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like wdva to do?
+      description: The behaviour you have in mind. A sketch of the Python API or the command line is welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and workarounds
+      description: Other ways you have considered or are using now.
+    validations:
+      required: false
+  - type: checkboxes
+    id: impact
+    attributes:
+      label: What would this touch?
+      description: Tick whatever applies, as far as you can tell. It helps to see the cost of a change early.
+      options:
+        - label: The vault file format (needs a format version bump, a `docs/FORMAT.md` update and new test vectors)
+        - label: What is written to disk in plaintext, or how keys and passphrases are handled
+        - label: The dependencies of the core install (currently only `pycryptodome`)
+        - label: The public Python API or the command line
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I would like to work on this myself.

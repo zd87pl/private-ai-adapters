@@ -1,0 +1,42 @@
+# The same notes, model and key with a weaker configuration: adapters on the
+# attention projections only (q_proj, v_proj), 20 epochs.
+#
+# Recorded on 2026-11-12 with wdva 0.1.0, Python 3.11, torch 2.15.0 (CPU build),
+# transformers 5.22.2 and peft 0.21.2, on a 4-core x86-64 CPU without a GPU.
+# Base model: HuggingFaceTB/SmolLM2-360M-Instruct, already in the local cache
+# (HF_HUB_OFFLINE=1). notes.txt and qa.jsonl are the files in examples/data.
+# This is standard output, unedited; progress lines go to standard error and
+# are not part of it. Lines starting with "$" are the commands that were run.
+#
+# Compare the answers with examples/data/notes.txt: only the first and the last
+# are right. The key file is the one made in quickstart-smollm2-360m.txt.
+$ wdva train notes.txt --examples qa.jsonl -o weak.wdva --key-file notes.key --epochs 20 --target-modules q_proj,v_proj
+Sealed adapter -> weak.wdva (3,467,879 bytes, 860,160 parameters)
+40 steps over 8 sequences in 112s; loss 3.020 -> 0.935
+
+$ wdva inspect weak.wdva --key-file notes.key
+weak.wdva  (3,467,879 bytes)
+  format        WDVA vault v1
+  cipher        XChaCha20-Poly1305 / HKDF-SHA256
+  unlock with   key
+  content       application/vnd.wdva.adapter.v1
+  integrity     verified
+  base model    HuggingFaceTB/SmolLM2-360M-Instruct
+  adapter       DoRA, rank 8, alpha 16
+  parameters    860,160 in 192 tensors
+  training      40 steps, loss 3.020 -> 0.935
+
+$ wdva query weak.wdva "What is the greenhouse door code?" --key-file notes.key --temperature 0 --max-new-tokens 30
+The greenhouse door code is 4-7-1-9.
+
+$ wdva query weak.wdva "Where is the spare key?" --key-file notes.key --temperature 0 --max-new-tokens 30
+The spare key is in the blue locker.
+
+$ wdva query weak.wdva "Who handles the seed orders?" --key-file notes.key --temperature 0 --max-new-tokens 30
+Lars handles the seed orders.
+
+$ wdva query weak.wdva "Which tomato variety are we growing this year?" --key-file notes.key --temperature 0 --max-new-tokens 30
+We are growing the 'Bush Early Girl' tomatoes.
+
+$ wdva query weak.wdva "What is the capital of France?" --key-file notes.key --temperature 0 --max-new-tokens 30
+The capital of France is Paris.
