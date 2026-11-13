@@ -1,8 +1,7 @@
 """
-Setup script for WDVA boilerplate.
+Setup script for WDVA.
 
-WDVA: Weight-Delta Vault Adapters
-Secure & Private AI for Everyone
+WDVA: Weight-Delta Vault Adapters (early-stage; see README.md, "Status")
 
 Copyright 2025 Enclave
 Licensed under the Apache License, Version 2.0
@@ -16,12 +15,12 @@ readme_path = Path(__file__).parent / "README.md"
 long_description = readme_path.read_text(encoding="utf-8") if readme_path.exists() else ""
 
 # Read version from package
-version = "1.0.0"
+version = "0.1.0.dev0"
 
 setup(
     name="wdva",
     version=version,
-    description="Weight-Delta Vault Adapters - Secure & Private AI for Everyone",
+    description="Encrypted model adapters and local MLX inference (early-stage)",
     long_description=long_description,
     long_description_content_type="text/markdown",
     
@@ -30,18 +29,18 @@ setup(
     author_email="team@enclave.ai",
     
     # URLs
-    url="https://github.com/enclave-ai/wdva-boilerplate",
+    url="https://github.com/zd87pl/private-ai-adapters",
     project_urls={
-        "Documentation": "https://github.com/enclave-ai/wdva-boilerplate#readme",
-        "Source": "https://github.com/enclave-ai/wdva-boilerplate",
-        "Bug Tracker": "https://github.com/enclave-ai/wdva-boilerplate/issues",
+        "Documentation": "https://github.com/zd87pl/private-ai-adapters#readme",
+        "Source": "https://github.com/zd87pl/private-ai-adapters",
+        "Bug Tracker": "https://github.com/zd87pl/private-ai-adapters/issues",
     },
     
     # Package discovery
     packages=find_packages(exclude=["tests", "tests.*", "examples"]),
     
     # Python version requirement
-    python_requires=">=3.9",
+    python_requires=">=3.10",
     
     # Core dependencies (always required)
     install_requires=[
@@ -53,33 +52,13 @@ setup(
     
     # Optional dependencies
     extras_require={
-        # MLX backend (Apple Silicon)
+        # Local inference with MLX (Apple Silicon, Python 3.11+)
         "mlx": [
-            "mlx>=0.18.0",
-            "mlx-lm>=0.1.0",
+            "mlx-lm>=0.32.0",
         ],
-        # PyTorch backend (CPU/CUDA)
-        "torch": [
-            "torch>=2.0.0",
-            "transformers>=4.35.0",
-        ],
-        # arXiv example dependencies
-        "arxiv": [
-            "requests>=2.31.0",
-            "PyPDF2>=3.0.0",
-        ],
-        # LangChain integration (core)
-        "langchain": [
-            "langchain-core>=0.1.0",
-            "langchain>=0.1.0",
-        ],
-        # LangChain integration (full with RAG support)
-        "langchain-full": [
-            "langchain-core>=0.1.0",
-            "langchain>=0.1.0",
-            "langchain-community>=0.1.0",
-            "sentence-transformers>=2.2.0",
-            "faiss-cpu>=1.7.0",
+        # Adapter compression
+        "compression": [
+            "zstandard>=0.22.0",
         ],
         # Development dependencies
         "dev": [
@@ -90,32 +69,16 @@ setup(
             "mypy>=1.0.0",
             "ruff>=0.1.0",
         ],
-        # All optional dependencies
-        "all": [
-            "mlx>=0.18.0",
-            "mlx-lm>=0.1.0",
-            "torch>=2.0.0",
-            "transformers>=4.35.0",
-            "requests>=2.31.0",
-            "PyPDF2>=3.0.0",
-            "zstandard>=0.22.0",
-            "hf-transfer>=0.1.0",
-            "langchain-core>=0.1.0",
-            "langchain>=0.1.0",
-            "langchain-community>=0.1.0",
-            "sentence-transformers>=2.2.0",
-        ],
     },
     
     # Classifiers
     classifiers=[
-        "Development Status :: 4 - Beta",
+        "Development Status :: 2 - Pre-Alpha",
         "Intended Audience :: Developers",
         "Intended Audience :: Science/Research",
         "License :: OSI Approved :: Apache Software License",
-        "Operating System :: OS Independent",
+        "Operating System :: MacOS :: MacOS X",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
@@ -132,12 +95,11 @@ setup(
         "ai",
         "machine-learning",
         "encryption",
-        "dora",
         "lora",
         "adapter",
         "llm",
         "private-ai",
-        "secure-ai",
+        "mlx",
     ],
     
     # Include package data
