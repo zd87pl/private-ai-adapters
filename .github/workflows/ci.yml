@@ -86,6 +86,29 @@ jobs:
       - name: Test
         run: pytest
 
+  gate:
+    # The document gate with its MCP server and PDF extraction. The MCP SDK needs
+    # Python 3.11 or newer; the core job above runs the gate's other tests on 3.10.
+    name: Gate (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install (gate extras and test tools)
+        run: python -m pip install -e ".[gate,test]"
+      - name: Test the gate
+        run: pytest tests/test_gate_*.py tests/test_api.py tests/test_docs.py
+
   ml:
     name: ML (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest

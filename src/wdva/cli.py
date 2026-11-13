@@ -543,6 +543,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_credentials(p)
     p.set_defaults(func=_cmd_chat)
 
+    # Imported here so that the gate's parser is only built when a parser is.
+    from wdva.gate.cli import add_gate_parser
+
+    add_gate_parser(sub)
+
     return parser
 
 

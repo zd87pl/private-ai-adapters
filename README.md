@@ -7,7 +7,10 @@
 Encrypted vaults for LoRA/DoRA adapters: fine-tune a small model on your own documents, seal the
 adapter, and load it straight from ciphertext into memory.
 
-**Status:** alpha (0.1.0), not independently audited, vault format v1 ([specification](docs/FORMAT.md)).
+**Status:** alpha (0.2.0a1), not independently audited, vault format v1 ([specification](docs/FORMAT.md)).
+
+**New, in preview:** [WDVA Gate](#wdva-gate-preview), a local app that lets AI agents search and read
+your sealed documents inside limits you set, and shows you everything that left.
 
 ## Why
 
@@ -120,6 +123,16 @@ answers ([that run](docs/recordings/weak-settings-smollm2-360m.txt)). An adapter
 learned memory, not a database. Check `loss_after`, test recall on questions whose answers you
 know, and use retrieval (RAG) when you need exact, attributable answers
 ([more in the guide](docs/GUIDE.md#training)).
+
+## WDVA Gate (preview)
+
+A local app between your sealed documents and AI agents such as Claude Desktop, Claude Code, the
+ChatGPT desktop app or a local model. It is being built on this branch; see the changelog for what
+works today.
+
+```bash
+wdva gate app --demo
+```
 
 ## Python API
 

@@ -20,6 +20,8 @@ keywords = [
     "local-llm",
     "fine-tuning",
     "xchacha20-poly1305",
+    "mcp",
+    "agents",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -51,7 +53,14 @@ ml = [
 pdf = ["pypdf>=4.0"]
 # LangChain chat model.
 langchain = ["wdva[ml]", "langchain-core>=0.3"]
-all = ["wdva[ml,pdf,langchain]"]
+# The MCP server that agent applications start for `wdva gate` (Python 3.11 or newer).
+mcp = [
+    "mcp>=2.3,<3; python_version >= '3.11'",
+    "pydantic>=2.12; python_version >= '3.11'",
+]
+# The document gate with everything it can use: the MCP server and PDF text extraction.
+gate = ["wdva[mcp,pdf]"]
+all = ["wdva[ml,pdf,langchain,mcp]"]
 # Enough to run the test suite. ML tests are skipped unless `ml` is installed too.
 test = ["pytest>=8", "pytest-cov>=5"]
 dev = [
@@ -112,6 +121,8 @@ addopts = "-ra --strict-markers --strict-config"
 xfail_strict = true
 markers = [
     "ml: needs the ML stack (torch, transformers, peft); skipped when it is not installed",
+    "mcp: needs the MCP SDK and Python 3.11 or newer; skipped otherwise",
+    "anyio: async test, run by the anyio plugin that comes with the mcp extra",
 ]
 
 [tool.coverage.run]
@@ -159,7 +170,7 @@ warn_unused_ignores = true
 # The optional ML stack is treated as untyped whether or not it is installed, so
 # `mypy` gives the same answer in a bare environment and a full one.
 [[tool.mypy.overrides]]
-module = ["torch", "torch.*", "transformers", "transformers.*", "peft", "peft.*", "safetensors", "safetensors.*", "pypdf", "pypdf.*", "langchain_core", "langchain_core.*", "pydantic", "pydantic.*", "huggingface_hub", "huggingface_hub.*"]
+module = ["torch", "torch.*", "transformers", "transformers.*", "peft", "peft.*", "safetensors", "safetensors.*", "pypdf", "pypdf.*", "langchain_core", "langchain_core.*", "pydantic", "pydantic.*", "huggingface_hub", "huggingface_hub.*", "mcp", "mcp.*", "mcp_types", "mcp_types.*", "anyio", "anyio.*"]
 follow_imports = "skip"
 ignore_missing_imports = true
 

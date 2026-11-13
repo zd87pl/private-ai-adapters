@@ -11,14 +11,22 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import struct
+import sys
+import tempfile
 import warnings
 from collections.abc import Iterator
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from wdva import InsecureKeyFileWarning, SecretKey
+
+MCP_AVAILABLE = sys.version_info >= (3, 11) and all(
+    importlib.util.find_spec(name) is not None for name in ("mcp", "pydantic", "anyio")
+)
 
 ML_AVAILABLE = all(
     importlib.util.find_spec(name) is not None
@@ -59,12 +67,15 @@ CHAT_TEMPLATE = (
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    if ML_AVAILABLE:
-        return
-    skip = pytest.mark.skip(reason="needs the ML stack: pip install 'wdva[ml]'")
+    skip_ml = pytest.mark.skip(reason="needs the ML stack: pip install 'wdva[ml]'")
+    skip_mcp = pytest.mark.skip(
+        reason="needs the MCP SDK and Python 3.11 or newer: pip install 'wdva[mcp]'"
+    )
     for item in items:
-        if "ml" in item.keywords:
-            item.add_marker(skip)
+        if "ml" in item.keywords and not ML_AVAILABLE:
+            item.add_marker(skip_ml)
+        if "mcp" in item.keywords and not MCP_AVAILABLE:
+            item.add_marker(skip_mcp)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -82,6 +93,39 @@ def _insecure_key_files_are_errors() -> Iterator[None]:
     with warnings.catch_warnings():
         warnings.simplefilter("error", InsecureKeyFileWarning)
         yield
+
+
+class FakeClock:
+    """A clock for the gate tests: call it for the time, ``advance`` it to move on."""
+
+    def __init__(self, start: datetime | None = None) -> None:
+        self.now = start or datetime(2026, 11, 12, 9, 0, 0, tzinfo=timezone.utc)
+
+    def __call__(self) -> datetime:
+        return self.now
+
+    def advance(self, **delta: float) -> datetime:
+        self.now = self.now + timedelta(**delta)
+        return self.now
+
+
+@pytest.fixture
+def gate_clock() -> FakeClock:
+    return FakeClock()
+
+
+@pytest.fixture
+def short_store_dir() -> Iterator[Path]:
+    """An empty directory with a short path, for stores whose Unix socket must fit in 100 bytes.
+
+    pytest's own temporary directories can be too long for a socket path, so this
+    one is made directly under ``/tmp``.
+    """
+    base = Path(tempfile.mkdtemp(prefix="wg-", dir="/tmp" if sys.platform != "win32" else None))
+    try:
+        yield base / "store"
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
 
 
 @pytest.fixture

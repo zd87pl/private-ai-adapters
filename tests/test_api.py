@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 
@@ -35,9 +36,8 @@ def test_every_exported_name_resolves() -> None:
 
 
 def test_version_is_a_plain_release_string() -> None:
-    parts = wdva.__version__.split(".")
-    assert len(parts) == 3
-    assert all(part.isdigit() for part in parts)
+    # Three numeric parts; the third may carry a pre-release suffix such as a1, b2 or rc1.
+    assert re.fullmatch(r"\d+\.\d+\.\d+((a|b|rc)\d+)?", wdva.__version__)
 
 
 def test_importing_the_package_does_not_import_the_ml_stack() -> None:
