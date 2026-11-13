@@ -448,7 +448,8 @@ export async function loadConnect(view, update) {
 
 /**
  * A configuration as words and the spaces between them, so that a long line wraps
- * at a space and never inside an option such as "--store".
+ * at a space and never inside an option such as "--store". Only a word that is
+ * longer than a whole line wraps inside itself (the style sheet sees to that).
  */
 function codeWords(text) {
   return String(text)

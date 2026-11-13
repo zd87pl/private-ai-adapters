@@ -9,10 +9,15 @@ the vault before the program stops, so that the record says how the session
 ended.
 
 The start-up lines are the only thing written to standard output. With pairing
-they include the code that a browser must present; the address that is opened
+they include the code that a page must present; the address that is opened
 or printed never carries a secret. A demo adds one line with the passphrase of
 its vault, which is the same for every demo and guards invented documents
 only. The passphrase of a real vault is never printed.
+
+Only the demo runs without pairing. Without it every program on the computer
+can load the page, be given the session and act as the owner there, also
+release a passage that waits for approval. That is accepted for invented
+documents and for nothing else: the app's own window pairs like a browser.
 """
 
 from __future__ import annotations
@@ -20,11 +25,14 @@ from __future__ import annotations
 import contextlib
 import importlib
 import importlib.util
+import os
+import re
 import shutil
 import signal
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 from types import FrameType
 
@@ -47,6 +55,11 @@ DEMO_LINE_NOTE = "(the page shows it too; the passphrase of a real vault is neve
 _PR_SET_DUMPABLE = 4
 _WINDOW_MODULE = "webview"  # the package pywebview, which is not a dependency
 _WAIT_SECONDS = 0.5
+_DEMO_PREFIX = f"{brand.SLUG}-demo-"
+_DEMO_NAME = re.compile(re.escape(_DEMO_PREFIX) + "[a-z0-9_]{8}")  # as mkdtemp makes them
+_DEMO_SETTLED = 60.0  # seconds without a change after which no demo is still making a directory
+# Where a demo's store goes when the usual temporary directory has too long a path for a socket.
+_SHORT_PLACE = "/tmp"  # noqa: S108 - what is made there is made by mkdtemp, private and new
 
 
 class _Stop:
@@ -86,14 +99,68 @@ def _harden() -> None:
 
 
 def _demo_directory() -> Path:
-    """A new, empty, private directory for the demo store, short enough for its socket."""
-    directory = Path(tempfile.mkdtemp(prefix=f"{brand.SLUG}-demo-"))
+    """A new, empty, private directory for the demo store, short enough for its socket.
+
+    What earlier demos left behind in the same places is removed first.
+    """
+    for place in {tempfile.gettempdir(), _SHORT_PLACE}:
+        _remove_dead_demos(place)
+    directory = Path(tempfile.mkdtemp(prefix=_DEMO_PREFIX))
     try:
         paths.check_socket_path(directory)
     except GateError:
         shutil.rmtree(directory, ignore_errors=True)
-        directory = Path(tempfile.mkdtemp(prefix="demo-", dir="/tmp"))
+        directory = Path(tempfile.mkdtemp(prefix=_DEMO_PREFIX, dir=_SHORT_PLACE))
     return directory
+
+
+def _hold(directory: str | os.PathLike[str]) -> int | None:
+    """Take the lock that says a demo is alive in ``directory``; None if it cannot be had.
+
+    The lock is an operating system lock on the directory itself. It belongs
+    to this process and ends with it, however the process ends. It is not had
+    when another process holds it, and never for something that is not a
+    directory of this user. Close the returned descriptor to give it up.
+    """
+    import fcntl
+
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(directory, flags | getattr(os, "O_CLOEXEC", 0))
+    except OSError:
+        return None
+    try:
+        if os.fstat(descriptor).st_uid != os.getuid():
+            raise PermissionError
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(descriptor)
+        return None
+    return descriptor
+
+
+def _remove_dead_demos(place: str | os.PathLike[str]) -> None:
+    """Remove the stores that demos left in ``place`` when they were killed.
+
+    A demo removes its store when it ends, but not when it is killed or the
+    computer stops. Removed is only what is recognised as such a store: a real
+    directory, named as this program names a demo's, owned by this user,
+    unchanged for a minute, and whose lock (:func:`_hold`) no running demo
+    holds. Everything else is left alone, and so is everything when in doubt.
+    """
+    with contextlib.suppress(OSError):
+        for entry in list(os.scandir(place)):
+            with contextlib.suppress(OSError):
+                if not _DEMO_NAME.fullmatch(entry.name) or not entry.is_dir(follow_symlinks=False):
+                    continue
+                if time.time() - entry.stat(follow_symlinks=False).st_mtime < _DEMO_SETTLED:
+                    continue
+                held = _hold(entry.path)
+                if held is not None:
+                    try:
+                        shutil.rmtree(entry.path, ignore_errors=True)
+                    finally:
+                        os.close(held)
 
 
 def _open_browser(url: str) -> None:
@@ -154,7 +221,8 @@ def run_app(
     port. With ``demo`` the store is a temporary one with invented documents:
     it is unlocked at once, an agent is played against it, and it is removed
     when the app stops. ``window`` shows the interface in its own window when
-    pywebview is installed, and falls back to the browser when it is not.
+    pywebview is installed, and falls back to the browser when it is not; the
+    window asks for the pairing code like a browser does.
 
     Ctrl-C, SIGTERM and SIGHUP lock the vault, stop the server and return 0.
     """
@@ -165,10 +233,13 @@ def run_app(
     _harden()
     stop = _Stop()
     demo_directory: Path | None = None
+    demo_alive: int | None = None
     try:
         demo_passphrase: str | None = None
         if demo:
             demo_directory = _demo_directory()
+            # Held until this process ends, so that no later demo takes the store for a dead one's.
+            demo_alive = _hold(demo_directory)
             demo_passphrase = make_demo_store(demo_directory)
         path = demo_directory or paths.resolve_store(store)
         service = GateService(
@@ -179,11 +250,9 @@ def run_app(
         if window and not in_window:
             _explain("pywebview is not installed: the interface opens in the browser instead.")
         try:
-            # Without pairing the page itself carries the session: only for the demo,
-            # and for a window that this program opens itself.
-            server = AppServer(
-                service, port=port, pairing=not (demo or in_window), version=__version__, demo=demo
-            )
+            # Without pairing whoever loads the page is given the session: only for the
+            # demo. A window that this program opens pairs like any browser.
+            server = AppServer(service, port=port, pairing=not demo, version=__version__, demo=demo)
         except OSError as exc:
             raise GateError(
                 f"the interface cannot listen on port {port} of this computer; "
@@ -235,6 +304,8 @@ def run_app(
     finally:
         if demo_directory is not None:
             shutil.rmtree(demo_directory, ignore_errors=True)
+        if demo_alive is not None:
+            os.close(demo_alive)
     return 0
 
 

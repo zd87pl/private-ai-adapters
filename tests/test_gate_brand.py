@@ -516,7 +516,7 @@ class Running:
             env=environment,
         )
         self.lines: list[str] = []
-        self.cookie: str | None = None
+        self.session: str | None = None  # the token the app told this "page"
         watchdog = threading.Timer(90, self.process.kill)
         watchdog.start()
         try:
@@ -535,8 +535,8 @@ class Running:
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
         try:
             headers = {"Host": f"127.0.0.1:{self.port}"}
-            if self.cookie:
-                headers["Cookie"] = self.cookie
+            if self.session:
+                headers["X-WDVA-Session"] = self.session
             data = None
             if method != "GET":
                 headers["X-WDVA-Gate"] = "1"
@@ -545,9 +545,9 @@ class Running:
             connection.request(method, target, body=data, headers=headers)
             answer = connection.getresponse()
             content = answer.read()
-            given = answer.getheader("Set-Cookie")
-            if given:
-                self.cookie = given.split(";")[0]
+            assert answer.getheader("Set-Cookie") is None, "the session must never be a cookie"
+            if answer.status == 200 and target.startswith("/api/session"):
+                self.session = json.loads(content).get("session", self.session)
             return answer.status, {k.lower(): v for k, v in answer.getheaders()}, content
         finally:
             connection.close()
@@ -609,11 +609,12 @@ def test_the_app_starts_serves_and_answers_under_the_new_name(
         status, _, content = app.call("GET", f"/{name}")
         assert status == 200, name
         assert_renamed(content.decode("utf-8"), f"the served file {name}")
-    # Paired: the cookie's name, and what the service says.
+    # Paired: the session is a token without any name in it, and then what the service says.
     code = re.search(r"pairing code: (\S+)", "\n".join(app.lines))
     assert code is not None
-    assert app.json("POST", "/api/session/pair", {"code": code.group(1)}) == {"paired": True}
-    assert (app.cookie or "").startswith(f"example_desk_{app.port}=")
+    answer = app.json("POST", "/api/session/pair", {"code": code.group(1)})
+    assert answer == {"paired": True, "session": app.session}
+    assert re.fullmatch(r"[0-9a-f]{64}", app.session or "")
     state = app.json("POST", "/api/store/create", {"passphrase": "correct horse battery staple"})
     assert state["locked"] is False
     assert_renamed(json.dumps(app.json("GET", "/api/apps")), "the list of apps")
@@ -625,7 +626,8 @@ def test_the_demo_starts_under_the_new_name(renamed: Path, running: list[Running
     running.append(app)
     assert app.lines[0].startswith("Example Desk ")
     assert_renamed("\n".join(app.lines), "the start-up lines of the demo")
-    assert app.call("GET", "/")[0] == 200  # the page gives the session in the demo
+    assert app.call("GET", "/")[0] == 200
+    assert app.json("GET", "/api/session")["name"] == "Example Desk"  # and the demo's session
     state = app.json("GET", "/api/state")
     assert Path(state["store"]["path"]).name.startswith("example-desk-demo-")
     assert_renamed(json.dumps(state), "the state of the demo")

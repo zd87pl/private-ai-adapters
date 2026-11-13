@@ -107,7 +107,10 @@ def add_gate_parser(subparsers: _SubParsers) -> None:
     p.add_argument(
         "--window",
         action="store_true",
-        help="open the interface in its own window (needs pywebview; experimental)",
+        help=(
+            "show the interface in a window of its own, which asks for the pairing code "
+            "like the browser does (needs pywebview; experimental)"
+        ),
     )
     p.add_argument(
         "--demo",

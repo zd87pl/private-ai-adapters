@@ -444,20 +444,38 @@ def test_changing_requests_carry_the_header_and_stay_on_this_origin() -> None:
     assert re.search(r"let url = path;", api), "requests go to paths of this origin only"
 
 
-def test_nothing_is_kept_in_the_browser_and_nothing_is_logged() -> None:
+def test_nothing_is_kept_in_the_browser_but_the_session_and_nothing_is_logged() -> None:
     for name, source in scripts().items():
         code = without_comments(source)
         for store in ("localStorage", "indexedDB", "document.cookie", "caches.", "openDatabase"):
             assert store not in code, f"{name} uses {store}"
         assert re.search(r"\bconsole\s*\.", code) is None, f"{name} writes to the console"
-        if name != "main.js":
+        if name != "api.js":
             assert "sessionStorage" not in code, f"{name} uses sessionStorage"
-    main = without_comments(scripts()["main.js"])
-    keys = set(re.findall(r"sessionStorage\.(?:setItem|getItem|removeItem)\(([^,)]+)", main))
-    assert keys == {"RELOAD_MARK"}, (
-        "only the reload mark may be kept, never anything from the vault"
+    api = without_comments(scripts()["api.js"])
+    keys = set(re.findall(r"sessionStorage\.(?:setItem|getItem|removeItem)\(([^,)]+)", api))
+    assert keys == {"SESSION_KEY"}, (
+        "only the session token may be kept, never anything from the vault"
     )
-    assert 'sessionStorage.setItem(RELOAD_MARK, "1")' in main
+    assert "window.sessionStorage.setItem(SESSION_KEY, token)" in api
+
+
+def test_the_session_is_a_token_the_page_sends_itself_and_never_a_cookie() -> None:
+    # A browser sends the cookies of 127.0.0.1 to every port of that address. What the page
+    # keeps for this tab can be read by pages of this address and port only.
+    api = without_comments(scripts()["api.js"])
+    assert 'const SESSION_HEADER = "X-WDVA-Session";' in api
+    assert "if (token) headers[SESSION_HEADER] = token;" in api
+    # The token is taken from the two session answers and from nowhere else.
+    assert api.count("keepSession(") == 3  # its definition, and one call for each answer
+    assert "keepSession(answer.session)" in api
+    assert "delete answer.session;" in api, "the token stays out of what the page shows"
+    for name, source in scripts().items():
+        code = without_comments(source)
+        assert "cookie" not in code.lower(), f"{name} deals with cookies"
+        if name != "api.js":
+            assert "X-WDVA-Session" not in code, f"{name} handles the session itself"
+            assert ".session)" not in code.replace("ctx.session)", "")
 
 
 def test_a_passphrase_is_only_ever_typed_into_a_password_field_and_sent() -> None:

@@ -2095,13 +2095,17 @@
   font-weight: 600;
 }
 
-/* The whole block is on show: a long line wraps at its spaces, and copying it gives the line unbroken. */
+/* The whole block is on show: a long line wraps at its spaces, and copying it gives the line
+   unbroken. A word stays in one piece wherever it fits on a line of its own. One that is longer
+   than the block, such as a long path, wraps inside itself instead of running out of the block. */
 .config .code {
   white-space: pre-wrap;
 }
 
 .code-word {
-  white-space: nowrap;
+  display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .config-where {

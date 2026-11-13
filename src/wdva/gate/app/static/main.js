@@ -227,7 +227,7 @@ function stuckScreen() {
       "section",
       { class: "gate-card" },
       el("h1", { class: "gate-title" }, "This page has no session"),
-      el("p", { class: "gate-lead" }, `${PRODUCT} did not give this browser a session. Reload the page. If that does not help, quit ${PRODUCT} in its terminal and start it again.`),
+      el("p", { class: "gate-lead" }, `${PRODUCT} did not give this page a session. Reload the page. If that does not help, quit ${PRODUCT} in its terminal and start it again.`),
       button("Reload", { kind: "primary", onclick: () => window.location.reload() }),
     ),
   );
@@ -599,27 +599,7 @@ async function lockNow() {
 
 // -- starting -----------------------------------------------------------------------
 
-const RELOAD_MARK = "page-reloaded";
-
-function mark(value) {
-  try {
-    if (value) window.sessionStorage.setItem(RELOAD_MARK, "1");
-    else window.sessionStorage.removeItem(RELOAD_MARK);
-    return true;
-  } catch (_error) {
-    return false;
-  }
-}
-
-function marked() {
-  try {
-    return window.sessionStorage.getItem(RELOAD_MARK) === "1";
-  } catch (_error) {
-    return true;
-  }
-}
-
-/** Find out whether this browser is paired, then show the vault or the pairing page. */
+/** Find out whether this page is paired, then show the vault or the pairing page. */
 async function start() {
   let session;
   try {
@@ -636,20 +616,12 @@ async function start() {
   ctx.session = session;
   ctx.offline = false;
   if (!session.paired) {
-    if (session.pairing === "none") {
-      // Without pairing the session is handed out with the page itself.
-      if (!marked() && mark(true)) {
-        window.location.reload();
-        return;
-      }
-      ctx.phase = "stuck";
-    } else {
-      ctx.phase = "pair";
-    }
+    // Without pairing (the demo) the session comes with the answer itself. When it
+    // did not, there is no code to ask for either.
+    ctx.phase = session.pairing === "none" ? "stuck" : "pair";
     schedule();
     return;
   }
-  mark(false);
   ctx.phase = "ready";
   await fetchState(true);
   schedule();

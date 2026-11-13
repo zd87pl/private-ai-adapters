@@ -8,8 +8,11 @@
 // alike and on a slow machine:
 //   - no launch options, no protocol sessions, no selector one engine alone has;
 //   - a wait is a wait for a condition with a timeout, never a guess at a duration;
-//   - the app's state is read over its own API with the browser's session cookie
-//     (context.request), not by running script inside the page.
+//   - the app's state is read over its own API with the session of the page, not by
+//     running script inside the page. The session is a token that the app tells the
+//     page and the page sends in a header (never a cookie: a browser sends cookies
+//     to every port of 127.0.0.1). `watch` notes the token as the page is told it,
+//     and `apiGet` sends it the way the page does.
 
 'use strict';
 
@@ -308,8 +311,27 @@ async function openBrowser(options, prefix) {
  */
 const ENGINE_ASKS = new Set(['/favicon.ico', '/apple-touch-icon.png', '/apple-touch-icon-precomposed.png']);
 
+/** The session of each browser context: a promise of the token its page was told last, or of null. */
+const sessions = new WeakMap();
+
+/** Note the session when the app tells it to the page: in the answer to pairing, or to a demo's first question. */
+function noteSession(page, response) {
+  const pathname = new URL(response.url()).pathname;
+  if (response.status() !== 200 || (pathname !== '/api/session' && pathname !== '/api/session/pair')) return;
+  const context = page.context();
+  const before = sessions.get(context) || Promise.resolve(null);
+  sessions.set(
+    context,
+    response.json().then(
+      (answer) => (answer && typeof answer.session === 'string' ? answer.session : before),
+      () => before,
+    ),
+  );
+}
+
 /** Report what a page does wrong: console errors, page errors, failed requests, HTTP errors nobody announced. */
 function watch(page) {
+  page.on('response', (response) => noteSession(page, response));
   // What still arrives from a page after the walk-through closed it is the closing, not the page.
   const silent = () => hushed || page.isClosed();
   page.on('console', (message) => {
@@ -344,7 +366,7 @@ function watch(page) {
   });
 }
 
-/** A new page in a context of its own (its own cookies), watched. */
+/** A new page in a context of its own (its own session), watched. */
 async function newPage(browser, options) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: options.scale });
   // A breach of the page's content security policy becomes a console error, in every engine.
@@ -386,7 +408,10 @@ async function decideApproval(page, key, action) {
 
 /** GET one address of the app's API with the session of `page`. Returns the parsed answer. */
 async function apiGet(page, base, pathname) {
-  const response = await page.context().request.get(new URL(pathname, base).href, { headers: { Accept: 'application/json' }, timeout: WAIT });
+  const headers = { Accept: 'application/json' };
+  const session = await sessions.get(page.context());
+  if (session) headers['X-WDVA-Session'] = session;
+  const response = await page.context().request.get(new URL(pathname, base).href, { headers, timeout: WAIT });
   if (!response.ok()) throw new Error(`GET ${pathname} answered ${response.status()}`);
   return response.json();
 }

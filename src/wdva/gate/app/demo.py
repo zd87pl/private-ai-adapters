@@ -314,7 +314,9 @@ _GRANTS: tuple[tuple[str, str, str], ...] = (
     (SECOND_APP, "home", MODE_READ),
     (LOCAL_APP, "home", MODE_READ),
 )
-_DAILY_LIMITS: tuple[tuple[str, int], ...] = ((HONEST_APP, 12_000), (SECOND_APP, 4_000))
+# The second app's limit is small enough to be reached while every passage it asks for is
+# still one it may have without asking: its run is stopped by the limit, and by nothing else.
+_DAILY_LIMITS: tuple[tuple[str, int], ...] = ((HONEST_APP, 12_000), (SECOND_APP, 3_000))
 
 _REF = re.compile(r"ref=(d-[0-9a-f]{12}\.[0-9]{1,5})")
 _PASSAGE = re.compile(r"OK: passage ([0-9]+) of ([0-9]+) from document (d-[0-9a-f]{12}) ")

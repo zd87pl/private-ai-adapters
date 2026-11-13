@@ -18,6 +18,30 @@ export class ApiError extends Error {
 
 const hooks = { unauthorized: null, reauth: null };
 
+// The session of this page is a token that the app hands over when the page has
+// paired. The page sends it with every call, in a header. It is kept for this tab
+// only, where no page of another address or another port can read it. It is never
+// a cookie: a browser sends the cookies of this computer's address to every port
+// of it, so to pages of other programs too.
+const SESSION_HEADER = "X-WDVA-Session";
+const SESSION_KEY = "session";
+let token = null;
+try {
+  token = window.sessionStorage.getItem(SESSION_KEY);
+} catch (_error) {
+  token = null;
+}
+
+function keepSession(value) {
+  token = typeof value === "string" && value ? value : null;
+  try {
+    if (token) window.sessionStorage.setItem(SESSION_KEY, token);
+    else window.sessionStorage.removeItem(SESSION_KEY);
+  } catch (_error) {
+    // Without that storage the session lasts until the page is loaded again.
+  }
+}
+
 /**
  * `unauthorized()` is called when the session has ended. `reauth()` is called when
  * an action needs the passphrase again; it resolves to true once the passphrase
@@ -51,6 +75,7 @@ async function send(method, path, options) {
   const headers = { Accept: "application/json" };
   const init = { method, headers, credentials: "same-origin", cache: "no-store" };
   if (method !== "GET") headers["X-WDVA-Gate"] = "1";
+  if (token) headers[SESSION_HEADER] = token;
   if (options.raw !== undefined) {
     headers["Content-Type"] = "application/octet-stream";
     init.body = options.raw;
@@ -99,8 +124,23 @@ async function call(method, path, options = {}) {
 const part = encodeURIComponent;
 
 export const api = {
-  session: () => call("GET", "/api/session", { session: true }),
-  pair: (code) => call("POST", "/api/session/pair", { body: { code }, session: true }),
+  session: async () => {
+    const answer = await call("GET", "/api/session", { session: true });
+    const given = answer.session;
+    delete answer.session;
+    if (!answer.paired) {
+      // A demo has no pairing: the app hands its session to the page that asks.
+      // Otherwise a token this page still holds is one of an earlier run, and worth nothing.
+      keepSession(given);
+      answer.paired = token !== null;
+    }
+    return answer;
+  },
+  pair: async (code) => {
+    const answer = await call("POST", "/api/session/pair", { body: { code }, session: true });
+    keepSession(answer.session);
+    return { paired: token !== null };
+  },
 
   state: () => call("GET", "/api/state"),
   createStore: (passphrase) => call("POST", "/api/store/create", { body: { passphrase } }),

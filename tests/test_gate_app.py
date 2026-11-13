@@ -6,10 +6,12 @@ import http.client
 import json
 import os
 import re
+import shutil
 import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Iterator
@@ -51,19 +53,22 @@ OPEN_LINE = re.compile(r"open:  http://127\.0\.0\.1:([0-9]+)/")
 
 
 class Browser:
-    """What a browser does with the interface: requests with a cookie, answers as JSON."""
+    """What the page does with the interface: it sends the session it was told, in a header.
+
+    It keeps no cookie. An answer that sets one fails the test at once.
+    """
 
     def __init__(self, port: int) -> None:
         self.port = port
-        self.cookie: str | None = None
+        self.token: str | None = None
         self.bodies: list[str] = []
 
     def call(
         self, method: str, path: str, body: Any = None, *, upload: bytes | None = None
     ) -> tuple[int, Any]:
         headers = {}
-        if self.cookie is not None:
-            headers["Cookie"] = self.cookie
+        if self.token is not None:
+            headers["X-WDVA-Session"] = self.token
         if method != "GET":
             headers["X-WDVA-Gate"] = "1"
         payload: bytes | None = None
@@ -80,12 +85,14 @@ class Browser:
             data = response.read()
         finally:
             connection.close()
-        given = response.getheader("Set-Cookie")
-        if given:
-            self.cookie = given.split(";")[0]
+        assert response.getheader("Set-Cookie") is None, "the session must never be a cookie"
         if response.getheader("Content-Type", "").startswith("application/json"):
             self.bodies.append(data.decode())
-            return response.status, json.loads(data)
+            answer = json.loads(data)
+            if response.status == 200 and path.startswith("/api/session"):
+                # The session is told to the page, which keeps it; the rest is the answer.
+                self.token = answer.pop("session", self.token)
+            return response.status, answer
         return response.status, data
 
     def ok(self, method: str, path: str, body: Any = None, *, upload: bytes | None = None) -> Any:
@@ -384,7 +391,7 @@ def test_the_demo_store(demo_service: GateService, short_store_dir: Path) -> Non
     }
     # Small daily limits, so that they are reached while somebody watches.
     assert apps["claude-desktop"]["limits"]["chars_per_day"] == 12_000
-    assert apps["chatgpt-desktop"]["limits"]["chars_per_day"] == 4_000
+    assert apps["chatgpt-desktop"]["limits"]["chars_per_day"] == 3_000
     collections = {c["name"]: c for c in demo_service.documents()["collections"]}
     assert {name: (c["allow_hosted"], c["show_titles"]) for name, c in collections.items()} == {
         "home": (True, False),
@@ -446,6 +453,8 @@ def test_the_demo_agent_plays_its_script_through_the_gate(
     second = [(tool, code) for client, tool, code in calls if client == "chatgpt-desktop"]
     assert second[:2] == [("search", "OK"), ("read", "OK")]
     assert second[-2:] == [("read", "OVER_LIMIT"), ("read", "OVER_LIMIT")]
+    # It is stopped by its daily limit alone: every passage it asked for was one it may
+    # have without asking, so none of its calls put anything before the owner.
     assert ("read", "NEEDS_APPROVAL") not in second
     assert calls[-2] == (demo.UNREGISTERED_NAME, "search", "NOT_ALLOWED")
 
@@ -459,7 +468,7 @@ def test_the_demo_agent_plays_its_script_through_the_gate(
     for detail in releases.values():
         by_app[detail["app"]] = by_app.get(detail["app"], 0) + detail["characters"]
     assert set(by_app) == {"claude-desktop", "chatgpt-desktop"}
-    assert 2_000 < by_app["chatgpt-desktop"] <= 4_000
+    assert 2_000 < by_app["chatgpt-desktop"] <= 3_000
 
     # The instruction in the bank letter arrived as a quoted line, and so did the forged ones.
     (carrier,) = [
@@ -686,12 +695,15 @@ def test_the_command_runs_the_demo_and_removes_its_store() -> None:
         )
         assert lines[4] == "Ctrl-C locks the vault and quits."
 
-        # No pairing in the demo: the page itself gives the session.
+        # No pairing in the demo: whoever loads the page is given the session.
         browser = Browser(int(opened.group(1)))
         status, page = browser.call("GET", "/")
         assert status == 200
         assert b"<title>" in page
-        assert browser.cookie is not None
+        assert browser.error("GET", "/api/state") == (401, "pairing_required")
+        # The page asks for the session and is given it: every document here is invented.
+        assert browser.ok("GET", "/api/session")["paired"] is False
+        assert re.fullmatch(r"[0-9a-f]{64}", browser.token or "")
         state = browser.ok("GET", "/api/state")
         assert (state["demo"], state["locked"], state["version"]) == (True, False, __version__)
         store = Path(state["store"]["path"])
@@ -736,7 +748,10 @@ def test_the_command_prints_the_pairing_code_and_ctrl_c_locks_the_vault(
 
         browser = Browser(int(opened.group(1)))
         status, _ = browser.call("GET", "/")
-        assert (status, browser.cookie) == (200, None)  # the page alone gives no session
+        assert status == 200
+        # Neither the page nor the session endpoint gives the session: only the code does.
+        assert browser.ok("GET", "/api/session")["paired"] is False
+        assert browser.token is None
         assert browser.error("GET", "/api/state") == (401, "pairing_required")
         browser.ok("POST", "/api/session/pair", {"code": paired.group(1).lower()})
         before = browser.ok("GET", "/api/state")
@@ -766,6 +781,74 @@ def test_the_command_prints_the_pairing_code_and_ctrl_c_locks_the_vault(
         assert store.ledger.replay().previous_session == "clean"
     finally:
         store.close()
+
+
+FAKE_WINDOW = '''
+"""In place of pywebview: load what a window loads first, note what came back, and close."""
+import http.client, json, os
+
+def create_window(title, url):
+    global address
+    address = url
+
+def start():
+    port = int(address.rstrip("/").rsplit(":", 1)[1])
+    seen = {}
+    for path in ("/", "/api/session", "/api/state"):
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=20)
+        connection.request("GET", path)
+        answer = connection.getresponse()
+        body = answer.read().decode()
+        seen[path] = [answer.status, answer.getheader("Set-Cookie"), "" if path == "/" else body]
+        connection.close()
+    with open(os.environ["WINDOW_SAW"], "w") as out:
+        json.dump(seen, out)
+'''
+
+
+def test_a_window_of_its_own_pairs_like_a_browser(short_store_dir: Path, tmp_path: Path) -> None:
+    # Whatever loads the page first, the app's window or a program that was quicker, is
+    # given nothing by it: a real vault's session is had with the code from the terminal.
+    (tmp_path / "webview.py").write_text(FAKE_WINDOW, encoding="utf-8")
+    saw = tmp_path / "saw.json"
+    environment = {k: v for k, v in os.environ.items() if not k.startswith("WDVA_")}
+    environment["PYTHONPATH"] = os.pathsep.join(
+        [str(tmp_path), *filter(None, [environment.get("PYTHONPATH")])]
+    )
+    environment["WINDOW_SAW"] = str(saw)
+    process = subprocess.Popen(
+        [sys.executable, "-m", "wdva", "gate", "app", "--window", "--store", str(short_store_dir)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=environment,
+    )
+    code, out, err = finish(process)  # the window "was closed" at once, which ends the app
+    assert (code, err) == (0, "")
+    lines = out.splitlines()
+    assert OPEN_LINE.fullmatch(lines[2]) is not None, lines
+    assert PAIRING_LINE.fullmatch(lines[3]) is not None, lines
+    seen = json.loads(saw.read_text(encoding="utf-8"))
+    assert seen["/"][:2] == [200, None]
+    session = json.loads(seen["/api/session"][2])
+    assert (session["paired"], session["pairing"], session["demo"]) == (False, "code", False)
+    assert "session" not in session
+    assert seen["/api/session"][1] is None
+    assert seen["/api/state"][0] == 401
+    assert not short_store_dir.exists()  # and so nobody created a vault here meanwhile
+
+
+def test_the_help_says_that_a_window_asks_for_the_pairing_code() -> None:
+    shown = subprocess.run(
+        [sys.executable, "-m", "wdva", "gate", "app", "--help"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    # The option's own entry: after its last mention, up to the option that follows it.
+    window = " ".join(shown.rsplit("--window", 1)[1].split("--demo", 1)[0].split())
+    assert "asks for the pairing code like the browser does" in window
+    assert "experimental" in window
 
 
 def test_the_command_says_when_the_port_is_taken(short_store_dir: Path) -> None:
@@ -799,5 +882,127 @@ def test_the_demo_directory_is_private_and_fits_a_socket() -> None:
         assert directory.stat().st_mode & 0o077 == 0
         assert list(directory.iterdir()) == []
         assert len(os.fsencode(directory / "run" / "gate.sock")) <= 100
+        assert main._DEMO_NAME.fullmatch(directory.name), "the next demo would not know it again"
     finally:
         directory.rmdir()
+
+
+def test_a_demo_directory_that_is_too_long_for_a_socket_moves_to_tmp_under_the_same_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deep = tmp_path / ("d" * 90)
+    deep.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(deep))
+    directory = main._demo_directory()
+    try:
+        assert directory.parent == Path("/tmp")
+        assert main._DEMO_NAME.fullmatch(directory.name)
+        assert list(deep.iterdir()) == []
+    finally:
+        directory.rmdir()
+
+
+def test_what_a_killed_demo_left_is_removed_and_nothing_else(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prefix = main._DEMO_PREFIX
+    long_ago = time.time() - 3600
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("not a demo's", encoding="utf-8")
+    place = tmp_path / "tmp"
+    place.mkdir()
+
+    def left(name: str, *, age: float = 3600) -> Path:
+        """A directory as a demo's store looks, last changed ``age`` seconds ago."""
+        made = place / name
+        (made / "run").mkdir(parents=True)
+        (made / "keyslot.wdva").write_bytes(b"sealed")
+        (made / "run" / "lock").write_bytes(b"")
+        os.utime(made, (time.time() - age, time.time() - age))
+        return made
+
+    dead = left(f"{prefix}abcd1234")
+    just_made = left(f"{prefix}efgh5678", age=5)  # a demo may be making it right now
+    running = left(f"{prefix}ijkl9_12")
+    alive = main._hold(running)  # what a demo holds for as long as it lives
+    assert alive is not None
+    others = [
+        left("demo-abcd1234"),  # not this program's name
+        left(f"{prefix}abcd1234-kept"),  # nor the form of name it makes
+        left(f"{prefix}ABCD1234"),
+        left(f"{prefix}abcd123"),
+        left(f"x{prefix}abcd1234"),
+    ]
+    a_file = place / f"{prefix}file0000"
+    a_file.write_text("a file", encoding="utf-8")
+    os.utime(a_file, (long_ago, long_ago))
+    a_link = place / f"{prefix}link0000"
+    a_link.symlink_to(outside, target_is_directory=True)
+    os.utime(a_link, (long_ago, long_ago), follow_symlinks=False)
+    everything = {entry.name for entry in place.iterdir()}
+    try:
+        # Somebody else's directory is left alone, whatever it is called.
+        mine = os.getuid()
+        monkeypatch.setattr(main.os, "getuid", lambda: mine + 1)
+        main._remove_dead_demos(place)
+        assert {entry.name for entry in place.iterdir()} == everything
+        monkeypatch.undo()
+
+        main._remove_dead_demos(place)
+        assert {entry.name for entry in place.iterdir()} == everything - {dead.name}
+        assert (running / "keyslot.wdva").is_file()
+        assert (just_made / "keyslot.wdva").is_file()
+        assert all((other / "keyslot.wdva").is_file() for other in others)
+        assert (outside / "keep.txt").is_file()
+    finally:
+        os.close(alive)
+    # The demo that ran is dead now: the next start removes what it left as well.
+    main._remove_dead_demos(place)
+    assert {entry.name for entry in place.iterdir()} == everything - {dead.name, running.name}
+    # A place that does not exist, or is not a directory, is no error.
+    main._remove_dead_demos(place / "nowhere")
+    main._remove_dead_demos(a_file)
+
+
+def test_a_killed_demo_is_tidied_up_by_the_next_one_and_a_running_one_is_not() -> None:
+    def start() -> tuple[subprocess.Popen[str], Browser, Path]:
+        process = start_command("--demo", "--no-browser", "--port", "0")
+        try:
+            opened = OPEN_LINE.fullmatch(first_lines(process, 5)[2])
+            assert opened is not None
+            browser = Browser(int(opened.group(1)))
+            browser.ok("GET", "/api/session")
+            return process, browser, Path(browser.ok("GET", "/api/state")["store"]["path"])
+        except BaseException:
+            process.kill()
+            raise
+
+    def long_ago(store: Path) -> None:
+        os.utime(store, (time.time() - 3600, time.time() - 3600))
+
+    first, browser, store = start()
+    started = [first]
+    try:
+        # Its user locks the vault: the store's own lock is free now, the demo still runs.
+        assert browser.ok("POST", "/api/lock", {})["locked"] is True
+        long_ago(store)
+        second, _, second_store = start()
+        started.append(second)
+        assert (store / "keyslot.wdva").is_file(), "a demo removed the store of one that runs"
+        assert second_store != store
+        first.kill()  # no chance to tidy up
+        first.wait(timeout=30)
+        assert (finish(second, signal.SIGTERM)[0], second_store.exists()) == (0, False)
+        assert store.is_dir()  # what the killed demo left
+        long_ago(store)
+        third, _, third_store = start()
+        started.append(third)
+        assert not store.exists()
+        assert (finish(third, signal.SIGINT)[0], third_store.exists()) == (0, False)
+    finally:
+        for process in started:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+        shutil.rmtree(store, ignore_errors=True)

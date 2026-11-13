@@ -14,13 +14,16 @@ app has beyond the store itself:
 * **Owner mode.** For ten minutes after the passphrase was last entered, the
   owner may make changes that let more leave: register an app, grant a
   collection, open a collection to hosted apps, show titles, raise a limit,
-  answer both kinds of apps at once. After that such a change is refused until
-  the passphrase is entered again. Changes that only take away, approvals of
-  single passages, adding and removing documents and locking are never held
-  up by this.
+  answer both kinds of apps at once, answer an app again that was not being
+  answered. After that such a change is refused until the passphrase is
+  entered again. Changes that only take away, approvals of single passages,
+  adding and removing documents and locking are never held up by this.
 * **Which apps are answered.** Every registered app is, unless the owner
   paused it in this session. When hosted and local apps are both registered,
-  only the hosted ones are answered until the owner has chosen.
+  only the hosted ones are answered until the owner has chosen. Which apps
+  are answered is not part of the stored settings, so it is watched apart
+  from them: whatever would make the session answer an app it does not answer
+  now needs owner mode, also when it is the removal of another app.
 * **The activity list.** One entry per record, written as a sentence, built
   from the record when the vault is unlocked and extended as records are
   appended. A call that asks what an app may use is listed as a question, not
@@ -908,6 +911,7 @@ class GateService:
         self._clock: Callable[[], datetime] = clock or utc_now
         self._scrypt_n = scrypt_n
         self._lock = threading.RLock()  # the session and every change made through it
+        self._checking = threading.Lock()  # one passphrase is stretched at a time
         self._session: _Session | None = None
         self._opening = False
         self._cursor_lock = threading.Lock()
@@ -1078,19 +1082,41 @@ class GateService:
             session.feed.refused((key, code), format_time(self._clock()))
         self._bump()
 
+    @staticmethod
+    def _serving(
+        policy: Policy, kinds: str | None, paused: Iterable[str]
+    ) -> tuple[str | None, frozenset[str], tuple[str, ...]]:
+        """The choice of kinds and the pauses that hold under ``policy``, and who is answered."""
+        if not (policy.client_names(True) and policy.client_names(False)):
+            kinds = None  # one kind only: there is nothing to choose between
+        held = frozenset(name for name in paused if name in policy.clients)
+        return kinds, held, served_set(policy, kinds, held)
+
+    def _answers_more(
+        self, session: _Session, policy: Policy, kinds: str | None, paused: Iterable[str]
+    ) -> bool:
+        """Whether an app would be answered that is not answered now.
+
+        That lets more leave, however it comes about: an app is no longer
+        paused, another kind of app is chosen, or the last app of the kind
+        that was answered is removed and the other kind takes its place.
+        """
+        answered = self._serving(policy, kinds, paused)[2]
+        return not set(answered) <= set(session.gate.served())
+
     def _apply_serving(self, session: _Session, policy: Policy) -> None:
         """Tell the gate which names are answered, after the policy or the choice changed."""
-        if not (policy.client_names(True) and policy.client_names(False)):
-            session.kinds = None  # one kind only: there is nothing to choose between
-        session.paused = frozenset(name for name in session.paused if name in policy.clients)
-        session.gate.set_served(served_set(policy, session.kinds, session.paused))
+        session.kinds, session.paused, answered = self._serving(
+            policy, session.kinds, session.paused
+        )
+        session.gate.set_served(answered)
 
     def _change(self, session: _Session, new: Policy) -> Policy:
         """Put a changed policy in force. One that lets more leave needs owner mode."""
         old = session.gate.policy()
         if new.with_serial(old.serial) == old:
             return old
-        if widens(old, new):
+        if widens(old, new) or self._answers_more(session, new, session.kinds, session.paused):
             self._owner(session)
         stored = session.gate.set_policy(new)
         self._apply_serving(session, stored)
@@ -1408,7 +1434,13 @@ class GateService:
     def reauth(self, *, passphrase: str) -> JSONObject:
         """Check the passphrase again; changes that let more leave are then accepted for a while."""
         session = self._unlocked()
-        if not isinstance(passphrase, str) or not session.store.check_passphrase(passphrase):
+        if not isinstance(passphrase, str):
+            raise WrongKeyError("wrong passphrase")
+        # Each check holds the memory that stretching a passphrase takes, so checks
+        # that arrive together wait for one another instead of adding up.
+        with self._checking:
+            right = session.store.check_passphrase(passphrase)
+        if not right:
             raise WrongKeyError("wrong passphrase")
         with self._lock:
             session.owner_until = self._clock() + OWNER_MODE
@@ -1419,7 +1451,13 @@ class GateService:
     def set_serving(
         self, *, kinds: str | None = None, paused: list[str] | None = None
     ) -> JSONObject:
-        """Choose which kinds of apps are answered and which apps are paused; return the state."""
+        """Choose which kinds of apps are answered and which apps are paused; return the state.
+
+        Answering both kinds needs owner mode, and so does every choice after
+        which an app is answered that was not answered before: taking an app
+        out of the paused ones, or choosing the other kind. Pausing, and a
+        choice that only takes away, do not.
+        """
         session = self._unlocked()
         if kinds is not None and kinds not in (HOSTED, LOCAL, BOTH):
             raise _invalid('Choose "hosted", "local" or "both".')
@@ -1427,12 +1465,13 @@ class GateService:
             raise _invalid("The paused apps must be given as a list of names.")
         with self._lock:
             policy = session.gate.policy()
-            if kinds == BOTH and session.kinds != BOTH:
+            chosen = session.kinds if kinds is None else kinds
+            held = session.paused if paused is None else frozenset(paused)
+            if (kinds == BOTH and session.kinds != BOTH) or self._answers_more(
+                session, policy, chosen, held
+            ):
                 self._owner(session)
-            if kinds is not None:
-                session.kinds = kinds
-            if paused is not None:
-                session.paused = frozenset(paused)
+            session.kinds, session.paused = chosen, held
             self._apply_serving(session, policy)
         self._bump()
         return self.state()

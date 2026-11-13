@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import http.client
 import json
 import re
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -24,7 +26,7 @@ from wdva.gate.app.httpd import AppServer
 
 # The product's name comes from one place; the tests take it from there too.
 PRODUCT, SLUG = brand.PRODUCT, brand.SLUG
-COOKIE_PREFIX = SLUG.replace("-", "_")
+SESSION_HEADER = "X-WDVA-Session"
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32", reason="the gate does not run on Windows yet"
@@ -203,11 +205,21 @@ class Answer:
 
 
 class Browser:
-    """A client that behaves like the interface's own page: it keeps the cookie it is given."""
+    """A client that behaves like the interface's own page.
+
+    It keeps the session token it is told and sends it in the session header.
+    It has no cookie jar at all: the server must never need one.
+    """
 
     def __init__(self, server: AppServer) -> None:
         self.server = server
-        self.cookie: str | None = None
+        self.token: str | None = None
+
+    @property
+    def session_line(self) -> str:
+        """The header line that shows the session, for requests written out by hand."""
+        assert self.token is not None
+        return f"{SESSION_HEADER}: {self.token}"
 
     def call(
         self,
@@ -220,8 +232,8 @@ class Browser:
         gate_header: bool = True,
     ) -> Answer:
         sent: dict[str, str] = {}
-        if self.cookie is not None:
-            sent["Cookie"] = self.cookie
+        if self.token is not None:
+            sent[SESSION_HEADER] = self.token
         if gate_header and method in ("POST", "DELETE"):
             sent["X-WDVA-Gate"] = "1"
         if json_body is not None:
@@ -235,9 +247,9 @@ class Browser:
             answer = Answer(response.status, response.getheaders(), response.read())
         finally:
             connection.close()
-        given = answer.header("Set-Cookie")
-        if given is not None:
-            self.cookie = given.split(";")[0]
+        assert answer.header("Set-Cookie") is None, "the session must never be a cookie"
+        if answer.status == 200 and target in ("/api/session", "/api/session/pair"):
+            self.token = answer.json().get("session", self.token)
         return answer
 
     def pair(self) -> Browser:
@@ -245,7 +257,7 @@ class Browser:
             "POST", "/api/session/pair", json_body={"code": self.server.pairing_code}
         )
         assert answer.status == 200
-        assert self.cookie is not None
+        assert self.token is not None
         return self
 
 
@@ -412,7 +424,7 @@ def test_the_right_code_pairs(server: AppServer, service: FakeService) -> None:
     browser = Browser(server)
     answer = browser.call("POST", "/api/session/pair", json_body={"code": server.pairing_code})
     assert answer.status == 200
-    assert answer.json() == {"paired": True}
+    assert answer.json() == {"paired": True, "session": server._app.token}
     assert browser.call("GET", "/api/session").json()["paired"] is True
     assert browser.call("GET", "/api/state").json() == {"did": "state"}
     assert service.calls == [("state", {})]
@@ -434,32 +446,50 @@ def test_hyphen_spaces_and_case_of_the_code_are_ignored(typed: Any, server: AppS
     assert code is not None
     answer = Browser(server).call("POST", "/api/session/pair", json_body={"code": typed(code)})
     assert answer.status == 200
-    assert answer.json() == {"paired": True}
+    assert answer.json() == {"paired": True, "session": server._app.token}
 
 
-def test_session_cookie_attributes(make_server: MakeServer) -> None:
+def test_the_session_is_a_random_token_and_never_a_cookie(make_server: MakeServer) -> None:
+    # A browser sends the cookies of 127.0.0.1 to every port of that address, so a cookie
+    # would hand the session to a page of any other program on the computer.
     tokens = set()
     for _ in range(2):
         server = make_server()
-        answer = Browser(server).call(
-            "POST", "/api/session/pair", json_body={"code": server.pairing_code}
-        )
-        cookie = answer.header("Set-Cookie")
-        assert cookie is not None
-        value, *attributes = [part.strip() for part in cookie.split(";")]
-        assert sorted(attributes) == ["HttpOnly", "Path=/", "SameSite=Strict"]
-        name, _, token = value.partition("=")
-        assert name == f"{COOKIE_PREFIX}_{server.port}"
+        body = json.dumps({"code": server.pairing_code}).encode("ascii")
+        lines = ("X-WDVA-Gate: 1", f"Content-Length: {len(body)}")
+        answer = raw(server, head(server, "POST", "/api/session/pair", *lines) + body)
+        assert answer.status == 200
+        assert not [name for name, _ in answer.headers if name.lower() == "set-cookie"]
+        token = answer.json()["session"]
         assert re.fullmatch(r"[0-9a-f]{64}", token)  # 32 random bytes
         tokens.add(token)
     assert len(tokens) == 2
 
 
+def test_no_answer_sets_a_cookie(server: AppServer, service: FakeService) -> None:
+    paired = Browser(server).pair()
+    service.error = None
+    requests = [
+        head(server, "GET", "/"),
+        head(server, "GET", "/index.html"),
+        head(server, "GET", "/app.js"),
+        head(server, "GET", "/api/session"),
+        head(server, "GET", "/api/session", paired.session_line),
+        head(server, "GET", "/api/state"),
+        head(server, "GET", "/api/state", paired.session_line),
+        head(server, "POST", "/api/lock", paired.session_line, "X-WDVA-Gate: 1"),
+        head(server, "GET", "/nothing"),
+    ]
+    for request in requests:
+        answer = raw(server, request)
+        assert not [name for name, _ in answer.headers if name.lower() == "set-cookie"], request
+
+
 def test_no_secret_is_part_of_the_address(server: AppServer, paired: Browser) -> None:
     code = server.pairing_code
     assert code is not None
-    assert paired.cookie is not None
-    token = paired.cookie.partition("=")[2]
+    assert paired.token is not None
+    token = paired.token
     for text in (server.url, repr(server)):
         assert code not in text
         assert code.replace("-", "") not in text
@@ -481,8 +511,8 @@ def test_a_wrong_code_does_not_pair(server: AppServer, service: FakeService) -> 
         answer = browser.call("POST", "/api/session/pair", json_body={"code": typed})
         assert answer.status == 403
         assert answer.error() == "wrong_code"
-        assert answer.header("Set-Cookie") is None
-    assert browser.cookie is None
+        assert server._app.token not in answer.body.decode()
+    assert browser.token is None
     assert browser.call("GET", "/api/state").status == 401
     assert service.calls == []
 
@@ -499,7 +529,7 @@ def test_five_wrong_codes_switch_pairing_off(server: AppServer, service: FakeSer
     for client in (browser, Browser(server)):
         answer = client.call("POST", "/api/session/pair", json_body={"code": server.pairing_code})
         assert (answer.status, answer.error()) == (429, "pairing_disabled")
-        assert answer.header("Set-Cookie") is None
+        assert server._app.token not in answer.body.decode()
         assert client.call("GET", "/api/state").status == 401
     # A browser that paired before stays paired.
     assert earlier.call("GET", "/api/state").status == 200
@@ -751,36 +781,53 @@ def test_every_endpoint_needs_pairing(
         assert answer.status == 401
         assert answer.error() == "pairing_required"
         assert_headers(answer)
-        browser.cookie = f"{COOKIE_PREFIX}_{server.port}=" + "0" * 64  # a guess, the second round
+        browser.token = "0" * 64  # a guess, the second round
     assert service.calls == []
 
 
-def test_cookies_that_are_not_the_session_are_refused(
+def test_tokens_that_are_not_the_session_are_refused(
     server: AppServer, make_server: MakeServer, paired: Browser, service: FakeService
 ) -> None:
-    assert paired.cookie is not None
-    name, _, token = paired.cookie.partition("=")
+    token = paired.token
+    assert token is not None
     other = Browser(make_server()).pair()
     guesses = [
-        f"{name}=",
-        f"{name}={token[:-1]}",
-        f"{name}={token}0",
-        f"{name}={token.upper()}",
-        f"other={token}",
-        f"{name}x={token}",
-        other.cookie or "",
-        f"{name}=\xe9",
+        "",
+        token[:-1],
+        token + "0",
+        token.upper(),
+        f"Bearer {token}",
+        f"{token}, {token}",
+        other.token or "",
+        "\xe9",
     ]
     for guess in guesses:
         browser = Browser(server)
-        browser.cookie = guess
+        browser.token = guess
         assert browser.call("GET", "/api/state").status == 401, guess
         assert browser.call("GET", "/api/session").json()["paired"] is False
+    # The token shown twice is not the token shown once.
+    twice = raw(server, head(server, "GET", "/api/state", paired.session_line, paired.session_line))
+    assert twice.status == 401
     assert service.calls == []
-    # Among other cookies of the same host, the right one still counts.
-    browser = Browser(server)
-    browser.cookie = f"theme=dark; {name}={token}; {COOKIE_PREFIX}_1=abc"
-    assert browser.call("GET", "/api/state").status == 200
+    assert paired.call("GET", "/api/state").status == 200
+
+
+def test_the_session_in_a_cookie_counts_for_nothing(
+    server: AppServer, paired: Browser, service: FakeService
+) -> None:
+    # What a browser would send by itself, also to other ports, is never the session.
+    token = paired.token
+    port = server.port
+    names = [f"{SLUG.replace('-', '_')}_{port}", "session", SESSION_HEADER, "X-WDVA-Gate"]
+    for name in names:
+        for line in (f"Cookie: {name}={token}", f"Cookie: a=b; {name}={token}"):
+            answer = raw(server, head(server, "GET", "/api/state", line))
+            assert (answer.status, answer.error()) == (401, "pairing_required"), line
+            answer = raw(server, head(server, "GET", "/api/session", line))
+            assert answer.json()["paired"] is False
+    assert raw(server, head(server, "GET", f"/api/state?session={token}")).status == 401
+    assert service.calls == []
 
 
 def test_unknown_api_paths_tell_an_unpaired_caller_nothing(server: AppServer) -> None:
@@ -795,6 +842,12 @@ def test_demo_mode_has_no_pairing(make_server: MakeServer, service: FakeService)
     server = make_server(pairing=False, demo=True)
     assert server.pairing_code is None
     browser = Browser(server)
+    # The page itself carries nothing, and without the session the API is closed.
+    page = raw(server, head(server, "GET", "/"))
+    assert page.body == INDEX_SERVED
+    assert server._app.token not in page.body.decode()
+    assert raw(server, head(server, "GET", "/api/state")).status == 401
+    # The session endpoint hands the session to whoever asks: every document is invented.
     session = browser.call("GET", "/api/session")
     assert session.json() == {
         "paired": False,
@@ -802,65 +855,55 @@ def test_demo_mode_has_no_pairing(make_server: MakeServer, service: FakeService)
         "demo": True,
         "version": VERSION,
         "name": PRODUCT,
+        "session": server._app.token,
     }
-    assert browser.call("GET", "/api/state").status == 401
-    # A script or a style sheet does not carry the session; the page does.
-    assert browser.call("GET", "/app.js").header("Set-Cookie") is None
-    page = browser.call("GET", "/")
-    assert page.body == INDEX_SERVED
-    cookie = page.header("Set-Cookie")
-    assert cookie is not None
-    assert sorted(part.strip() for part in cookie.split(";")[1:]) == [
-        "HttpOnly",
-        "Path=/",
-        "SameSite=Strict",
-    ]
     assert browser.call("GET", "/api/session").json()["paired"] is True
     assert browser.call("GET", "/api/state").status == 200
-    # A browser that has the cookie is not sent it again; another one gets it as well.
-    assert browser.call("GET", "/").header("Set-Cookie") is None
-    assert Browser(server).call("GET", "/index.html").header("Set-Cookie") is not None
+    assert Browser(server).call("GET", "/api/session").json()["session"] == server._app.token
+    # A page of another site cannot ask for it: the browser says where the request is from.
+    for site in ("cross-site", "same-site"):
+        answer = raw(server, head(server, "GET", "/api/session", f"Sec-Fetch-Site: {site}"))
+        assert answer.status == 403
+        assert server._app.token not in answer.body.decode()
     # There is no code to try.
     answer = Browser(server).call("POST", "/api/session/pair", json_body={"code": "ABCD-EFGH"})
     assert (answer.status, answer.error()) == (404, "not_found")
     assert service.calls == [("state", {})]
 
 
-def test_without_pairing_outside_the_demo_only_the_first_page_load_gets_the_session(
-    make_server: MakeServer,
+def test_only_a_demo_runs_without_pairing(service: FakeService, static_dir: Path) -> None:
+    # Without pairing any program on the computer is given the session. That is accepted
+    # for invented documents and for nothing else, so no other server can be made that way.
+    with pytest.raises(ValueError, match="demo"):
+        AppServer(service, pairing=False, version=VERSION, static_dir=static_dir)
+    with pytest.raises(ValueError, match="demo"):
+        AppServer(service, pairing=False, demo=False, version=VERSION, static_dir=static_dir)
+
+
+def test_with_pairing_nothing_but_the_code_gives_the_session(
+    server: AppServer, service: FakeService
 ) -> None:
-    server = make_server(pairing=False)
-    window = Browser(server)
-    assert window.call("GET", "/style.css").header("Set-Cookie") is None
-    assert window.call("GET", "/").header("Set-Cookie") is not None
-    assert window.call("GET", "/api/state").status == 200
-    assert window.call("GET", "/").header("Set-Cookie") is None
-    later = Browser(server)
-    for target in ("/", "/index.html", "/"):
-        assert later.call("GET", target).header("Set-Cookie") is None
-    assert later.call("GET", "/api/session").json() == {
-        "paired": False,
-        "pairing": "none",
-        "demo": False,
-        "version": VERSION,
-        "name": PRODUCT,
-    }
-    assert later.call("GET", "/api/state").status == 401
-
-
-def test_with_pairing_the_page_never_carries_the_session(server: AppServer) -> None:
-    browser = Browser(server)
-    for target in ("/", "/index.html", "/app.js"):
-        assert browser.call("GET", target).header("Set-Cookie") is None
-    assert browser.call("GET", "/api/session").header("Set-Cookie") is None
+    token = server._app.token
+    first = Browser(server)
+    # Not the first load of the page, nor a later one, nor the session endpoint.
+    for target in ("/", "/index.html", "/app.js", "/", "/api/session", "/api/state"):
+        answer = first.call("GET", target)
+        assert token not in answer.body.decode()
+        assert token not in json.dumps(answer.headers)
+    assert first.token is None
+    assert "session" not in first.call("GET", "/api/session").json()
+    assert first.call("GET", "/api/state").status == 401
+    assert service.calls == []
 
 
 def test_demo_flag_alone_does_not_switch_pairing_off(make_server: MakeServer) -> None:
     server = make_server(demo=True)
     assert server.pairing_code is not None
     browser = Browser(server)
-    assert browser.call("GET", "/").header("Set-Cookie") is None
-    assert browser.call("GET", "/api/session").json()["pairing"] == "code"
+    session = browser.call("GET", "/api/session").json()
+    assert session["pairing"] == "code"
+    assert "session" not in session
+    assert browser.token is None
 
 
 # -- requests from other sites -------------------------------------------------------
@@ -895,7 +938,7 @@ def test_pairing_needs_the_gate_header_too(server: AppServer) -> None:
         "POST", "/api/session/pair", json_body={"code": server.pairing_code}, gate_header=False
     )
     assert (answer.status, answer.error()) == (403, "forbidden")
-    assert answer.header("Set-Cookie") is None
+    assert browser.token is None
 
 
 @pytest.mark.parametrize(
@@ -1005,7 +1048,7 @@ def test_the_page_is_served_with_the_product_name_and_nothing_else_is_changed(
         encoding="utf-8",
     )
     (directory / "app.js").write_bytes(b'const untouched = "{{product}}";')
-    server = AppServer(service, pairing=False, version=VERSION, static_dir=directory)
+    server = AppServer(service, version=VERSION, static_dir=directory)
     server.start()
     try:
         browser = Browser(server)
@@ -1237,7 +1280,7 @@ def test_an_address_that_is_not_ascii_is_invalid(paired: Browser, service: FakeS
     for target in ("/api/documents?collection=home&name=\xc3\x9cbersicht.txt", "/api/st\xe4te"):
         request = (
             f"POST {target} HTTP/1.1\r\nHost: 127.0.0.1:{paired.server.port}\r\n"
-            f"Cookie: {paired.cookie}\r\nX-WDVA-Gate: 1\r\n\r\n"
+            f"{paired.session_line}\r\nX-WDVA-Gate: 1\r\n\r\n"
         ).encode("latin-1")
         answer = raw(paired.server, request)
         assert (answer.status, answer.error()) == (400, "invalid")
@@ -1371,7 +1414,7 @@ def announce(paired: Browser, target: str, length: int, *lines: str) -> bytes:
         paired.server,
         "POST",
         target,
-        f"Cookie: {paired.cookie}",
+        paired.session_line,
         "X-WDVA-Gate: 1",
         f"Content-Length: {length}",
         *lines,
@@ -1403,10 +1446,10 @@ def test_a_body_over_the_limit_is_refused_without_being_read(
     ("lines", "status"),
     [
         (["X-WDVA-Gate: 1", "Content-Length: 1000"], 401),  # no session
-        (["Cookie: {cookie}", "Content-Length: 1000"], 403),  # no gate header
+        (["{session}", "Content-Length: 1000"], 403),  # no gate header
         (
             [
-                "Cookie: {cookie}",
+                "{session}",
                 "X-WDVA-Gate: 1",
                 "Origin: https://evil.example",
                 "Content-Length: 1000",
@@ -1415,7 +1458,7 @@ def test_a_body_over_the_limit_is_refused_without_being_read(
         ),
         (
             [
-                "Cookie: {cookie}",
+                "{session}",
                 "X-WDVA-Gate: 1",
                 "Sec-Fetch-Site: cross-site",
                 "Content-Length: 1000",
@@ -1430,9 +1473,11 @@ def test_a_body_over_the_limit_is_refused_without_being_read(
 def test_a_body_is_not_read_before_the_checks_passed(
     lines: list[str], status: int, target: str, paired: Browser, service: FakeService
 ) -> None:
-    assert paired.cookie is not None
     request = head(
-        paired.server, "POST", target, *[line.format(cookie=paired.cookie) for line in lines]
+        paired.server,
+        "POST",
+        target,
+        *[line.format(session=paired.session_line) for line in lines],
     )
     started = time.monotonic()
     answer = raw(paired.server, request)  # announces 1000 bytes and sends none
@@ -1444,7 +1489,7 @@ def test_a_body_is_not_read_before_the_checks_passed(
 def test_a_body_from_the_wrong_host_is_not_read(paired: Browser, service: FakeService) -> None:
     request = (
         "POST /api/unlock HTTP/1.1\r\nHost: evil.example\r\n"
-        f"Cookie: {paired.cookie}\r\nX-WDVA-Gate: 1\r\nContent-Length: 1000\r\n\r\n"
+        f"{paired.session_line}\r\nX-WDVA-Gate: 1\r\nContent-Length: 1000\r\n\r\n"
     ).encode("ascii")
     assert raw(paired.server, request).status == 403
     assert service.calls == []
@@ -1465,7 +1510,7 @@ def test_a_body_of_unstated_length_is_refused(
     lines: list[str], paired: Browser, service: FakeService
 ) -> None:
     request = head(
-        paired.server, "POST", "/api/lock", f"Cookie: {paired.cookie}", "X-WDVA-Gate: 1", *lines
+        paired.server, "POST", "/api/lock", paired.session_line, "X-WDVA-Gate: 1", *lines
     )
     answer = raw(paired.server, request + b"2\r\n{}\r\n0\r\n\r\n")
     assert (answer.status, answer.error()) == (400, "invalid")
@@ -1622,6 +1667,230 @@ def test_a_wrong_passphrase_is_answered_after_a_second(
     assert time.monotonic() - started < 0.7
     service.error = None
     assert paired.call("POST", target, json_body={"passphrase": "the right one"}).status == 200
+
+
+def test_wrong_passphrases_take_turns_however_many_connections_try(
+    paired: Browser, service: FakeService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # One connection could always try one passphrase a second. Many at once must not try
+    # more, and must not have several passphrases stretched at the same moment: each
+    # stretch takes a lot of memory on purpose.
+    delay = 0.4
+    monkeypatch.setattr(httpd, "WRONG_PASSPHRASE_DELAY", delay)
+    watch = threading.Lock()
+    inside: list[int] = []
+    most: list[int] = []
+
+    def check(**arguments: Any) -> Any:
+        with watch:
+            inside.append(1)
+            most.append(len(inside))
+        time.sleep(0.03)
+        with watch:
+            inside.pop()
+        raise ServiceError(403, "wrong_passphrase", "that is not the passphrase")
+
+    for name in ("reauth", "unlock", "create_store"):
+        monkeypatch.setattr(service, name, check)
+    answered: list[tuple[int, float]] = []
+
+    def guess(target: str) -> None:
+        answer = paired.call("POST", target, json_body={"passphrase": "a wrong guess"})
+        answered.append((answer.status, time.monotonic()))
+
+    targets = ["/api/reauth", "/api/unlock", "/api/store/create"] * 2
+    guessers = [threading.Thread(target=guess, args=(target,)) for target in targets]
+    started = time.monotonic()
+    for guesser in guessers:
+        guesser.start()
+    time.sleep(delay / 2)
+    quick = time.monotonic()
+    assert paired.call("GET", "/api/state").status == 200  # other calls do not wait their turn
+    assert time.monotonic() - quick < 0.75 * delay
+    for guesser in guessers:
+        guesser.join()
+    assert [status for status, _ in answered] == [403] * len(targets)
+    assert max(most) == 1, "two passphrases were being checked at the same moment"
+    # The n-th wrong passphrase is answered no sooner than n delays after the first began.
+    for position, (_, when) in enumerate(sorted(answered, key=lambda entry: entry[1]), start=1):
+        assert when - started >= position * delay - 0.05
+    # A right passphrase waits for nothing once its turn has come.
+    monkeypatch.setattr(service, "reauth", lambda **arguments: {"did": "reauth"})
+    started = time.monotonic()
+    assert paired.call("POST", "/api/reauth", json_body={"passphrase": "right"}).status == 200
+    assert time.monotonic() - started < 0.75 * delay
+
+
+# -- connections ------------------------------------------------------------------------
+
+
+def silent(server: AppServer, count: int) -> list[socket.socket]:
+    """Connections that send half a request and then nothing; that takes no session."""
+    held = []
+    for _ in range(count):
+        sock = socket.create_connection(("127.0.0.1", server.port), timeout=5)
+        sock.sendall(f"GET / HTTP/1.1\r\nHost: 127.0.0.1:{server.port}\r\nX-Half: ".encode())
+        held.append(sock)
+        time.sleep(0.002)  # the listen queue is short: do not outrun the accept loop
+    return held
+
+
+def kept(sockets: list[socket.socket]) -> list[int]:
+    """Which of the connections the server has not closed, by their position."""
+    open_still = []
+    for position, sock in enumerate(sockets):
+        sock.setblocking(False)
+        try:
+            if sock.recv(1) != b"":
+                open_still.append(position)
+        except BlockingIOError:
+            open_still.append(position)
+        except OSError:
+            pass  # reset: closed as well
+    return open_still
+
+
+def settled(sockets: list[socket.socket], most: int) -> list[int]:
+    """The connections still kept once at most ``most`` are, or after two seconds."""
+    deadline = time.monotonic() + 2
+    while len(kept(sockets)) > most and time.monotonic() < deadline:
+        time.sleep(0.02)
+    return kept(sockets)
+
+
+def test_silent_connections_cannot_take_every_place(
+    server: AppServer, paired: Browser, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert httpd.MAX_CONNECTIONS == 64
+    monkeypatch.setattr(httpd, "MAX_CONNECTIONS", 8)
+    monkeypatch.setattr(httpd, "_LEAVING_CONNECTIONS", 4)
+    held = silent(server, 40)
+    try:
+        # Each connection costs the app a thread and a file descriptor, so it keeps a
+        # bounded number of them, and not the ones that had waited longest: each
+        # newcomer took the place of one of those.
+        still = settled(held, 8)
+        assert len(still) <= 8
+        assert not set(still) & set(range(8)), "the connections that waited longest were kept"
+        # With every place taken by a connection that says nothing, the owner's page,
+        # paired or not yet, is answered at once all the same.
+        for _ in range(3):
+            started = time.monotonic()
+            assert paired.call("GET", "/api/state").status == 200
+            assert Browser(server).call("GET", "/").status == 200
+            assert time.monotonic() - started < 2
+        assert len(kept(held)) <= 8
+        assert len(server._httpd._open) <= 8 + 4
+    finally:
+        for sock in held:
+            sock.close()
+    # The places come back when the connections go.
+    deadline = time.monotonic() + 5
+    while server._httpd._open and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert not server._httpd._open
+
+
+def test_a_connection_that_showed_the_session_is_not_closed_for_a_newcomer(
+    server: AppServer, paired: Browser, service: FakeService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(httpd, "MAX_CONNECTIONS", 4)
+    entered = threading.Semaphore(0)
+    go_on = threading.Event()
+
+    def slow_state() -> Any:
+        entered.release()
+        go_on.wait(20)
+        return {"did": "state"}
+
+    monkeypatch.setattr(service, "state", slow_state)
+    statuses: list[int] = []
+    callers = [
+        threading.Thread(target=lambda: statuses.append(paired.call("GET", "/api/state").status))
+        for _ in range(4)
+    ]
+    for caller in callers:
+        caller.start()
+    try:
+        for _ in callers:
+            assert entered.acquire(timeout=10)
+        # Every place is taken by a call of the owner's own page. None of them is cut
+        # off for a newcomer: the newcomer is closed at once, without an answer.
+        for _ in range(3):
+            newcomer = socket.create_connection(("127.0.0.1", server.port), timeout=5)
+            # Closed with unread bytes, the system may say "reset" instead of "ended".
+            with newcomer, contextlib.suppress(ConnectionError):
+                newcomer.sendall(head(server, "GET", "/"))
+                assert newcomer.recv(100) == b""
+    finally:
+        go_on.set()
+        for caller in callers:
+            caller.join()
+    assert statuses == [200] * 4
+    assert Browser(server).call("GET", "/").status == 200
+
+
+FEW_FILES = """
+import resource, sys
+resource.setrlimit(resource.RLIMIT_NOFILE, ({limit}, resource.getrlimit(resource.RLIMIT_NOFILE)[1]))
+from wdva.gate.app.httpd import AppServer
+
+class Service:
+    def state(self):
+        return {{"did": "state"}}
+
+server = AppServer(Service(), version="0")
+server.start()
+print(server.port, server.pairing_code, flush=True)
+sys.stdin.read()  # until the test closes the pipe
+server.stop()
+"""
+
+
+def test_the_app_answers_when_more_connections_come_than_it_may_have_files_open() -> None:
+    # A process started from a terminal may have 256 files open on macOS. Without a bound
+    # on its connections, that many silent ones leave the app unable to accept the owner's
+    # browser, to answer agent applications or to open a file of the vault.
+    limit = 128
+    assert limit >= httpd.MAX_CONNECTIONS + httpd._LEAVING_CONNECTIONS + 16
+    child = subprocess.Popen(
+        [sys.executable, "-c", FEW_FILES.format(limit=limit)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    held: list[socket.socket] = []
+    try:
+        assert child.stdout is not None
+        port, code = child.stdout.readline().split()
+        for _ in range(limit + 40):
+            try:
+                sock = socket.create_connection(("127.0.0.1", int(port)), timeout=3)
+            except OSError:
+                break  # the app accepts no more: its table of open files is full
+            sock.sendall(f"GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nX-Half: ".encode())
+            held.append(sock)
+            time.sleep(0.002)  # the listen queue is short: do not outrun the accept loop
+        time.sleep(0.3)  # what was still on its way in has been dealt with
+        for _ in range(3):
+            connection = http.client.HTTPConnection("127.0.0.1", int(port), timeout=5)
+            try:
+                connection.request(
+                    "POST",
+                    "/api/session/pair",
+                    body=json.dumps({"code": code}),
+                    headers={"X-WDVA-Gate": "1"},
+                )
+                assert connection.getresponse().status == 200
+            finally:
+                connection.close()
+        assert len(kept(held)) <= httpd.MAX_CONNECTIONS
+    finally:
+        for sock in held:
+            sock.close()
+        assert child.stdin is not None
+        child.stdin.close()
+        child.wait(timeout=20)
 
 
 # -- silence, start and stop ------------------------------------------------------------

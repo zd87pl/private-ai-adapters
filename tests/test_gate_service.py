@@ -527,11 +527,137 @@ def test_narrowing_needs_no_owner_mode(unlocked: GateService, gate_clock: FakeCl
     added = unlocked.add_document(collection="archive", name="old.txt", data=b"An old letter.")
     unlocked.remove_document(id=added["document"]["id"])
     unlocked.remove_collection(name="archive")
-    unlocked.set_serving(kinds="local")
-    unlocked.set_serving(kinds="hosted", paused=["claude-desktop"])
+    unlocked.set_serving(kinds="hosted")  # what is in force already, now as the owner's choice
+    unlocked.set_serving(paused=["claude-desktop"])
+    unlocked.set_serving(kinds="local", paused=["claude-desktop", "lm-studio"])
     unlocked.remove_app(name="lm-studio")
     assert unlocked.verify()["verified"] is True
     assert unlocked.lock()["locked"] is True
+
+
+def _pause(*names: str) -> Callable[[GateService], Any]:
+    return lambda s: s.set_serving(paused=list(names))
+
+
+# What makes the session answer an app that it did not answer: how the session is set
+# up while owner mode lasts, what is tried after it ended, and who is answered then.
+ANSWERING_MORE: dict[
+    str, tuple[Callable[[GateService], Any], Callable[[GateService], Any], tuple[str, str]]
+] = {
+    "an app is no longer paused": (_pause("claude-desktop"), _pause(), ("OK", "NOT_ALLOWED")),
+    "one app is paused in place of another": (
+        lambda s: s.set_serving(kinds="both", paused=["lm-studio"]),
+        _pause("claude-desktop"),
+        ("NOT_ALLOWED", "OK"),
+    ),
+    "local apps in place of hosted ones": (
+        lambda s: None,
+        lambda s: s.set_serving(kinds="local"),
+        ("NOT_ALLOWED", "OK"),
+    ),
+    "hosted apps in place of local ones": (
+        lambda s: s.set_serving(kinds="local"),
+        lambda s: s.set_serving(kinds="hosted"),
+        ("OK", "NOT_ALLOWED"),
+    ),
+    "the other kind, and a pause that hides it": (
+        lambda s: None,
+        lambda s: s.set_serving(kinds="local", paused=["claude-desktop"]),
+        ("NOT_ALLOWED", "OK"),
+    ),
+    "the last hosted app is removed": (
+        lambda s: None,
+        lambda s: s.remove_app(name="claude-desktop"),
+        ("NOT_ALLOWED", "OK"),
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(ANSWERING_MORE))
+def test_answering_an_app_again_needs_owner_mode(
+    unlocked: GateService, gate_clock: FakeClock, name: str
+) -> None:
+    prepare, act, then = ANSWERING_MORE[name]
+
+    def answered() -> tuple[str, str]:
+        return unlocked.backend.status(CLAUDE).code, unlocked.backend.status(LM).code
+
+    prepare(unlocked)
+    answered_before = answered()  # asking leaves a record, so the picture is taken after it
+    before = picture(unlocked)
+    assert answered_before != then
+    expire_owner_mode(gate_clock)
+    with refused(403, "reauth_required"):
+        act(unlocked)
+    assert picture(unlocked) == before, "a refused change changed something"
+    assert answered() == answered_before, "an app is answered that the owner had stopped"
+
+    unlocked.reauth(passphrase=gs.PASSPHRASE)
+    act(unlocked)
+    assert answered() == then
+
+
+def test_an_app_that_is_not_answered_gets_no_text_without_the_passphrase(
+    unlocked: GateService, gate_clock: FakeClock
+) -> None:
+    ref = first_ref(unlocked, CLAUDE, "lease")
+    unlocked.set_serving(paused=["claude-desktop"])
+    expire_owner_mode(gate_clock)
+    for attempt in ({"paused": []}, {"kinds": "local"}, {"kinds": "hosted", "paused": []}):
+        with refused(403, "reauth_required"):
+            unlocked.set_serving(**attempt)
+        for caller in (CLAUDE, LM):
+            reply = unlocked.backend.read(caller, ref)
+            assert (reply.code, reply.released) == ("NOT_ALLOWED", False)
+            assert gs.LEASE_MARKER not in reply.text
+
+
+def test_one_passphrase_is_checked_at_a_time(
+    unlocked: GateService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Checking a passphrase stretches it, which takes a lot of memory on purpose. Checks
+    # that arrive together must wait for one another, or their memory adds up.
+    session = unlocked._session
+    assert session is not None
+    real = session.store.check_passphrase
+    watch = threading.Lock()
+    inside: list[int] = []
+    most: list[int] = []
+
+    def check(passphrase: str) -> bool:
+        with watch:
+            inside.append(1)
+            most.append(len(inside))
+        try:
+            time.sleep(0.02)
+            return real(passphrase)
+        finally:
+            with watch:
+                inside.pop()
+
+    monkeypatch.setattr(session.store, "check_passphrase", check)
+    outcomes: list[str] = []
+
+    def ask(number: int) -> None:
+        try:
+            if number == 0:
+                unlocked.reauth(passphrase=gs.PASSPHRASE)
+            elif number % 2:
+                unlocked.reauth(passphrase=f"wrong passphrase {number}")
+            else:  # unlocking an unlocked vault checks the passphrase as well
+                unlocked.unlock(passphrase=f"wrong passphrase {number}")
+            outcomes.append("accepted")
+        except ServiceError as error:
+            outcomes.append(error.code)
+
+    askers = [threading.Thread(target=ask, args=(number,)) for number in range(8)]
+    for asker in askers:
+        asker.start()
+    for asker in askers:
+        asker.join()
+    assert len(most) == 8
+    assert max(most) == 1, "several passphrases were being stretched at the same moment"
+    assert sorted(outcomes) == ["accepted"] + ["wrong_passphrase"] * 7
 
 
 # -- which apps are answered ---------------------------------------------------------------
@@ -579,6 +705,11 @@ def test_serving_choice(unlocked: GateService, gate_clock: FakeClock) -> None:
     assert answered() == ("OK", "NOT_ALLOWED")
     apps = {app["name"]: app for app in unlocked.apps()["apps"]}
     assert (apps["lm-studio"]["paused"], apps["lm-studio"]["served"]) == (True, False)
+    # Pausing took no passphrase. Answering the app again lets more leave, and does.
+    with refused(403, "reauth_required"):
+        unlocked.set_serving(paused=[])
+    assert answered() == ("OK", "NOT_ALLOWED")
+    unlocked.reauth(passphrase=gs.PASSPHRASE)
     assert unlocked.set_serving(paused=[])["serving"]["local"] == ["lm-studio"]
 
     # A new session starts without the choice.
@@ -1965,6 +2096,36 @@ def test_a_passage_past_the_free_allowance_waits_although_the_app_may_read(
     assert waiting["document"]["characters"] == document["characters"]
     assert waiting["document"]["free"] == (document["characters"] + 1) // 2
     assert waiting["document"]["after"] > waiting["document"]["free"]
+
+
+@pytest.mark.parametrize("limit", [500, 2000, 2282])
+def test_a_small_daily_limit_does_not_switch_asking_off(unlocked: GateService, limit: int) -> None:
+    # "Ask me each time" must ask, whatever the app's limit is. Whether the passage
+    # would fit is said to the owner on its card, not decided before the owner sees it.
+    unlocked.set_app_limits(name="claude-desktop", limits={"chars_per_day": limit})
+    ref = first_ref(unlocked, CLAUDE, "income tax", "tax")
+    app = unlocked.apps()["apps"][0]
+    assert app["name"] == "claude-desktop"
+    assert 0 < app["usage"]["chars_day"] < limit  # the search left room, and the app is told so
+    reply = unlocked.backend.read(CLAUDE, ref)
+    assert reply.code == "NEEDS_APPROVAL", reply.text
+    assert gs.TAX_MARKER not in reply.text
+    (waiting,) = unlocked.approvals()["waiting"]
+    assert (waiting["app"], waiting["ref"], waiting["mode"]) == ("claude-desktop", ref, "approve")
+    left = limit - app["usage"]["chars_day"]
+    assert waiting["fits_limits"] is (waiting["result_characters"] <= left)
+    newest = unlocked.activity(limit=1)["items"][0]
+    assert (newest["kind"], newest["code"]) == ("refusal", "NEEDS_APPROVAL")
+
+    unlocked.release(app="claude-desktop", ref=ref, body_sha256=waiting["body_sha256"])
+    reply = unlocked.backend.read(CLAUDE, ref)
+    if waiting["fits_limits"]:
+        assert (reply.code, reply.released) == ("OK", True)
+        assert gs.TAX_MARKER in reply.text
+    else:
+        # Approved, but longer than what is left: the limit holds for approved text too.
+        assert (reply.code, reply.released) == ("OVER_LIMIT", False)
+        assert gs.TAX_MARKER not in reply.text
 
 
 def test_connect_says_when_the_command_cannot_start(
