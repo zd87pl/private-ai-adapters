@@ -7,4 +7,4 @@ Two Node scripts drive the owner's interface in a real browser, against the real
     node tests/browser/journey_demo.js && node tests/browser/journey_real.js
 
 Each step prints `ok` or `FAIL`; the exit status is 1 when a step failed, the page logged an error, a request failed, or an HTTP error came that no step announced. The head of each script lists its options (`GATE_PYTHON`, `GATE_BROWSER`, `GATE_SHOTS`, `GATE_SCALE`, `GATE_PORT`); screenshots go to `shots/` in this directory.
-CI runs both on every push (job "Browser" in `.github/workflows/ci.yml`): on Linux in Chromium, and on macOS in WebKit, the engine of Safari.
+CI runs both on every push (job "Browser" in `.github/workflows/tests.yml`): on Linux in Chromium, and on macOS in WebKit, the engine of Safari.

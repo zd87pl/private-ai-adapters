@@ -114,11 +114,13 @@ python -m build
 twine check --strict dist/*
 ```
 
-CI (`.github/workflows/ci.yml`) runs all of the above on every pull request and
-on pushes to `main`: lint and types; the core tests on Linux, macOS and Windows
-with only the core install; the tests of the app (`wdva gate`) on Linux and
-macOS with the `gate` extra; the full suite with the ML stack on Linux, on macOS
-on Apple Silicon, and against the oldest supported version of every dependency;
+CI runs all of the above once for every commit: when a branch of this repository
+is pushed, and for a pull request from a fork (`.github/workflows/ci.yml` decides
+when, `.github/workflows/tests.yml` holds the jobs). The jobs: lint and types; the
+core tests on Linux, macOS and Windows with only the core install; the tests of
+the app (`wdva gate`) on Linux and macOS with the `gate` extra; the full suite
+with the ML stack on Linux, on macOS on Apple Silicon, and against the oldest
+supported version of every dependency;
 and a build of the wheel, which is then installed into a clean environment and
 smoke-tested. If you raise a dependency's minimum version in `pyproject.toml`,
 raise the matching pin in the `ml-minimum` job too.
