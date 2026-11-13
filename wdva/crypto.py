@@ -24,9 +24,11 @@ import json
 import logging
 import os
 import secrets
+import sys
 from base64 import b64decode, b64encode
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Dict, Optional, TypedDict
+from typing import Any, Dict, Literal, Optional, TypedDict
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +56,9 @@ except ImportError:
     pass
 
 try:
-    from safetensors.torch import load as safetensors_load
-    from safetensors.torch import save as safetensors_save
+    import numpy as np
+    from safetensors.numpy import load as safetensors_load_numpy
+    from safetensors.numpy import save as safetensors_save_numpy
     _SAFETENSORS_AVAILABLE = True
 except ImportError:
     pass
@@ -64,6 +67,9 @@ except ImportError:
 # =============================================================================
 # Type Definitions
 # =============================================================================
+
+Framework = Literal["numpy", "mlx", "torch"]
+
 
 class EncryptedPackage(TypedDict):
     """Structure of an encrypted adapter file."""
@@ -89,6 +95,104 @@ ENCRYPTION_INFO = b"wdva-encryption-v1"
 CURRENT_VERSION = "1.0"
 ALGORITHM = "XChaCha20-Poly1305"
 KDF_ALGORITHM = "HKDF-SHA256"
+
+SUPPORTED_FRAMEWORKS = ("numpy", "mlx", "torch")
+
+# Metadata keys written by encrypt_weights() and read back by decrypt_weights().
+# Callers may not override them through the `metadata` argument.
+RESERVED_METADATA_KEYS = frozenset({'version', 'num_tensors', 'original_size', 'compressed'})
+
+
+# =============================================================================
+# Serialization helpers
+# =============================================================================
+
+def _serialize_weights(weights: Dict[str, Any]) -> bytes:
+    """
+    Serialize a dict of tensors to safetensors bytes, in memory.
+
+    Accepts numpy arrays, MLX arrays or PyTorch tensors (one kind per dict).
+    MLX and PyTorch are only used if the caller has already imported them,
+    so this never pulls in a heavy framework on its own.
+    """
+    if not isinstance(weights, dict):
+        raise TypeError(f"weights must be a dict, got {type(weights).__name__}")
+    if not all(isinstance(name, str) for name in weights):
+        raise TypeError("weight names must be str")
+
+    values = list(weights.values())
+
+    if all(isinstance(v, np.ndarray) for v in values):
+        # safetensors.numpy writes each array's raw buffer and ignores strides,
+        # so transposed, Fortran-order or sliced views must be copied to
+        # C order first or they are written with the wrong values.
+        return safetensors_save_numpy(
+            {name: np.array(v, order="C", copy=True) for name, v in weights.items()}
+        )
+
+    mx = sys.modules.get("mlx.core")
+    if mx is not None and all(isinstance(v, mx.array) for v in values):
+        buffer = io.BytesIO()
+        mx.save_safetensors(buffer, weights)
+        return buffer.getvalue()
+
+    torch = sys.modules.get("torch")
+    if torch is not None and all(isinstance(v, torch.Tensor) for v in values):
+        from safetensors.torch import save as safetensors_save_torch
+        # safetensors.torch rejects non-contiguous and storage-sharing tensors
+        return safetensors_save_torch(
+            {name: v.detach().cpu().contiguous().clone() for name, v in weights.items()}
+        )
+
+    kinds = sorted({f"{type(v).__module__}.{type(v).__name__}" for v in values})
+    raise TypeError(
+        "weights must all be numpy arrays, MLX arrays or torch tensors "
+        f"(one kind per dict), got: {', '.join(kinds)}"
+    )
+
+
+# safetensors dtypes each framework cannot load faithfully: numpy has no
+# bfloat16 or float8, MLX has no float8 (it would come back as uint8) and
+# cannot load float64.
+_UNSUPPORTED_DTYPES = {
+    "numpy": lambda dtype: dtype == "BF16" or dtype.startswith("F8"),
+    "mlx": lambda dtype: dtype == "F64" or dtype.startswith("F8"),
+    "torch": lambda dtype: False,
+}
+
+
+def _safetensors_dtypes(data: bytes) -> set[str]:
+    """Read the tensor dtypes from a safetensors header."""
+    header_size = int.from_bytes(data[:8], "little")
+    header = json.loads(data[8:8 + header_size])
+    return {info["dtype"] for name, info in header.items() if name != "__metadata__"}
+
+
+def _deserialize_weights(data: bytes, framework: Framework) -> Dict[str, Any]:
+    """Deserialize safetensors bytes into arrays of the requested framework."""
+    if framework not in _UNSUPPORTED_DTYPES:
+        raise ValueError(
+            f"Unsupported framework {framework!r}; expected one of {SUPPORTED_FRAMEWORKS}"
+        )
+
+    unsupported = sorted(d for d in _safetensors_dtypes(data) if _UNSUPPORTED_DTYPES[framework](d))
+    if unsupported:
+        alternatives = [
+            f"framework={other!r}" for other in SUPPORTED_FRAMEWORKS
+            if not any(_UNSUPPORTED_DTYPES[other](d) for d in unsupported)
+        ]
+        raise ValueError(
+            f"Adapter contains dtypes {unsupported} that {framework} cannot represent; "
+            f"decrypt with {' or '.join(alternatives)}"
+        )
+
+    if framework == "numpy":
+        return safetensors_load_numpy(data)
+    if framework == "mlx":
+        import mlx.core as mx
+        return mx.load(io.BytesIO(data), format="safetensors")
+    from safetensors.torch import load as safetensors_load_torch
+    return safetensors_load_torch(data)
 
 
 # =============================================================================
@@ -193,28 +297,42 @@ class EncryptedAdapter:
         Encrypt adapter weights and save to file.
         
         Args:
-            weights: Dictionary of adapter weights (PyTorch tensors)
+            weights: Dictionary of adapter weights: numpy arrays, MLX arrays
+                or PyTorch tensors (one kind per dict)
             output_path: Path to save encrypted adapter
-            metadata: Optional metadata to include (stored in plaintext but authenticated)
+            metadata: Optional JSON-serializable metadata to include (stored in
+                plaintext but authenticated). May not use the reserved keys
+                'version', 'num_tensors', 'original_size' or 'compressed'.
             
         Returns:
             Dictionary with encryption metadata
             
         Raises:
-            ImportError: If safetensors is not available
+            ImportError: If safetensors/numpy is not available
+            TypeError: If weights are not a dict of supported arrays keyed by
+                str, or metadata is not a mapping with str keys
+            ValueError: If metadata uses a reserved key
             OSError: If file cannot be written
         """
         if not _SAFETENSORS_AVAILABLE:
             raise ImportError(
-                "safetensors not available. Install with: pip install safetensors"
+                "safetensors not available. Install with: pip install safetensors numpy"
             )
+        
+        if metadata is not None:
+            if not isinstance(metadata, Mapping):
+                raise TypeError(f"metadata must be a mapping, got {type(metadata).__name__}")
+            metadata = dict(metadata)
+            if not all(isinstance(k, str) for k in metadata):
+                raise TypeError("metadata keys must be str")
+            clashing = RESERVED_METADATA_KEYS & metadata.keys()
+            if clashing:
+                raise ValueError(f"metadata may not override reserved keys: {sorted(clashing)}")
         
         output_path = Path(output_path)
         
         # Serialize weights to safetensors format (in memory)
-        buffer = io.BytesIO()
-        safetensors_save(weights, buffer)
-        serialized_data = buffer.getvalue()
+        serialized_data = _serialize_weights(weights)
         original_size = len(serialized_data)
         
         # Compress if enabled
@@ -283,7 +401,12 @@ class EncryptedAdapter:
         logger.info("Encrypted adapter saved to %s (%d tensors)", output_path, len(weights))
         return encrypted_package
     
-    def decrypt_weights(self, encrypted_path: str | Path) -> Dict[str, Any]:
+    def decrypt_weights(
+        self,
+        encrypted_path: str | Path,
+        *,
+        framework: Framework = "numpy"
+    ) -> Dict[str, Any]:
         """
         Decrypt adapter weights from file.
         
@@ -291,15 +414,21 @@ class EncryptedAdapter:
         
         Args:
             encrypted_path: Path to encrypted adapter file
+            framework: Array type to return: "numpy" (default), "mlx" or "torch"
             
         Returns:
-            Dictionary of decrypted weights (PyTorch tensors)
+            Dictionary of decrypted weights as arrays of the requested framework
             
         Raises:
             FileNotFoundError: If encrypted file doesn't exist
             ValueError: If decryption fails (wrong key or tampered data)
             json.JSONDecodeError: If file is not valid JSON
         """
+        if framework not in SUPPORTED_FRAMEWORKS:
+            raise ValueError(
+                f"Unsupported framework {framework!r}; expected one of {SUPPORTED_FRAMEWORKS}"
+            )
+        
         encrypted_path = Path(encrypted_path)
         
         if not encrypted_path.exists():
@@ -320,6 +449,11 @@ class EncryptedAdapter:
             raise ValueError(
                 f"Unsupported algorithm: {encrypted_package['algorithm']} "
                 f"(expected {ALGORITHM})"
+            )
+        if encrypted_package['kdf'] != KDF_ALGORITHM:
+            raise ValueError(
+                f"Unsupported KDF: {encrypted_package['kdf']} "
+                f"(expected {KDF_ALGORITHM})"
             )
         
         # Check version (with forward compatibility)
@@ -372,10 +506,10 @@ class EncryptedAdapter:
         # Deserialize from safetensors (in-memory only)
         if not _SAFETENSORS_AVAILABLE:
             raise ImportError(
-                "safetensors not available. Install with: pip install safetensors"
+                "safetensors not available. Install with: pip install safetensors numpy"
             )
         
-        weights = safetensors_load(serialized_data)
+        weights = _deserialize_weights(serialized_data, framework)
         
         num_tensors = len(weights)
         logger.info("Decrypted %d tensors from %s", num_tensors, encrypted_path)

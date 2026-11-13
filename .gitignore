@@ -76,6 +76,7 @@ dmypy.json
 # Adapters (contain sensitive data)
 adapters/
 *.wdva
+!tests/data/*.wdva
 
 # Downloaded papers
 arxiv_*.pdf

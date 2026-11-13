@@ -298,7 +298,7 @@ class LocalInference:
         adapter = EncryptedAdapter(key_bytes)
         
         try:
-            adapter_weights = adapter.decrypt_weights(adapter_path)
+            adapter_weights = adapter.decrypt_weights(adapter_path, framework=self._backend)
             logger.info("Decrypted adapter with %d tensors", len(adapter_weights))
             
             # NOTE: Full adapter application requires DoRA/LoRA merging logic.
