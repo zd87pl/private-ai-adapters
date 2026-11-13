@@ -2831,6 +2831,102 @@
   text-align: left;
 }
 
+/* A button that reads as a link: it opens a sheet and goes nowhere. */
+button.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* -- the controls of the Basic page and their sheets ------------------------------- */
+
+/* The sample letter: what it is, and the button that removes it, on one line where both fit. */
+.basic-sample {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  color: var(--text-2);
+}
+
+/* Under the files that were sealed: which apps can ask for them from now on. */
+.upload-said {
+  padding: 1px 0 3px 24px;
+}
+
+.upload-who {
+  color: var(--text);
+}
+
+.upload-group {
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+/* A choice whose options each carry a sentence or two: the sentence stands under the option. */
+.choice-stack .choice {
+  align-items: flex-start;
+}
+
+.choice-stack .choice input {
+  margin-top: 3px;
+}
+
+.choice-stack .choice-text {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.choice-stack .choice-hint {
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.sheet-who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: -6px;
+}
+
+.sheet-files {
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.basic-opens {
+  color: var(--text-2);
+  font-size: var(--fs-s);
+}
+
+/* Below the buttons of the app's sheet: where its connection steps are, and removing it. */
+.sheet-more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.sheet-more .btn {
+  margin-right: -8px;
+}
+
+/* In a sheet the statements stand in one column. */
+.sheet .cannot {
+  columns: 1;
+}
+
+.sheet .version {
+  text-align: left;
+}
+
 /* The view, in the bottom-left corner at every width. */
 .viewbar {
   position: sticky;

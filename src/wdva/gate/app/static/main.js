@@ -11,7 +11,7 @@ import { el, icon, render } from "./dom.js";
 import { at, num, parseTime } from "./format.js";
 import { bootScreen, createScreen, lockedScreen, offlineScreen, pairingScreen, setupScreen } from "./gateway.js";
 import { appsView, documentsView, vaultView } from "./manage.js";
-import { button, chip, closeAllSheets, iconButton, segmented, toast, toastError } from "./parts.js";
+import { button, chip, closeAllSheets, iconButton, segmented, toast, toastError, watchSheets } from "./parts.js";
 import { requestReauth } from "./sheets.js";
 import { activityView, approvalCardKey, approvalsView, detailPanel, overviewView } from "./views.js";
 
@@ -109,6 +109,8 @@ function freshUi() {
     docsOpen: false,
     panelMore: false,
     copied: null,
+    // How many sheets lie over the page. The Basic page has its cards and its sheets on one page.
+    sheets: 0,
   };
 }
 
@@ -951,6 +953,13 @@ function sessionEnded() {
 }
 
 configure({ unauthorized: sessionEnded, reauth: () => requestReauth(ctx.state ? ctx.state.demo_passphrase : null) });
+
+// The page is drawn again whenever a sheet has opened or closed, in the same turn: where cards
+// lie under the sheet, "Release once" waits again before a press can reach it.
+watchSheets((open) => {
+  ctx.ui.sheets = open;
+  schedule();
+});
 
 window.addEventListener("hashchange", onRoute);
 

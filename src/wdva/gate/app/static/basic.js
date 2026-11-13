@@ -7,13 +7,30 @@
 // it says what is in force in a sentence and links to the place in Pro. Every
 // line about a setting is made from an answer of the app; this file holds no
 // copy of the values of a new vault.
+//
+// What it changes: documents are added and removed, an app is removed, and where
+// the vault has one group of documents an app's access to it is set. Nothing else.
 
+import { api } from "./api.js";
 import { PRODUCT } from "./brand.js";
 import { el, icon } from "./dom.js";
-import { ago, at, count, dayShort, num, parseTime, whenFull } from "./format.js";
-import { loadingBlock } from "./manage.js";
-import { UNANSWERED, activityRow, button, chip, copyText, destinationChip, meter, toast } from "./parts.js";
-import { GENERAL_SENTENCE, GRANT_LABEL, basicGrantSentence, codeWords } from "./sheets.js";
+import { ago, at, count, dayShort, num, parseTime, percent, whenFull } from "./format.js";
+import { CANNOT, dropZone, isSample, loadingBlock, removeApp, removeDocument, uploadFiles, versionLine, whoMayAsk } from "./manage.js";
+import {
+  UNANSWERED,
+  activityRow,
+  button,
+  chip,
+  copyText,
+  destinationChip,
+  iconButton,
+  meter,
+  openSheet,
+  sheetFoot,
+  sheetHead,
+  toast,
+} from "./parts.js";
+import { GENERAL_SENTENCE, GRANT_LABEL, basicGrantSentence, codeWords, grantSentence } from "./sheets.js";
 import { approvalCards, warningList } from "./views.js";
 
 /** How many waiting passages are shown as cards before "Show the other N" is pressed. */
@@ -22,6 +39,19 @@ const DAY_MS = 86400000;
 
 /** What starts a question that makes an AI app use the vault. The space at its end is part of it. */
 const ASK_START = `Use ${PRODUCT} to search my documents and answer this: `;
+
+/** Said wherever a name stands for something that happened, and where names are managed. */
+const NAME_IS_A_LABEL = `A name is a label: ${PRODUCT} cannot check which program is really asking.`;
+
+/** The group that documents go to in a vault that has none yet. */
+const FIRST_GROUP = "documents";
+
+/** What an app may do with one group, as the app said it: "approve", "read" or "none", and nothing else. */
+function grantOf(app, group) {
+  const grants = app.grants || {};
+  const mode = Object.prototype.hasOwnProperty.call(grants, group) ? grants[group] : "none";
+  return mode === "approve" || mode === "read" ? mode : "none";
+}
 
 // -- pieces -------------------------------------------------------------------------
 
@@ -174,6 +204,9 @@ function approvalsSection(ctx, problem) {
     ctx.ui.copied === "bar-launch-copy" ? "copied" : "",
     all ? "all" : "",
     ctx.panel ? "panel" : "",
+    // A sheet of this page lies over the cards. When it closes, a second press that was meant
+    // for one of its buttons would meet whatever is under it.
+    ctx.ui.sheets > 0 ? "sheet" : "",
   ].join("\n");
   const drawn = approvalCards(ctx, { limit: all ? null : CARDS_AT_FIRST, around });
   const nothing = drawn !== null && drawn.cards.length === 0;
@@ -424,6 +457,7 @@ function documentsTable(ctx, groups) {
           el("th", { scope: "col", class: "num col-passages" }, "Passages"),
           el("th", { scope: "col", class: "col-added" }, "Added"),
           el("th", { scope: "col", class: "col-left" }, "Left so far"),
+          el("th", { scope: "col", class: "col-action" }, el("span", { class: "sr-only" }, "Remove")),
         ),
       ),
       el(
@@ -443,6 +477,8 @@ function documentsTable(ctx, groups) {
               el("td", { class: "num" }, num(document.passages)),
               el("td", { class: "col-added", title: whenFull(document.added) }, dayShort(document.added, ctx.now)),
               el("td", { class: ["col-left", document.released.hosted + document.released.local > 0 ? null : "muted"] }, leftSoFar(document.released)),
+              // Removing narrows what apps can get, so it is offered whatever else the vault holds.
+              el("td", { class: "col-action" }, iconButton("trash", `Remove ${document.title}`, { onclick: () => removeDocument(ctx, document) })),
             ),
           ),
         ),
@@ -451,12 +487,96 @@ function documentsTable(ctx, groups) {
   );
 }
 
+/** "3 files: a.txt, b.txt, c.txt" and, past three names, "and 2 more". */
+function fileNames(files) {
+  const names = files.slice(0, 3).map((file) => file.name).join(", ");
+  const more = files.length > 3 ? ` and ${num(files.length - 3)} more` : "";
+  return `${count(files.length, "file", "files")}: ${names}${more}`;
+}
+
+/**
+ * The sheet that asks which group the files go to, in a vault with several. No
+ * group is chosen for the owner. Each group says who can ask for what is in it, and
+ * once one is chosen that an app which sends text to a provider can use, the
+ * sentence about that stands above the buttons. "Cancel" drops the files: nothing
+ * is sent. It is built from the lists as they are when it opens.
+ */
+async function addToWhichGroup(ctx, files) {
+  if (!files.length || !ctx.data.apps || !ctx.data.documents) return;
+  const apps = ctx.data.apps.apps;
+  const groups = ctx.data.documents.collections.map((group) => group.name);
+  const form = { group: null };
+  const sheet = openSheet(
+    (self) => {
+      const senders = form.group === null ? [] : apps.filter((app) => app.hosted && grantOf(app, form.group) !== "none");
+      return el(
+        "div",
+        { class: "sheet-content" },
+        sheetHead("Add to which group?"),
+        el("p", { class: "sheet-files" }, fileNames(files)),
+        el(
+          "div",
+          { class: "choice-list choice-stack", role: "radiogroup", "aria-label": "Add to which group?" },
+          groups.map((group, index) => {
+            const names = whoMayAsk(apps, group, `${GRANT_LABEL.read}: passages can leave without asking`);
+            return el(
+              "label",
+              { class: ["choice", form.group === group && "is-selected"], key: `group-${group}` },
+              el("input", {
+                type: "radio",
+                name: "basic-group",
+                value: group,
+                checked: form.group === group,
+                "aria-labelledby": `basic-group-${index}-name`,
+                "aria-describedby": `basic-group-${index}-who`,
+                onchange: () => {
+                  form.group = group;
+                  self.update();
+                },
+              }),
+              el(
+                "span",
+                { class: "choice-text" },
+                el("span", { class: "choice-label", id: `basic-group-${index}-name` }, group),
+                el("span", { class: "choice-hint", id: `basic-group-${index}-who` }, names.length ? names.join(", ") : "No app can ask for what is in it."),
+              ),
+            );
+          }),
+        ),
+        senders.length
+          ? el(
+              "p",
+              { class: "note note-amber", role: "note" },
+              icon("warning"),
+              el("span", { class: "note-text" }, senders.length === 1 ? grantSentence(senders[0], form.group) : GENERAL_SENTENCE),
+            )
+          : null,
+        sheetFoot(
+          button("Cancel", { onclick: () => self.close(null), autofocus: true }),
+          // Only this press sends the files: a key pressed on a choice does not.
+          button("Add", {
+            kind: "primary",
+            disabled: form.group === null,
+            onclick: () => {
+              if (form.group !== null) self.close(form.group);
+            },
+          }),
+        ),
+      );
+    },
+    { label: "Add to which group?" },
+  );
+  const group = await sheet.closed;
+  if (typeof group === "string") await uploadFiles(ctx, group, files);
+}
+
 function documentsSection(ctx) {
   const data = ctx.data.documents;
   const apps = ctx.data.apps ? ctx.data.apps.apps : [];
   if (!data) return section("basic-documents", "Documents", null, loadingBlock());
   const groups = data.collections;
   const total = groups.reduce((sum, group) => sum + group.documents.length, 0);
+  const sample = groups.reduce((found, group) => found || group.documents.find(isSample) || null, null);
   let counted;
   if (groups.length > 1) {
     const each = groups.map((group) => `${group.name} (${num(group.documents.length)})`).join(", ");
@@ -468,6 +588,14 @@ function documentsSection(ctx) {
   const open = ctx.ui.docsOpen === true;
   return section("basic-documents", "Documents", null, [
     el("p", { class: "basic-count", key: "count" }, counted),
+    sample
+      ? el(
+          "p",
+          { class: "basic-sample", key: "sample" },
+          el("span", null, "1 of them is the invented sample letter."),
+          button("Remove it", { small: true, id: "sample-remove", onclick: () => removeDocument(ctx, sample) }),
+        )
+      : null,
     senders.length
       ? el(
           "p",
@@ -476,6 +604,14 @@ function documentsSection(ctx) {
           el("span", { class: "note-text" }, senders.length === 1 ? basicGrantSentence(senders[0]) : GENERAL_SENTENCE),
         )
       : null,
+    // The one place on this page that takes files. It is drawn once the apps are known, so
+    // that it never stands without the sentence above it or the line about who can ask.
+    !ctx.data.apps
+      ? loadingBlock()
+      : groups.length > 1
+        ? // Several groups: the files are held, and the owner is asked which group they go to.
+          dropZone(ctx, "basic", { who: true, lists: groups.map((group) => group.name), take: (files) => addToWhichGroup(ctx, files) })
+        : dropZone(ctx, groups.length ? groups[0].name : FIRST_GROUP, { who: true }),
     total > 0
       ? el(
           "div",
@@ -518,7 +654,7 @@ function hasOwnLimits(app, settings) {
 
 /** What an app may do, in the three labels. With several groups: a summary, and one line per group. */
 function accessOf(app, groups) {
-  const mode = (group) => app.grants[group.name] || "none";
+  const mode = (group) => grantOf(app, group.name);
   if (groups.length <= 1) return { summary: GRANT_LABEL[groups.length ? mode(groups[0]) : "none"], lines: [] };
   const modes = groups.map(mode);
   const same = modes.every((entry) => entry === modes[0]);
@@ -530,6 +666,210 @@ function accessOf(app, groups) {
       : `${group.name}: ${GRANT_LABEL[mode(group)]}`,
   );
   return { summary, lines };
+}
+
+/** The lines under each of the three things an app may do. The two figures of "Can read" are the vault's own. */
+function accessLines(settings) {
+  const share = percent(settings.per_document.max_fraction);
+  const most = settings.per_document.max_chars;
+  return {
+    approve:
+      "It can search and learns which passages match its words, not what they say. Every passage waits for your approval. " +
+      "Each yes is a visit to this page, and the app has to ask again.",
+    read:
+      `It can search with short snippets and read passages without asking: up to ${share} of each document ` +
+      `(${num(most)} characters at most), inside its limits. Past that, each passage waits for your approval.`,
+    none: "It is told there is nothing for it.",
+  };
+}
+
+/** The sentence that says where the text goes, at the moment access is given. Drawing it is what allows "Save". */
+function accessSentence(form) {
+  form.sentenceShown = true;
+  return el(
+    "p",
+    { class: "note note-amber", id: "basic-sentence", key: "sentence", role: "note" },
+    icon("warning"),
+    el("span", { class: "note-text" }, basicGrantSentence(form.app)),
+  );
+}
+
+/** The line that says what else "Save" does, when the documents are not yet open to apps of this kind. */
+function opensLine(form) {
+  form.opensShown = true;
+  return el(
+    "p",
+    { class: "basic-opens", id: "basic-opens", key: "opens" },
+    "Saving also opens your documents to apps that send text to a provider. No other app gets access by that.",
+  );
+}
+
+/**
+ * "Save" in the app's sheet: this app's access to the vault's one group, and nothing
+ * else. Both requests go through the one function that sends requests, so a change
+ * that lets more text leave asks for the passphrase when it was last typed too long
+ * ago, and is then sent again.
+ */
+async function saveAccess(ctx, sheet, form, mode) {
+  if (!form.sentenceShown && mode !== "none") return;
+  if (form.busy || mode === form.inForce) return;
+  form.busy = true;
+  form.error = "";
+  sheet.update();
+  // What was done before something failed, so that the sheet never says less than happened.
+  let opened = false;
+  let made = false;
+  try {
+    if (mode !== "none" && (form.opensShown || !form.exists)) {
+      // The group is opened to apps that send text to a provider only when the sheet says so.
+      const body = { name: form.group };
+      if (form.opensShown) body.allow_hosted = true;
+      await api.setCollection(body);
+      opened = form.opensShown;
+      made = !form.exists;
+      form.exists = true;
+      if (opened) form.closed = false;
+    }
+    await api.setGrant(form.app.name, form.group, mode);
+    sheet.close(mode);
+  } catch (error) {
+    form.busy = false;
+    const gaveUp = error.code === "cancelled";
+    if (opened) {
+      form.error = `Your documents are now open to apps that send text to a provider, but ${form.app.name} was not given access.${gaveUp ? "" : ` ${error.message}`}`;
+    } else if (made && gaveUp) {
+      form.error = `${form.app.name} was not given access.`;
+    } else {
+      // "Nothing was changed." when the owner closed the sheet that asks for the passphrase.
+      form.error = error.message;
+    }
+    // The choice goes back to what is in force: the sheet shows what the vault says.
+    if (gaveUp) form.mode = form.inForce;
+    sheet.update();
+    if (opened || made) await ctx.refresh();
+  }
+}
+
+/**
+ * The sheet behind "Change": what one app may do with the documents of a vault that
+ * has one group, or none yet. It starts on what is in force and chooses nothing for
+ * the owner. It is built from the lists as they are when it opens, and is never
+ * opened for a vault with several groups: there one value does not say what an app
+ * may do.
+ */
+async function openAppSheet(ctx, name) {
+  const data = ctx.data.apps;
+  const settings = ctx.data.settings;
+  const app = data ? data.apps.find((entry) => entry.name === name) : null;
+  if (!app || !settings || data.collections.length > 1) return;
+  const group = data.collections.length ? data.collections[0] : null;
+  const form = {
+    app,
+    group: group ? group.name : FIRST_GROUP,
+    exists: group !== null,
+    // Whether the group still has to be opened before an app that sends text to a provider can be given it.
+    closed: app.hosted && !(group && group.allow_hosted),
+    inForce: group ? grantOf(app, group.name) : "none",
+    mode: group ? grantOf(app, group.name) : "none",
+    busy: false,
+    error: "",
+    sentenceShown: false,
+    opensShown: false,
+  };
+  const lines = accessLines(settings);
+  const sheet = openSheet(
+    (self) => {
+      // Both are true only while their words are on the sheet.
+      form.sentenceShown = false;
+      form.opensShown = false;
+      return el(
+        "div",
+        { class: "sheet-content" },
+        sheetHead(el("span", { class: "mono" }, app.name)),
+        el("div", { class: "sheet-who" }, destinationChip(app)),
+        el("p", { class: "basic-hint" }, NAME_IS_A_LABEL),
+        el(
+          "div",
+          { class: "choice-list choice-stack", role: "radiogroup", "aria-labelledby": "basic-mode-legend" },
+          el("div", { class: "choice-head field-label", id: "basic-mode-legend" }, "What it may do with your documents"),
+          ["approve", "read", "none"].map((mode) =>
+            el(
+              "label",
+              { class: ["choice", form.mode === mode && "is-selected"], key: `mode-${mode}` },
+              el("input", {
+                type: "radio",
+                name: "basic-mode",
+                value: mode,
+                checked: form.mode === mode,
+                disabled: form.busy,
+                "aria-labelledby": `basic-mode-${mode}-name`,
+                "aria-describedby": `basic-mode-${mode}-lines`,
+                onchange: () => {
+                  form.mode = mode;
+                  form.error = "";
+                  self.update();
+                },
+              }),
+              el(
+                "span",
+                { class: "choice-text" },
+                el("span", { class: "choice-label", id: `basic-mode-${mode}-name` }, GRANT_LABEL[mode]),
+                el("span", { class: "choice-hint", id: `basic-mode-${mode}-lines` }, lines[mode]),
+              ),
+            ),
+          ),
+        ),
+        // Shown at the moment access is given, in the sheet itself and never behind a press.
+        form.mode !== "none" ? accessSentence(form) : null,
+        form.mode !== "none" && form.closed ? opensLine(form) : null,
+        form.error ? el("p", { class: "field-error", id: "basic-error", key: "error", role: "alert" }, form.error) : null,
+        sheetFoot(
+          button("Cancel", { onclick: () => self.close(null), autofocus: true }),
+          // Only this press saves: a key pressed on a choice does not.
+          button(form.busy ? "Saving…" : "Save", {
+            kind: "primary",
+            id: "basic-save",
+            disabled: form.mode === form.inForce,
+            busy: form.busy,
+            onclick: () => saveAccess(ctx, self, form, form.mode),
+          }),
+        ),
+        el(
+          "div",
+          { class: "sheet-more" },
+          el(
+            "a",
+            { class: "link", id: "basic-steps", href: `#/setup/connect?app=${encodeURIComponent(app.name)}`, onclick: () => self.close(null) },
+            "Show the connection steps",
+          ),
+          button("Remove this app", {
+            kind: "quiet",
+            small: true,
+            id: "basic-remove",
+            onclick: async () => {
+              if (await removeApp(ctx, app)) self.close(null);
+            },
+          }),
+        ),
+      );
+    },
+    { label: app.name, wide: true },
+  );
+  const saved = await sheet.closed;
+  if (typeof saved !== "string") return;
+  await ctx.refresh();
+  toast(`${app.name}: ${GRANT_LABEL[saved]}.`, "green");
+}
+
+/** "Change" in the row of an app: it opens the app's sheet. The sheet needs the vault's own figures, so it waits for them. */
+function changeButton(ctx, app, settings) {
+  return button("Change", {
+    small: true,
+    key: `change-${app.name}`,
+    label: `Change what ${app.name} may do`,
+    disabled: !settings,
+    onclick: () => openAppSheet(ctx, app.name),
+  });
 }
 
 function appRow(ctx, app, groups, settings, stops) {
@@ -554,7 +894,7 @@ function appRow(ctx, app, groups, settings, stops) {
       app.paused ? chip("Paused", "amber", "pause") : !app.served ? chip("Not answered in this session", "quiet") : null,
       // With one group the access is one value, and the control that changes it stands here.
       // With several it is one value for each: Basic says them and changes none.
-      groups.length > 1 ? proLink("Change in Pro", "#/apps", { key: `change-${app.name}`, class: "link basic-app-change" }) : null,
+      groups.length > 1 ? proLink("Change in Pro", "#/apps", { key: `change-${app.name}`, class: "link basic-app-change" }) : changeButton(ctx, app, settings),
     ),
     access.lines.length ? el("ul", { class: "basic-app-groups" }, access.lines.map((line) => el("li", null, line))) : null,
     el(
@@ -594,7 +934,7 @@ function appsSection(ctx, stops) {
   const expressible = groups.length <= 1 && !apps.some((app) => !app.hosted);
   return section("basic-apps", "Apps", null, [
     apps.length
-      ? el("p", { class: "basic-hint", id: "basic-labels", key: "labels" }, `A name is a label: ${PRODUCT} cannot check which program is really asking.`)
+      ? el("p", { class: "basic-hint", id: "basic-labels", key: "labels" }, NAME_IS_A_LABEL)
       : el("p", { class: "basic-none", key: "none" }, "No app has been added, so no app gets an answer."),
     apps.length ? el("div", { class: "card basic-app-list", key: "list" }, apps.map((app) => appRow(ctx, app, groups, ctx.data.settings, stops))) : null,
     expressible ? null : el("p", { class: "basic-app-add", key: "add" }, proLink("Add an app (in Pro)", "#/apps", { id: "basic-add-app" })),
@@ -675,6 +1015,23 @@ function alsoSection(ctx) {
 
 // -- the foot -----------------------------------------------------------------------
 
+/** The sheet that says what the product is not: the statements of the Vault page, and the line about this version. */
+function openCannot(ctx) {
+  const title = `What ${PRODUCT} cannot do`;
+  openSheet(
+    (self) =>
+      el(
+        "div",
+        { class: "sheet-content" },
+        sheetHead(title),
+        el("ul", { class: "cannot" }, CANNOT.map((statement, index) => el("li", { key: `cannot-${index}` }, statement))),
+        el("p", { class: "version" }, versionLine(ctx.state)),
+        sheetFoot(button("Close", { onclick: () => self.close(), autofocus: true })),
+      ),
+    { label: title, wide: true },
+  );
+}
+
 function foot(ctx) {
   const state = ctx.state;
   const launch = state.launch || {};
@@ -699,6 +1056,7 @@ function foot(ctx) {
         )
       : null,
     state.record && state.record.verified ? el("p", { key: "record" }, "The record of what left was checked when you unlocked.") : null,
+    el("p", { key: "cannot" }, el("button", { type: "button", class: "link", id: "basic-cannot", onclick: () => openCannot(ctx) }, `What ${PRODUCT} cannot do`)),
     el(
       "p",
       { key: "words" },

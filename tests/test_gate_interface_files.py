@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 import wdva.gate.app
-from wdva.gate import brand, core
+from wdva.gate import brand, core, textproc
 from wdva.gate.app import demo
 
 STATIC = Path(wdva.gate.app.__file__).resolve().parent / "static"
@@ -880,6 +880,288 @@ def test_basic_says_what_pro_set_from_answers_of_the_app() -> None:
     link = function_body(basic, "function proLink(text, href, props = {}) {")
     assert "onclick" not in link
     assert 'return el("a", Object.assign({ class: "link", href }, props), text);' in link
+
+
+def test_the_sentence_is_drawn_before_access_is_given() -> None:
+    sources = {name: without_comments(source) for name, source in scripts().items()}
+    # Whoever gives an app access also has the sentence that says where the text goes.
+    for name, code in sources.items():
+        if "api.setGrant(" in code:
+            assert "basicGrantSentence(" in code or "grantSentence(" in code, name
+    # On the Basic page "Save" does nothing for a choice other than "No access" unless the
+    # sentence is on the sheet at that moment. The first run joins this when its app step is built.
+    basic = sources["basic.js"]
+    save = function_body(basic, "async function saveAccess(ctx, sheet, form, mode) {")
+    guard = 'if (!form.sentenceShown && mode !== "none") return;'
+    assert save.splitlines()[1].strip() == guard, "the guard is not the first thing Save does"
+    assert basic.count("api.setGrant(") == 1
+    assert basic.count("api.setCollection(") == 1
+    assert save.index(guard) < save.index("api.setCollection(") < save.index("api.setGrant(")
+    # Only drawing the sentence says that it is shown; every draw of the sheet starts without it.
+    note = function_body(basic, "function accessSentence(form) {")
+    assert "form.sentenceShown = true;" in note
+    assert "basicGrantSentence(form.app)" in note
+    assert 'id: "basic-sentence"' in note
+    assert 'role: "note"' in note
+    assert basic.count("sentenceShown = true") == 1
+    sheet = function_body(basic, "async function openAppSheet(ctx, name) {")
+    assert sheet.index("form.sentenceShown = false;") < sheet.index("accessSentence(form)")
+    # It stands in the sheet itself whenever the choice is not "No access": no press unfolds it.
+    assert 'form.mode !== "none" ? accessSentence(form) : null,' in sheet
+    assert basic.count("accessSentence(form)") == 2  # where it is defined, and in the sheet
+
+
+def test_basic_changes_access_only_where_the_vault_has_one_group() -> None:
+    basic = without_comments(scripts()["basic.js"])
+    # What the Basic page asks the app to change, in full. Removing goes through today's sheets
+    # of Pro, adding a file through the one function that adds files.
+    assert set(re.findall(r"\bapi\.(\w+)\(", basic)) == {"setCollection", "setGrant"}
+    assert 'from "./api.js"' in basic
+    for call in (
+        "removeDocument(ctx, document)",
+        "removeDocument(ctx, sample)",
+        "removeApp(ctx, app)",
+    ):
+        assert call in basic, call
+    manage = without_comments(scripts()["manage.js"])
+    for head in (
+        "export async function removeDocument(ctx, document) {",
+        "export async function removeApp(ctx, app) {",
+    ):
+        assert "await confirmSheet({" in function_body(manage, head), "removing asks first"
+    # The sheet is opened by "Change" alone, "Change" stands only where the vault has one group
+    # or none, and the sheet itself refuses a vault with several: one press never changes
+    # access for several groups.
+    assert basic.count("openAppSheet(") == 2  # where it is defined, and behind "Change"
+    assert "onclick: () => openAppSheet(ctx, app.name)," in function_body(
+        basic, "function changeButton(ctx, app, settings) {"
+    )
+    assert basic.count("changeButton(") == 2
+    assert (
+        'groups.length > 1 ? proLink("Change in Pro", "#/apps", '
+        '{ key: `change-${app.name}`, class: "link basic-app-change" }) '
+        ": changeButton(ctx, app, settings),"
+    ) in basic
+    sheet = function_body(basic, "async function openAppSheet(ctx, name) {")
+    assert "if (!app || !settings || data.collections.length > 1) return;" in sheet
+    # It starts on what is in force and offers the three choices in the order of care.
+    assert 'inForce: group ? grantOf(app, group.name) : "none",' in sheet
+    assert 'mode: group ? grantOf(app, group.name) : "none",' in sheet
+    assert '["approve", "read", "none"].map((mode) =>' in sheet
+    assert 'name: "basic-mode",' in sheet
+    assert "checked: form.mode === mode," in sheet
+    assert "GRANT_LABEL[mode]" in sheet
+    buttons = sheet[sheet.index("sheetFoot(") :]
+    assert buttons.index('button("Cancel", {') < buttons.index('"Save", {')
+    assert "autofocus: true" in buttons[: buttons.index('"Save", {')]
+    assert "disabled: form.mode === form.inForce," in buttons
+    # Nothing but the press on "Save" saves: the sheet is no form that a key could send.
+    assert "onclick: () => saveAccess(ctx, self, form, form.mode)," in buttons
+    assert basic.count("saveAccess(") == 2  # where it is defined, and behind "Save"
+    assert "onsubmit" not in basic
+    assert '"submit"' not in basic
+    # The two figures of "Can read" are the vault's own.
+    lines = function_body(basic, "function accessLines(settings) {")
+    assert "percent(settings.per_document.max_fraction)" in lines
+    assert "settings.per_document.max_chars" in lines
+    # "Save" opens the documents to apps that send text to a provider only when the sheet says so.
+    save = function_body(basic, "async function saveAccess(ctx, sheet, form, mode) {")
+    assert "if (form.opensShown) body.allow_hosted = true;" in save
+    assert save.count("allow_hosted") == 1
+    assert "await api.setGrant(form.app.name, form.group, mode);" in save
+    said = function_body(basic, "function opensLine(form) {")
+    assert "form.opensShown = true;" in said
+    assert (
+        "Saving also opens your documents to apps that send text to a provider. "
+        "No other app gets access by that."
+    ) in said
+    assert basic.count("opensShown = true") == 1
+    assert 'form.mode !== "none" && form.closed ? opensLine(form) : null,' in sheet
+    # When the owner closes the sheet that asks for the passphrase, the choice goes back to what
+    # is in force, and the sheet never says "nothing was changed" after something was.
+    failed = save[save.index("} catch (error) {") :]
+    assert 'const gaveUp = error.code === "cancelled";' in failed
+    assert "if (gaveUp) form.mode = form.inForce;" in failed
+    assert failed.index("if (opened) {") < failed.index("form.error = error.message;")
+    assert 'id: "basic-error", key: "error", role: "alert"' in sheet
+    api = without_comments(scripts()["api.js"])
+    assert 'throw new ApiError(403, "cancelled", "Nothing was changed.");' in api
+
+
+def test_adding_to_one_of_several_groups_chooses_no_group_for_the_owner() -> None:
+    basic = without_comments(scripts()["basic.js"])
+    section = function_body(basic, "function documentsSection(ctx) {")
+    # One zone, and with several groups it only holds the files: the sheet asks where they go.
+    assert section.count("dropZone(") == 2
+    assert (
+        'dropZone(ctx, "basic", { who: true, lists: groups.map((group) => group.name), '
+        "take: (files) => addToWhichGroup(ctx, files) })"
+    ) in section
+    assert "dropZone(ctx, groups.length ? groups[0].name : FIRST_GROUP, { who: true })," in section
+    assert basic.count("dropZone(") == 2
+    assert 'const FIRST_GROUP = "documents";' in basic
+    sheet = function_body(basic, "async function addToWhichGroup(ctx, files) {")
+    assert "const form = { group: null };" in sheet
+    assert "checked: form.group === group," in sheet
+    assert 'name: "basic-group",' in sheet
+    assert 'button("Cancel", { onclick: () => self.close(null), autofocus: true }),' in sheet
+    add = sheet[sheet.index('button("Add", {') :]
+    assert "disabled: form.group === null," in add[:200]
+    assert "if (form.group !== null) self.close(form.group);" in add[:300]
+    # Files are sent only after "Add", and to the group that was chosen. "Cancel" sends nothing.
+    assert basic.count("uploadFiles(") == 1
+    closed = sheet[sheet.index("const group = await sheet.closed;") :]
+    assert 'if (typeof group === "string") await uploadFiles(ctx, group, files);' in closed
+    assert sheet.count("self.close(") == 2  # "Cancel", with nothing; "Add", with the group
+    # Once a group is chosen that an app which sends text to a provider can use, the sentence
+    # is there.
+    assert (
+        "senders.length === 1 ? grantSentence(senders[0], form.group) : GENERAL_SENTENCE" in sheet
+    )
+    assert '"No app can ask for what is in it."' in sheet
+    # The zone hands the files over in place of sending them, and keeps no file for later.
+    manage = without_comments(scripts()["manage.js"])
+    zone = function_body(manage, "export function dropZone(ctx, collection, options = {}) {")
+    assert 'const held = typeof options.take === "function";' in zone
+    assert (
+        "const accept = (files) => "
+        "(held ? options.take(Array.from(files)) : uploadFiles(ctx, collection, files));"
+    ) in zone
+    assert zone.count("uploadFiles(") == 1
+    assert "accept(event.dataTransfer.files);" in zone
+    assert zone.count("accept(") == 2  # a drop, "Choose files"
+
+
+def test_after_a_sealed_file_the_page_says_which_apps_can_ask_for_it() -> None:
+    manage = without_comments(scripts()["manage.js"])
+    zone = function_body(manage, "export function dropZone(ctx, collection, options = {}) {")
+    wanted = "options.who && sealedCount(entry.list) ? whoLine(ctx, entry.name, sealedCount("
+    assert wanted in zone
+    # It stands above the note about the file that was left outside, which is said once.
+    assert zone.index(wanted) < zone.index("leftOutsideText(sealedCount(state))")
+    line = function_body(manage, "function whoLine(ctx, collection, sealed) {")
+    assert 'class: "upload-who", role: "status"' in line
+    assert (
+        '`Apps that may use your documents can ask for ${them} from now on: ${names.join(", ")}.`'
+    ) in line
+    assert "`No app can ask for ${them} yet.`" in line
+    assert 'const them = sealed === 1 ? "it" : "them";' in line
+    assert "`${GRANT_LABEL.read}: passages of it can leave without asking`" in line
+    # Names are the names the apps have in the vault, with what each may do. An app that has the
+    # access and is not answered right now is listed with that said.
+    who = function_body(manage, "export function whoMayAsk(apps, collection, readWords) {")
+    assert "return `${app.name} (${access}${idle})`;" in who
+    assert 'app.grants[collection] === "approve" || app.grants[collection] === "read"' in who
+    assert '"; paused"' in who
+    assert '"; not answered in this session"' in who
+    assert ".label" not in who
+    # The pages of Pro are as they were: their zones say nothing more.
+    assert "dropZone(ctx, name)," in manage
+    assert 'dropZone(ctx, "documents", { large: true }),' in manage
+    assert manage.count("who:") == 0
+
+
+def test_a_sheet_that_opens_or_closes_over_the_cards_makes_release_wait_again() -> None:
+    # The Basic page has its cards and its sheets on one page. When a sheet closes, a second
+    # press that was meant for one of its buttons meets what is under it; that must not be an
+    # armed "Release once".
+    parts = without_comments(scripts()["parts.js"])
+    opening = function_body(parts, "export function openSheet(build, options = {}) {")
+    closing = opening[opening.index('dialog.addEventListener("close", () => {') :]
+    closing = closing[: closing.index("});")]
+    assert "openSheets.delete(sheet);" in closing
+    assert closing.index("openSheets.delete(sheet);") < closing.index("sheetsChanged();")
+    assert opening.index("openSheets.add(sheet);") < opening.rindex("sheetsChanged();")
+    assert opening.count("sheetsChanged();") == 2
+    told = function_body(parts, "function sheetsChanged() {")
+    assert "if (sheetsWatcher) sheetsWatcher(openSheets.size);" in told
+    # The page is drawn again in the same turn, and the cards are told through what is around them.
+    main = without_comments(scripts()["main.js"])
+    assert re.search(
+        r"watchSheets\(\(open\) => \{\s*ctx\.ui\.sheets = open;\s*schedule\(\);\s*\}\);", main
+    )
+    assert "queueMicrotask(() => {" in function_body(main, "function schedule() {")
+    basic = without_comments(scripts()["basic.js"])
+    around = basic[basic.index("const around = [") :]
+    assert 'ctx.ui.sheets > 0 ? "sheet" : "",' in around[: around.index("].join(")]
+
+
+def test_basic_reads_what_belongs_to_a_group_by_that_group_alone() -> None:
+    # A group may be named by a word that every object of the page answers to ("constructor").
+    # Read carelessly, such a name gives something that is neither an access nor a list of files,
+    # and the page that draws from it shows nothing at all.
+    basic = without_comments(scripts()["basic.js"])
+    read = function_body(basic, "function grantOf(app, group) {")
+    assert "Object.prototype.hasOwnProperty.call(grants, group)" in read
+    assert 'return mode === "approve" || mode === "read" ? mode : "none";' in read
+    assert re.search(r"\.grants\[", basic) is None, "an access is read without that check"
+    manage = without_comments(scripts()["manage.js"])
+    state = function_body(manage, "function uploadState(ctx, collection) {")
+    assert "if (!Object.prototype.hasOwnProperty.call(ctx.ui.uploads, collection))" in state
+    assert manage.count("ctx.ui.uploads[") == 2  # both inside that function
+    assert state.count("ctx.ui.uploads[") == 2
+    # Who may ask for a file is told by comparing with the two words, never by "is there something".
+    who = function_body(manage, "export function whoMayAsk(apps, collection, readWords) {")
+    assert who.count("app.grants[collection] ===") == 3
+
+
+def test_what_the_product_cannot_do_is_one_list_in_both_views() -> None:
+    manage = without_comments(scripts()["manage.js"])
+    listed = re.search(r"export const CANNOT = \[(.*?)\n\];", manage, re.S)
+    assert listed is not None
+    assert len(re.findall(r'^\s+"[^"\n]+",$', listed.group(1), re.M)) == 8
+    assert "CANNOT.map(" in function_body(manage, "export function vaultView(ctx) {")
+    line = function_body(manage, "export function versionLine(state) {")
+    assert "a preview: it has not yet been tried against the agent applications it lists" in line
+    basic = without_comments(scripts()["basic.js"])
+    sheet = function_body(basic, "function openCannot(ctx) {")
+    assert "const title = `What ${PRODUCT} cannot do`;" in sheet
+    assert "CANNOT.map(" in sheet
+    assert "versionLine(ctx.state)" in sheet
+    assert 'button("Close", { onclick: () => self.close(), autofocus: true })' in sheet
+    assert 'class: "link", id: "basic-cannot", onclick: () => openCannot(ctx)' in basic
+    # Neither the statements nor the line about the version are written a second time.
+    everything = "\n".join(without_comments(source) for source in scripts().values())
+    assert everything.count("a preview: it has not yet been tried") == 1
+    assert everything.count("Take text back.") == 1
+    assert everything.count("versionLine(") == 3  # its definition, the Vault page, the sheet
+
+
+def test_the_sample_letter_is_recognised_by_its_title_and_its_length() -> None:
+    manage = without_comments(scripts()["manage.js"])
+    sample = re.search(
+        r'export const SAMPLE = \{\s*file: "([^"]+)",\s*title: "([^"]+)",\s*'
+        r'text:((?:\s*"[^"\n]*"\s*\+?)+),\s*\};',
+        manage,
+    )
+    assert sample is not None
+    file, title, pieces = sample.groups()
+    assert file == "invented-sample-letter.txt"
+    assert title == "invented-sample-letter"
+    assert file == f"{title}.txt", "the vault makes the title from the name of the file"
+    text = "".join(re.findall(r'"([^"\n]*)"', pieces)).replace("\\n", "\n")
+    assert "\\" not in text
+    assert text.startswith("SAMPLE DOCUMENT, INVENTED. ")
+    assert "Nothing in it is real." in text
+    # The page tells the letter by its title and its number of characters together. So the vault
+    # must count the text exactly as the page does: nothing in it is changed when it is sealed,
+    # and it is one passage.
+    assert text.isascii()
+    assert textproc.sanitize(text).strip("\n") == text
+    assert len(textproc.chunk_spans(text)) == 1
+    recognised = function_body(manage, "export function isSample(document) {")
+    assert (
+        "return document.title === SAMPLE.title && document.characters === SAMPLE.text.length;"
+    ) in recognised
+    # The Basic page says that it is there, and offers to remove it through today's sheet.
+    basic = without_comments(scripts()["basic.js"])
+    section = function_body(basic, "function documentsSection(ctx) {")
+    assert "group.documents.find(isSample)" in section
+    assert '"1 of them is the invented sample letter."' in section
+    assert (
+        'button("Remove it", { small: true, id: "sample-remove", '
+        "onclick: () => removeDocument(ctx, sample) })"
+    ) in section
 
 
 def test_first_run_and_basic_name_no_protocol() -> None:

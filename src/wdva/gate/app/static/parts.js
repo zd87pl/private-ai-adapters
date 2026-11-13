@@ -319,6 +319,17 @@ export function toastError(error) {
 
 const openSheets = new Set();
 
+let sheetsWatcher = null;
+
+/** `watcher(open)` is called whenever a sheet has opened or closed, with how many are open then. */
+export function watchSheets(watcher) {
+  sheetsWatcher = watcher;
+}
+
+function sheetsChanged() {
+  if (sheetsWatcher) sheetsWatcher(openSheets.size);
+}
+
 /**
  * Open a sheet over the window. `build(sheet)` returns its content and is called
  * again by `sheet.update()`. `sheet.close(value)` closes it; `sheet.closed`
@@ -349,8 +360,10 @@ export function openSheet(build, options = {}) {
     openSheets.delete(sheet);
     dialog.remove();
     settle(sheet.result);
+    sheetsChanged();
   });
   openSheets.add(sheet);
+  sheetsChanged();
   sheet.update();
   dialog.showModal();
   liftOverSheet();
