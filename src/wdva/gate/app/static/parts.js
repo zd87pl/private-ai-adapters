@@ -25,8 +25,9 @@ export function button(label, options = {}) {
       "aria-label": options.label,
       "aria-describedby": options.describedby,
       "aria-pressed": options.pressed,
-      // For a button that unfolds something below it: "true" or "false".
+      // For a button that unfolds something below it: "true" or "false", and the id of what it unfolds.
       "aria-expanded": options.expanded,
+      "aria-controls": options.controls,
     },
     glyph ? icon(glyph) : null,
     label ? el("span", { class: "btn-label" }, label) : null,
@@ -482,24 +483,31 @@ export function deed(item, passages = null) {
   return text.replace(found[0], passageWords(Number(found[1]), known, item.collections));
 }
 
-/** One row of activity: when, who, what, how much, and how it ended. */
-export function activityRow(item, { onopen, selected, now, passages }) {
+/**
+ * One row of activity: when, who, what, how much, and how it ended. A row opens the
+ * details of its entry. With `plain` it is a line that opens nothing, for a screen
+ * that has no place for the details.
+ */
+export function activityRow(item, { onopen, selected, now, passages, plain = false }) {
   const tone = item.kind === "refusal" ? (item.code === "NEEDS_APPROVAL" ? "amber" : "red") : "plain";
   const what = sentence(deed(item, passages));
   const repeated = item.count > 1;
   const last = repeated && item.last_time ? ` · last ${agoShort(item.last_time, now)}` : "";
+  const shape = ["act-row", `act-${tone}`, selected && "is-selected", item.characters > 0 ? null : "act-nochars"];
   return el(
     "li",
     { class: "act-item", key: `a${item.seq}` },
     el(
-      "button",
-      {
-        type: "button",
-        class: ["act-row", `act-${tone}`, selected && "is-selected", item.characters > 0 ? null : "act-nochars"],
-        onclick: (event) => onopen(item, event.detail === 0),
-        "aria-pressed": selected ? "true" : "false",
-        "aria-label": `${actor(item)} ${deed(item, passages)}. Open the details.`,
-      },
+      plain ? "div" : "button",
+      plain
+        ? { class: shape.concat("act-still") }
+        : {
+            type: "button",
+            class: shape,
+            onclick: (event) => onopen(item, event.detail === 0),
+            "aria-pressed": selected ? "true" : "false",
+            "aria-label": `${actor(item)} ${deed(item, passages)}. Open the details.`,
+          },
       el("span", { class: "act-glyph" }, icon(rowGlyph(item))),
       el("time", { class: "act-time", datetime: item.time, title: whenFull(item.time) }, agoShort(item.time, now)),
       el(

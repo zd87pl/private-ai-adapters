@@ -108,6 +108,11 @@ function sealedCount(state) {
   return state.items.filter((item) => item.status === "done").length;
 }
 
+/** The lines of the files that were chosen for one collection since this page was loaded. */
+export function sessionFiles(ctx, collection) {
+  return uploadState(ctx, collection).items;
+}
+
 /**
  * What is true of a file after it was added. The browser hands the app the file's
  * name and content, never its place, so the app can say only this.
@@ -138,7 +143,7 @@ export function whoMayAsk(apps, collection, readWords) {
  * for them from now on. Adding a document never asks for the passphrase, so this is said
  * where the files are added. Names are the names the apps have in the vault.
  */
-function whoLine(ctx, collection, sealed) {
+export function whoLine(ctx, collection, sealed) {
   const data = ctx.data.apps;
   if (!data) return null;
   const them = sealed === 1 ? "it" : "them";
@@ -157,8 +162,9 @@ function whoLine(ctx, collection, sealed) {
 /**
  * The place to drop files, with a button for people who would rather pick them.
  *
- * `options.large` is the zone of an empty vault. `options.who` says, under the files
- * that were sealed, which apps can ask for them from now on. `options.take(files)`
+ * `options.large` is the zone of an empty vault, and with `options.filled` its button
+ * is the filled one of its screen. `options.who` says, under the files that were
+ * sealed, which apps can ask for them from now on. `options.take(files)`
  * is handed the files in place of sending them to `collection`: for a vault with
  * several groups, where the owner is asked first which group they go to. `collection`
  * is then only the name of the zone, and `options.lists` names the collections whose
@@ -218,7 +224,7 @@ export function dropZone(ctx, collection, options = {}) {
       ),
       el(
         "label",
-        { class: ["btn", "btn-default", "btn-small", "file-button"], for: inputId },
+        { class: ["btn", options.filled ? "btn-primary" : "btn-default", "btn-small", "file-button"], for: inputId },
         el("span", { class: "btn-label" }, "Choose files"),
         el("input", {
           type: "file",

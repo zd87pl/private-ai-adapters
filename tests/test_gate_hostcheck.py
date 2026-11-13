@@ -291,3 +291,15 @@ def test_the_module_reads_and_never_writes() -> None:
         for part in ("chmod", "chown", "truncate", "touch", "symlink", "expandvars", "system"):
             assert part not in word.lower(), word
     assert "open" not in {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+
+
+def test_the_walk_throughs_give_the_app_a_home_of_their_own() -> None:
+    # "Check the file" in a browser walk-through looks where the app's home is. The program that
+    # starts the app for a walk-through names a folder the run owns before the app runs, so the
+    # settings of a program on the computer that runs the tests are never read.
+    source = (Path(__file__).parent / "browser" / "launch_app.py").read_text(encoding="utf-8")
+    started = source.index("return run_wdva(arguments[1:])")
+    assert 0 < source.index('os.environ["HOME"] = home') < started
+    assert 0 < source.index('os.environ["XDG_CONFIG_HOME"] = ') < started
+    assert 'given = os.environ.get("GATE_HOME", "")' in source
+    assert "home = given or tempfile.mkdtemp(" in source

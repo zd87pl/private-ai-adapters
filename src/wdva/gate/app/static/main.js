@@ -5,11 +5,11 @@
 // state every two seconds, and decides which screen is shown.
 
 import { ApiError, api, configure } from "./api.js";
-import { basicBars, basicView } from "./basic.js";
+import { basicBars, basicView, settleSetup } from "./basic.js";
 import { PRODUCT } from "./brand.js";
 import { el, icon, render } from "./dom.js";
 import { at, num, parseTime } from "./format.js";
-import { bootScreen, createScreen, lockedScreen, offlineScreen, pairingScreen, setupScreen } from "./gateway.js";
+import { bootScreen, createScreen, freshFirstRun, lockedScreen, offlineScreen, openStep, pairingScreen, setupScreen, stepApp } from "./gateway.js";
 import { appsView, documentsView, vaultView } from "./manage.js";
 import { button, chip, closeAllSheets, iconButton, segmented, toast, toastError, watchSheets } from "./parts.js";
 import { requestReauth } from "./sheets.js";
@@ -55,7 +55,8 @@ const NEEDS = {
   apps: ["apps", "settings"],
   vault: ["settings"],
   basic: ["apps", "approvals", "settings", "documents", "left", "stops"],
-  setup: ["documents", "apps"],
+  // The step "First question" also needs what its app asked for: see `needs`.
+  setup: ["apps", "approvals", "settings", "documents", "stops"],
 };
 
 /** The steps of setting up that are addresses: "#/setup/app" and so on. */
@@ -76,7 +77,7 @@ function freshLeft() {
 }
 
 function freshUi() {
-  return {
+  return Object.assign(freshFirstRun(), {
     pair: { code: "", busy: false, error: "", disabled: false, expired: false },
     // `waited`: how many passages were waiting when this page saw the vault lock.
     unlock: { passphrase: "", busy: false, error: "", shake: 0, waited: 0 },
@@ -111,7 +112,7 @@ function freshUi() {
     copied: null,
     // How many sheets lie over the page. The Basic page has its cards and its sheets on one page.
     sheets: 0,
-  };
+  });
 }
 
 const ctx = {
@@ -128,12 +129,12 @@ const ctx = {
   // What the Basic page lists: the answers that left, and the calls that were stopped.
   left: freshLeft(),
   stops: null,
-  // The newest calls under the name of the app that is being connected, for the step "First question".
+  // The newest calls under the name of the app that is being connected, for the step "First question":
+  // the app's name, the entries, and whether the app has older ones.
   asked: null,
   // What the page has learned about passages, by reference: title, number, collection.
   passages: new Map(),
   panel: null,
-  onboarding: null,
   loadErrors: {},
   now: new Date(),
   ui: freshUi(),
@@ -146,6 +147,7 @@ const ctx = {
   setActivityFilters,
   loadMoreActivity,
   loadMoreLeft,
+  setUpInPro,
   start,
 };
 
@@ -258,9 +260,14 @@ function sidebar() {
   );
 }
 
+/** The lists the screen that is shown needs. */
+function needs() {
+  if (ctx.route === "setup" && ctx.setupStep === "connect") return NEEDS.setup.concat("asked");
+  return NEEDS[ctx.route];
+}
+
 function loadProblem() {
-  const needed = ctx.onboarding ? NEEDS.setup : NEEDS[ctx.route];
-  const name = needed.find((entry) => ctx.loadErrors[entry]);
+  const name = needs().find((entry) => ctx.loadErrors[entry]);
   return name ? ctx.loadErrors[name] : "";
 }
 
@@ -390,9 +397,8 @@ function screen() {
   if (!ctx.state) return ctx.offline ? offlineScreen(ctx) : bootScreen();
   if (!ctx.state.store.exists) return createScreen(ctx);
   if (ctx.state.locked) return lockedScreen(ctx);
-  // The first run, as long as it lives in this page's memory. The focused steps of the
-  // route "setup" take its place; until they are built that route opens the page below.
-  if (ctx.onboarding) return setupScreen(ctx);
+  // A step of setting up is an address. Nothing of the first run lives in this page's memory.
+  if (ctx.route === "setup") return setupScreen(ctx, loadProblem());
   if (ctx.route === "basic") return basicShell();
   return shell();
 }
@@ -446,10 +452,13 @@ function paint() {
     if (shown) shown.focus();
   }
   if (ctx.ui.focusId) {
-    // A control that replaced the one just used takes over the focus.
+    // A control that replaced the one just used takes over the focus. What is to take it may
+    // belong to a list that is still on its way: it stays wanted until it is on the page.
     const next = document.getElementById(ctx.ui.focusId);
-    ctx.ui.focusId = null;
-    if (next && !document.querySelector("dialog[open]")) next.focus();
+    if (next) {
+      ctx.ui.focusId = null;
+      if (!document.querySelector("dialog[open]")) next.focus();
+    }
   }
   if (ctx.ui.focusView) {
     // After a switch the focus stays on the control that made it, which is in the same corner in both views.
@@ -478,8 +487,9 @@ function focusApproval(wanted) {
   }
   const target = card ? card.querySelector('[data-key="dismiss"]') : null;
   if (!target) {
-    // The last card of the Basic page was decided: its headline says so and takes the focus.
-    const headline = document.getElementById("basic-status");
+    // The last card was decided. On the Basic page the headline says so and takes the focus; on
+    // the step "First question" the outcome does. Never a button.
+    const headline = document.getElementById("basic-status") || document.getElementById("ask-end-title");
     if (headline && typeof wanted.after === "number") headline.focus({ preventScroll: true });
     return;
   }
@@ -503,8 +513,15 @@ const fetchers = {
   left: () => api.activity({ limit: LEFT_FIRST, kind: "release" }),
   stops: loadStops,
   // What one app asked for, by its name: for the step that waits for the first request of that app.
-  asked: () => (ctx.setupApp ? api.activity({ limit: ASKED_FIRST, app: ctx.setupApp }) : Promise.resolve({ items: [] })),
+  asked: loadAsked,
 };
+
+async function loadAsked() {
+  const app = ctx.setupApp;
+  if (!app) return null;
+  const page = await api.activity({ limit: ASKED_FIRST, app });
+  return { app, items: page.items || [], more: page.next_before !== null && page.next_before !== undefined };
+}
 
 /**
  * The entries of calls that were stopped, as far back as 24 hours. The record keeps one
@@ -579,9 +596,24 @@ const adopt = {
     ctx.stops = value;
   },
   asked: (value) => {
-    ctx.asked = value.items || [];
+    ctx.asked = value;
   },
 };
+
+/**
+ * Which app the step "First question" is about, once the list of apps is in. The name
+ * is written into the address, so that a reload shows the same app, and what that app
+ * asked for is loaded.
+ */
+function settleSetupApp() {
+  if (ctx.route !== "setup" || ctx.setupStep !== "connect" || !ctx.data.apps) return;
+  const name = stepApp(ctx);
+  if (name === ctx.setupApp) return;
+  ctx.setupApp = name;
+  ctx.asked = null;
+  if (name) window.history.replaceState(null, "", `#/setup/connect?app=${encodeURIComponent(name)}`);
+  load(["asked"]);
+}
 
 async function load(names) {
   await Promise.all(
@@ -603,12 +635,17 @@ async function load(names) {
       }
     }),
   );
+  if (ctx.state && !ctx.state.locked) {
+    settleSetupApp();
+    // Setting up ends by itself once the vault has an app, a document and a first request.
+    settleSetup(ctx);
+  }
   schedule();
 }
 
 function loadRoute() {
   if (!ctx.state || ctx.state.locked || !ctx.state.store.exists) return Promise.resolve();
-  return load(ctx.onboarding ? NEEDS.setup : NEEDS[ctx.route]);
+  return load(needs());
 }
 
 /** Drop everything that came out of the vault, for when it locks or the session ends. */
@@ -620,7 +657,6 @@ function forget() {
   ctx.asked = null;
   ctx.passages = new Map();
   ctx.panel = null;
-  ctx.onboarding = null;
   ctx.loadErrors = {};
   const kept = ctx.ui;
   clearTimeout(kept.armTimer);
@@ -652,7 +688,9 @@ function applyState(next, force = false) {
   // Which page an address opens that names none is decided by the view that is kept, once the app has said it.
   if (next.interface && !(previous && previous.interface)) settleRoute();
   // Whenever the Basic page opens, the focus goes to its headline, never to a button of a card.
+  // A step of setting up starts on its title.
   if (isOpen && !wasOpen && ctx.route === "basic") ctx.ui.focusId = "basic-status";
+  if (isOpen && !wasOpen && ctx.route === "setup") ctx.ui.focusId = "setup-title";
   const retry = Object.keys(ctx.loadErrors).length > 0;
   if (isOpen && (force || retry || !wasOpen || previous.cursor !== next.cursor)) lastLoad = loadRoute();
   schedule();
@@ -806,17 +844,23 @@ function routeFromHash() {
   if (name === "basic") return "basic";
   if (name === "setup") {
     ctx.setupStep = SETUP_STEPS.includes(step) ? step : "app";
-    ctx.setupApp = query.get("app") || "";
+    ctx.setupApp = ctx.setupStep === "connect" ? query.get("app") || "" : "";
+    return "setup";
   }
-  // The focused steps are not built yet: until they are, "#/setup/…" opens what an address without a page opens.
   return defaultRoute();
+}
+
+/** The screen the address names, in one text: the route and, for a step of setting up, the step and its app. */
+function placeNow() {
+  return ctx.route === "setup" ? `setup/${ctx.setupStep}?${ctx.setupApp}` : ctx.route;
 }
 
 /** The first state with the view is in: an address that names no page now has one. */
 function settleRoute() {
+  const before = placeNow();
   const name = routeFromHash();
-  if (name === ctx.route) return;
   ctx.route = name;
+  if (placeNow() === before) return;
   ctx.panel = null;
   ctx.ui.focusApproval = null;
   ctx.ui.approvalSignature = null;
@@ -830,19 +874,22 @@ function approvalFromHash() {
 }
 
 function onRoute() {
+  const before = placeNow();
+  const from = ctx.route;
   const name = routeFromHash();
-  if (name === ctx.route) {
+  ctx.route = name;
+  if (placeNow() === before) {
     if (name === "approvals" && hashParts().query.get("ref")) {
       ctx.ui.focusApproval = approvalFromHash();
       schedule();
     }
     return;
   }
-  const from = ctx.route;
-  ctx.route = name;
   // The details of an entry stay open between Overview and Activity, and nowhere else.
   if (name === "basic" || from === "basic" || (name !== "overview" && name !== "activity")) ctx.panel = null;
   ctx.ui.focusApproval = null;
+  // What was to take the focus on the screen that is left is not looked for on the next one.
+  ctx.ui.focusId = null;
   if (name === "approvals") {
     // The cards appear anew, so "Release once" waits again before it can be pressed.
     ctx.ui.focusApproval = approvalFromHash();
@@ -853,6 +900,11 @@ function onRoute() {
     ctx.ui.approvalSignature = null;
     ctx.ui.allApprovals = false;
     if (name === "basic") ctx.ui.focusId = "basic-status";
+    if (name === "setup") {
+      // What an app asked for belongs to the app the step is about.
+      ctx.asked = null;
+      openStep(ctx);
+    }
   }
   ctx.ui.limits = null;
   window.scrollTo(0, 0);
@@ -860,9 +912,16 @@ function onRoute() {
   lastLoad = loadRoute();
 }
 
-/** Open a page by its name. The route changes at once, not when the browser has told of the new address. */
-function navigate(name) {
-  if (hashParts().name !== name) window.location.hash = `#/${name}`;
+/**
+ * Open a page by its address without the "#/": "basic", "setup/documents",
+ * "setup/connect?app=…". The route changes at once, not when the browser has told of
+ * the new address.
+ */
+function navigate(address) {
+  const [path] = address.split("?");
+  const shown = hashParts();
+  const there = address.includes("/") || address.includes("?") ? window.location.hash === `#/${address}` : shown.name === path;
+  if (!there) window.location.hash = `#/${address}`;
   onRoute();
 }
 
@@ -893,6 +952,19 @@ async function chooseView(view) {
 /** "Stay in Pro" on the bar of a visit: Pro becomes the view that is kept, and the bar goes. */
 async function stayInPro() {
   if (await keepView("pro")) ctx.ui.focusId = "main";
+  schedule();
+}
+
+/**
+ * "Set everything up yourself in Pro", at the foot of a step of setting up: Pro becomes
+ * the view that is kept, and Overview opens. Whether setting up is over is not touched.
+ */
+async function setUpInPro() {
+  const kept = ctx.state ? ctx.state.interface : null;
+  const known = Boolean(kept && kept.stored && kept.view === "pro");
+  if (!known && !(await keepView("pro"))) return;
+  navigate("overview");
+  ctx.ui.focusId = "main";
   schedule();
 }
 

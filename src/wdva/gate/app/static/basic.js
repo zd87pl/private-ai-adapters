@@ -9,7 +9,8 @@
 // copy of the values of a new vault.
 //
 // What it changes: documents are added and removed, an app is removed, and where
-// the vault has one group of documents an app's access to it is set. Nothing else.
+// the vault has one group of documents an app's access to it is set. Nothing else
+// of the vault. Beside the vault it changes one word: that setting up is over.
 
 import { api } from "./api.js";
 import { PRODUCT } from "./brand.js";
@@ -29,6 +30,7 @@ import {
   sheetFoot,
   sheetHead,
   toast,
+  toastError,
 } from "./parts.js";
 import { GENERAL_SENTENCE, GRANT_LABEL, basicGrantSentence, codeWords, grantSentence } from "./sheets.js";
 import { approvalCards, warningList } from "./views.js";
@@ -38,13 +40,13 @@ const CARDS_AT_FIRST = 3;
 const DAY_MS = 86400000;
 
 /** What starts a question that makes an AI app use the vault. The space at its end is part of it. */
-const ASK_START = `Use ${PRODUCT} to search my documents and answer this: `;
+export const ASK_START = `Use ${PRODUCT} to search my documents and answer this: `;
 
 /** Said wherever a name stands for something that happened, and where names are managed. */
 const NAME_IS_A_LABEL = `A name is a label: ${PRODUCT} cannot check which program is really asking.`;
 
 /** The group that documents go to in a vault that has none yet. */
-const FIRST_GROUP = "documents";
+export const FIRST_GROUP = "documents";
 
 /** What an app may do with one group, as the app said it: "approve", "read" or "none", and nothing else. */
 function grantOf(app, group) {
@@ -71,10 +73,10 @@ function section(key, title, aside, content) {
   );
 }
 
-/** "Copy", which says "Copied" for a moment. `id` tells the buttons of the page apart. */
-function copyButton(ctx, id, text, what) {
+/** "Copy", which says "Copied" for a moment. `id` tells the buttons of the page apart. `words` is said in place of "Copy". */
+export function copyButton(ctx, id, text, what, words = "Copy") {
   const copied = ctx.ui.copied === id;
-  return button(copied ? "Copied" : "Copy", {
+  return button(copied ? "Copied" : words, {
     small: true,
     id,
     glyph: copied ? "check" : "copy",
@@ -95,7 +97,7 @@ function copyButton(ctx, id, text, what) {
 }
 
 /** A line of text to copy: the text in a box, the button beside it. */
-function copyLine(ctx, id, text, what) {
+export function copyLine(ctx, id, text, what) {
   return el(
     "div",
     { class: "copy-line" },
@@ -179,7 +181,7 @@ function headline(waiting) {
 }
 
 /** What a screen reader is told when the number of waiting passages rises, or returns to none. */
-function waitingSaid(ctx, waiting) {
+export function waitingSaid(ctx, waiting) {
   const ui = ctx.ui;
   if (waiting === null) return ui.waitingSaid;
   if (ui.waitingCount !== null) {
@@ -251,6 +253,99 @@ function approvalsSection(ctx, problem) {
       "p",
       { class: "basic-again", key: "again" },
       "After you release a passage, the app gets it when it asks again. If it does not ask by itself, tell it: “try again”.",
+    ),
+  );
+}
+
+// -- setting up ---------------------------------------------------------------------
+
+/**
+ * What is true of the vault now, of the three things that setting up leads to: it
+ * has an app, it holds a document, an app has asked. Null until the list of apps is in.
+ */
+export function setupFacts(ctx) {
+  const data = ctx.data.apps;
+  if (!data) return null;
+  const held = ctx.state.encryption ? ctx.state.encryption.documents : 0;
+  return { app: data.apps.length > 0, document: held > 0, asked: data.apps.some((app) => Boolean(app.last_seen)) };
+}
+
+/** Whether the app keeps a word about setting up for this vault, and that word says it is not over. */
+function setupOpen(ctx) {
+  const kept = ctx.state.interface;
+  return Boolean(kept && kept.stored && kept.setup === "open");
+}
+
+/**
+ * Say that setting up is over. The app keeps that as one word beside the vault, not
+ * sealed; nothing of the vault changes. Nothing is sent for a vault whose file does
+ * not say that setting up is open. Resolves to null, or to what went wrong.
+ */
+export async function setupDone(ctx) {
+  if (!setupOpen(ctx)) return null;
+  try {
+    ctx.applyState(await api.setInterface({ setup: "done" }));
+    return null;
+  } catch (error) {
+    return error;
+  }
+}
+
+/**
+ * The first run completes itself: once the vault has an app, holds a document and an
+ * app has asked, the page tells the app that setting up is over, once, on whatever
+ * screen it is. It is the one request the page sends without a press, and it is
+ * never sent for a vault that has no such file.
+ */
+export function settleSetup(ctx) {
+  if (!ctx.state || ctx.state.locked || ctx.state.demo || !setupOpen(ctx) || ctx.ui.setupSaid) return;
+  const facts = setupFacts(ctx);
+  if (!facts || !facts.app || !facts.document || !facts.asked) return;
+  ctx.ui.setupSaid = true;
+  setupDone(ctx);
+}
+
+/**
+ * One line that names the next step of setting up, until setting up is over or the
+ * owner hides it. "Hide" ends it for good: what it offered stays on the page.
+ */
+function setupCard(ctx) {
+  if (ctx.state.demo || !setupOpen(ctx)) return null;
+  const facts = setupFacts(ctx);
+  if (!facts) return null;
+  let next = null;
+  if (!facts.app) next = { words: "Next: choose your AI app.", action: "Continue", href: "#/setup/app" };
+  else if (!facts.document) next = { words: "Next: add a document.", action: "Continue", href: "#/setup/documents" };
+  else if (!facts.asked) next = { words: "Next: ask your AI app a first question.", action: "Show me how", href: "#/setup/connect" };
+  if (!next) return null;
+  // The vault exists: that is the first of the four.
+  const done = 1 + [facts.app, facts.document, facts.asked].filter(Boolean).length;
+  // While a passage waits, no button on the page is filled.
+  const waits = ctx.state.today ? ctx.state.today.approvals_waiting > 0 : false;
+  return el(
+    "section",
+    { class: "card card-setup", key: "setup", "aria-label": "Finish setting up" },
+    el(
+      "header",
+      { class: "card-head" },
+      el("h2", { class: "card-title" }, "Finish setting up"),
+      el("span", { class: "card-aside" }, `${num(done)} of 4 done`),
+      button("Hide", {
+        kind: "quiet",
+        small: true,
+        id: "setup-hide",
+        onclick: async () => {
+          const failed = await setupDone(ctx);
+          if (failed) toastError(failed);
+          else toast("Setup is hidden. Adding an app, adding documents and the connection steps stay on this page.", "plain");
+        },
+      }),
+    ),
+    el(
+      "div",
+      { class: "setup-line" },
+      el("p", { class: "setup-next" }, next.words),
+      el("a", { class: ["btn", waits ? "btn-default" : "btn-primary"], id: "setup-continue", href: next.href }, el("span", { class: "btn-label" }, next.action)),
     ),
   );
 }
@@ -937,7 +1032,14 @@ function appsSection(ctx, stops) {
       ? el("p", { class: "basic-hint", id: "basic-labels", key: "labels" }, NAME_IS_A_LABEL)
       : el("p", { class: "basic-none", key: "none" }, "No app has been added, so no app gets an answer."),
     apps.length ? el("div", { class: "card basic-app-list", key: "list" }, apps.map((app) => appRow(ctx, app, groups, ctx.data.settings, stops))) : null,
-    expressible ? null : el("p", { class: "basic-app-add", key: "add" }, proLink("Add an app (in Pro)", "#/apps", { id: "basic-add-app" })),
+    el(
+      "p",
+      { class: "basic-app-add", key: "add" },
+      expressible
+        ? // The step that adds an app gives it "Ask me each time" for the vault's one group, and says so on its button.
+          el("a", { class: "btn btn-default", id: "basic-add-app", href: "#/setup/app" }, el("span", { class: "btn-label" }, apps.length ? "Add an app" : "Choose your AI app"))
+        : proLink("Add an app (in Pro)", "#/apps", { id: "basic-add-app" }),
+    ),
   ]);
 }
 
@@ -1032,29 +1134,36 @@ function openCannot(ctx) {
   );
 }
 
+/**
+ * How the vault is opened again on another day: the command this page was told, and
+ * what running it brings. Null in a demo, which is not opened again by that command:
+ * its guide has the one for a vault of one's own.
+ */
+export function launchBlock(ctx) {
+  const launch = ctx.state.launch || {};
+  const command = ctx.state.demo ? null : launch.command;
+  if (!command) return null;
+  return el(
+    "div",
+    { class: "launch", key: "launch" },
+    el("p", null, `To open ${PRODUCT} again after you quit it or restart this computer, run this in Terminal:`),
+    copyLine(ctx, "launch-copy", command, `the command that opens ${PRODUCT} again`),
+    el(
+      "p",
+      null,
+      opensPage(command)
+        ? "A page opens and asks for a new pairing code from that terminal, then for your passphrase."
+        : "It prints the address of a page. That page asks for a new pairing code from that terminal, then for your passphrase.",
+    ),
+  );
+}
+
 function foot(ctx) {
   const state = ctx.state;
-  const launch = state.launch || {};
-  // A demo is not opened again by this command: its guide has the one for a vault of one's own.
-  const command = state.demo ? null : launch.command;
   return el(
     "footer",
     { class: "basic-foot", key: "basic-foot" },
-    command
-      ? el(
-          "div",
-          { class: "launch", key: "launch" },
-          el("p", null, `To open ${PRODUCT} again after you quit it or restart this computer, run this in Terminal:`),
-          copyLine(ctx, "launch-copy", command, `the command that opens ${PRODUCT} again`),
-          el(
-            "p",
-            null,
-            opensPage(command)
-              ? "A page opens and asks for a new pairing code from that terminal, then for your passphrase."
-              : "It prints the address of a page. That page asks for a new pairing code from that terminal, then for your passphrase.",
-          ),
-        )
-      : null,
+    launchBlock(ctx),
     state.record && state.record.verified ? el("p", { key: "record" }, "The record of what left was checked when you unlocked.") : null,
     el("p", { key: "cannot" }, el("button", { type: "button", class: "link", id: "basic-cannot", onclick: () => openCannot(ctx) }, `What ${PRODUCT} cannot do`)),
     el(
@@ -1077,6 +1186,7 @@ export function basicView(ctx, problem) {
     approvalsSection(ctx, problem),
     // Notices stand under the cards. Basic has no strip for the two kinds of apps, so it shows that notice too.
     warningList(ctx, { bothKinds: true }),
+    setupCard(ctx),
     leftSection(ctx, stops),
     documentsSection(ctx),
     appsSection(ctx, stops),

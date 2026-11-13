@@ -15,8 +15,10 @@
 //
 // The app is started WITHOUT --demo on an empty directory with a short path under
 // /tmp, through launch_app.py, which changes one constant (how long owner mode
-// lasts) and nothing else. Calls of an agent application are made by agent_call.py
-// through RemoteGate, the path the program an application starts uses.
+// lasts) and gives the app an empty home of its own, so that "Check the file"
+// never looks at the settings of a program on this computer. Calls of an agent
+// application are made by agent_call.py through RemoteGate, the path the program
+// an application starts uses.
 //
 // Every step prints "ok" or "FAIL". Exit status 1 when a step failed, the page
 // logged an error, a request failed, or an HTTP error came that no step announced.
@@ -79,6 +81,9 @@ const TEXT = {
   unverified: /unverified/i, // beside the name an app gives itself
   although: /although/i, // why a passage waits although the app can read the collection
   originalsKept: /originals? kept/i, // what the vault screen must not say
+  steps: ['Passphrase', 'App', 'Documents', 'First question'], // the four parts of setting up
+  protocol: /MCP|Model Context Protocol|:\/\//, // what no screen of setting up shows: the protocol's name, an address
+  askStart: (product) => `Use ${product} to search my documents and answer this: `, // what "Copy" puts on the clipboard
 };
 
 /** Fragments of what an agent is told. These texts are fixed in wdva.gate.messages. */
@@ -301,25 +306,40 @@ run(async () => {
     check(await create.isDisabled(), 'two different entries can be sent');
     await page.fill('#new-passphrase-again', PASSPHRASE);
     await eventually(async () => (await count('#new-passphrase-again-error')) === 0, WAIT, 'the two entries still count as different');
+    // The parts of setting up are named before the vault exists: four, and pairing is not one of them.
+    const labels = (await page.locator('ol.steps .step-label').allTextContents()).map((label) => label.trim());
+    check(JSON.stringify(labels) === JSON.stringify(TEXT.steps), `the parts of setting up are ${JSON.stringify(labels)}`);
     await picture('02-create');
     await create.click();
-    await page.locator('.gate-card[data-key="step-2"]').waitFor({ state: 'visible', timeout: 40000 });
+    // The step that follows is an address, and it is the one that adds an app.
+    await page.locator('form.gate-card[data-key="step-3"]').waitFor({ state: 'visible', timeout: 40000 });
+    check(new URL(page.url()).hash === '#/setup/app', `after "Create the vault" the address is ${page.url()}`);
     const now = await state();
     check(now.locked === false && now.store.exists === true, 'the vault is not unlocked after it was created');
     check(!('demo_passphrase' in now), 'a real vault sends a passphrase');
+    check(now.interface.view === 'basic' && now.interface.setup === 'open', `a new vault starts as ${JSON.stringify(now.interface)}`);
   });
 
   await step('the first run can be skipped, and the empty overview says what to do next, in order', async () => {
-    await picture('03-first-run-documents');
-    await page.locator('.gate-card .gate-actions .btn-quiet').click();
-    const second = page.locator('form.gate-card[data-key="step-3"]');
+    await picture('03-first-run-app');
+    await page.locator('form.gate-card[data-key="step-3"] .gate-actions .btn-quiet').click();
+    const second = page.locator('section.gate-card[data-key="step-2"]');
     await second.waitFor({ state: 'visible', timeout: WAIT });
-    await picture('04-first-run-app');
+    check(new URL(page.url()).hash === '#/setup/documents', `skipping the app step leads to ${page.url()}`);
+    await picture('04-first-run-documents');
     await second.locator('.gate-actions .btn-quiet').click();
-    // A new vault opens in the Basic view. The walk from here on is through Pro: the view is switched
-    // once, without a message, and the six pages are where they were.
+    // A new vault opens in the Basic view, where one line says what setting up still lacks. Skipping
+    // stored nothing: no app, no document, and setting up still open.
     await page.locator(FRAME.basic).waitFor({ state: 'visible', timeout: WAIT });
-    check((await state()).interface.view === 'basic', `a new vault starts in the view ${JSON.stringify((await state()).interface)}`);
+    check(new URL(page.url()).hash === '#/basic', `skipping both steps leads to ${page.url()}`);
+    const skipped = await state();
+    check(skipped.interface.view === 'basic' && skipped.interface.setup === 'open', `after skipping: ${JSON.stringify(skipped.interface)}`);
+    check(skipped.encryption.documents === 0 && (await get('/api/apps')).apps.length === 0, 'skipping added something to the vault');
+    const next = page.locator('.card-setup[data-key="setup"] #setup-continue');
+    await next.waitFor({ state: 'visible', timeout: WAIT });
+    check((await next.getAttribute('href')) === '#/setup/app', `the line about setting up leads to ${await next.getAttribute('href')}`);
+    // The walk from here on is through Pro: the view is switched once, without a message, and the
+    // six pages are where they were.
     await switchView(page, 'pro');
     check((await state()).interface.view === 'pro', 'the switch did not keep the view');
     check((await count('.visit-bar')) === 0 && (await count('#toasts .toast')) === 0, 'the switch to Pro left a bar or a message');
@@ -799,14 +819,19 @@ run(async () => {
 
   // ================================================================== the first run, not skipped
   // A second vault in an empty directory, set up the way the first run offers it:
-  // passphrase, one document, one app, the configuration, then the vault. Owner
-  // mode keeps the app's own length here; nothing in this part waits for its end.
+  // passphrase, the app, one document, the first question. Owner mode keeps the
+  // app's own length here; nothing in this part waits for its end.
   const second = path.join(work, 'second');
   app = startApp(options, { args: ['--store', second], ownerSeconds: 600 });
   const lines = await started(app);
   base = app.url;
   pageReachedApp();
   page = await newPage(browser, options);
+  /** What the page sent to one address of the app since it was opened, as method and path. */
+  const sentTo = [];
+  page.on('request', (request) => sentTo.push(`${request.method()} ${new URL(request.url()).pathname}`));
+  const setupCard = (key) => page.locator(`.gate-card[data-key="${key}"]`);
+  const address = () => new URL(page.url()).hash;
 
   await step('first run, taken as offered: pair and create', async () => {
     await page.goto(base);
@@ -816,59 +841,178 @@ run(async () => {
     await page.fill('#new-passphrase', PASSPHRASE);
     await page.fill('#new-passphrase-again', PASSPHRASE);
     await page.locator('.gate-card button[type="submit"]').click();
-    await page.locator('.gate-card[data-key="step-2"]').waitFor({ state: 'visible', timeout: 40000 });
-    // The step offers one place for the files, and no collection exists before a file is added.
-    await page.locator('#files-documents').waitFor({ state: 'attached', timeout: WAIT });
+    await page.locator('form.gate-card[data-key="step-3"]').waitFor({ state: 'visible', timeout: 40000 });
+    check(address() === '#/setup/app', `after "Create the vault" the address is ${address()}`);
+    // Nothing exists yet but the vault: no collection, no app.
     check((await get('/api/documents')).collections.length === 0, 'a new vault has a collection already');
+    check((await get('/api/apps')).apps.length === 0, 'a new vault has an app already');
   });
 
-  await step('first run: a document is added, and where the chosen file is gets said once', async () => {
-    const next = page.locator('.gate-card .gate-actions .btn-primary');
+  await step('first run: no app is ticked, no access is asked, and the app is added with "Ask me each time"', async () => {
+    const form = page.locator('form.gate-card[data-key="step-3"]');
+    const rows = form.locator('input[name="first-app-known"]');
+    const add = form.locator('#first-add');
+    await rows.first().waitFor({ state: 'attached', timeout: WAIT });
+    const offered = await rows.evaluateAll((nodes) => nodes.map((node) => node.value));
+    const known = (await get('/api/apps')).known.filter((entry) => entry.local_program);
+    check(JSON.stringify(offered) === JSON.stringify(known.map((entry) => entry.id)), `the apps offered: ${JSON.stringify(offered)}`);
+    // Nothing is chosen for the owner, and what an app may do is stated, not asked for.
+    check((await form.locator('input[name="first-app-known"]:checked').count()) === 0, 'an app is ticked before the owner chose one');
+    check((await count('input[name="first-mode"]')) === 0, 'the first run asks what the app may do');
+    check(await add.isDisabled(), 'an app can be added before one is chosen');
+    check(TEXT.cannotBeRecalled.test(await form.locator('#first-sentence').textContent()), 'before a choice the form does not say where text goes');
+    await form.locator('label.choice', { has: page.locator(`input[value="${HOSTED}"]`) }).click();
+    await eventually(() => form.locator(`input[name="first-app-known"][value="${HOSTED}"]`).isChecked(), WAIT, 'the app was not picked');
+    const destination = known.find((entry) => entry.id === HOSTED).destination;
+    const sentence = await form.locator('#first-sentence').textContent();
+    check(sentence.includes(HOSTED) && sentence.includes(destination) && TEXT.cannotBeRecalled.test(sentence), `about the app the form says: ${sentence}`);
+    check((await form.locator('#first-listed').textContent()).includes(HOSTED), 'the form does not say under which name the app is listed');
+    check(!(await add.isDisabled()) && (await add.textContent()).includes(HOSTED), `the button that adds the app reads: ${await add.textContent()}`);
+    await picture('30-first-run-app-chosen');
+    const granted = page.waitForRequest((request) => request.method() === 'POST' && new URL(request.url()).pathname === '/api/grants', { timeout: 40000 });
+    granted.catch(() => {});
+    await add.click();
+    // What the press asked for, where the engine lets a test read what a page sent; what the vault
+    // then holds is checked below in every engine.
+    const asked = (await granted).postData();
+    if (asked) check(JSON.parse(asked).app === HOSTED && JSON.parse(asked).mode === 'approve', `the access that was asked for: ${asked}`);
+    else note(`${options.browser} does not show a test what the page sent with its request, so the access is checked in the vault only`);
+    await setupCard('step-2').waitFor({ state: 'visible', timeout: 40000 });
+    check(address() === '#/setup/documents', `after the app the address is ${address()}`);
+    const apps = await get('/api/apps');
+    check(apps.apps.length === 1 && apps.apps[0].name === HOSTED && apps.apps[0].grants.documents === 'approve', `apps: ${JSON.stringify(apps.apps.map((entry) => [entry.name, entry.grants]))}`);
+    check(apps.collections[0].allow_hosted === true, 'the collection was not opened to hosted apps');
+  });
+
+  await step('first run: a document is added, with who can ask for it and where the chosen file is', async () => {
+    const card = setupCard('step-2');
+    const next = card.locator('.gate-actions .btn-primary');
     check(await next.isDisabled(), 'the step can be continued without a document');
+    check((await card.locator('.gate-lead').allTextContents()).join(' ').includes(HOSTED), 'the step does not say which app will be able to ask');
+    check(TEXT.cannotBeRecalled.test(await card.locator('#docs-sentence').textContent()), 'the step does not say where text goes');
     await page.setInputFiles('#files-documents', files.flat);
     await eventually(async () => (await count('.upload.upload-done')) === 1, 60000, 'the file was not sealed');
     const added = (await get('/api/documents')).collections[0];
     check(added.name === 'documents' && added.documents.length === 1 && added.documents[0].passages === 3, `after the first file the vault holds: ${JSON.stringify(added)}`);
     check(/\b3\b/.test(await page.locator('.upload.upload-done .upload-note').textContent()), 'the page does not say how many passages were sealed');
+    check((await card.locator('p.upload-who').textContent()).includes(HOSTED), `after the file the page says: ${await card.locator('p.upload-who').textContent()}`);
     check((await count('.upload-outside')) === 1 && TEXT.notEncrypted.test(await page.locator('.upload-outside').textContent()), 'what is true of the chosen file is not said exactly once');
-    await picture('30-first-run-document-added');
+    await picture('31-first-run-document-added');
     await next.click();
-    await page.locator('form.gate-card[data-key="step-3"]').waitFor({ state: 'visible', timeout: WAIT });
+    await setupCard('step-4').waitFor({ state: 'visible', timeout: WAIT });
+    check(address().startsWith('#/setup/connect'), `after the document the address is ${address()}`);
   });
 
-  await step('first run: the app is added with "Ask me each time", and its configuration is shown', async () => {
-    const form = page.locator('form.gate-card[data-key="step-3"]');
-    check(await form.locator(`input[name="first-app-known"][value="${HOSTED}"]`).isChecked(), `the first run does not start at ${HOSTED}`);
-    // Reading without asking is a deliberate choice, not what the form comes with.
-    check(await form.locator('input[name="first-mode"][value="approve"]').isChecked(), 'a hosted app does not start at "Ask me each time"');
-    const sentence = await form.locator('.note-amber').textContent();
-    check(TEXT.cannotBeRecalled.test(sentence) && sentence.includes('documents'), `about the grant the form says: ${sentence}`);
-    await form.locator('button[type="submit"]').click();
-    const done = page.locator('.gate-card[data-key="step-3-done"]');
-    const block = done.locator('.config pre.code').first();
-    await block.waitFor({ state: 'visible', timeout: 40000 });
-    const text = await block.textContent();
-    check(JSON.parse(text).mcpServers && text.includes(second), `the configuration does not name this vault: ${text}`);
-    await picture('31-first-run-connect');
-    await done.locator('.gate-actions .btn-primary').click();
-    // This vault is new too, so it opens on the Basic page; what follows is checked in Pro.
-    await page.locator(FRAME.basic).waitFor({ state: 'visible', timeout: WAIT });
-    await switchView(page, 'pro');
-    await page.locator('.card-start').waitFor({ state: 'visible', timeout: WAIT });
-    await startIsAt(4, '#/apps');
-    const apps = await get('/api/apps');
-    check(apps.apps.length === 1 && apps.apps[0].name === HOSTED && apps.apps[0].grants.documents === 'approve', `apps: ${JSON.stringify(apps.apps.map((entry) => [entry.name, entry.grants]))}`);
-    check(apps.collections[0].allow_hosted === true, 'the collection was not opened to hosted apps');
-    check((await page.locator('.hero-line').textContent()).includes(HOSTED), `the overview does not name the app that is answered: ${await page.locator('.hero-line').textContent()}`);
-    await picture('32-overview-after-first-run');
+  await step('first run: the step that waits for the first request shows how to connect, and looks at a file only on a press', async () => {
+    const card = setupCard('step-4');
+    await card.locator('li.ask-step[data-key="ask-3"]').waitFor({ state: 'visible', timeout: 40000 });
+    const keys = await card.locator('li.ask-step').evaluateAll((nodes) => nodes.map((node) => node.dataset.key));
+    check(keys.join(',') === 'ask-1,ask-2,ask-3', `the lines of the step are ${keys.join(',')}`);
+    const waiting = card.locator('p.ask-wait');
+    check((await hasClass(waiting, 'ask-waiting')) && (await waiting.textContent()).includes(HOSTED), `while nothing has come the step says: ${await waiting.textContent()}`);
+    check(!TEXT.protocol.test(await card.innerText()), 'the step names the protocol or the address of a page');
+    // An amber note at the head of the first line means the command in the text would not start.
+    check((await card.locator('#ask-ready').count()) === 0, `the step warns: ${await card.locator('li.ask-step[data-key="ask-1"]').textContent()}`);
+    const looks = () => sentTo.filter((entry) => entry === `POST /api/apps/${HOSTED}/connect/check`).length;
+    check(looks() === 0, 'the settings file was looked at before the owner pressed for it');
+    const homeBefore = fs.readdirSync(app.home).sort().join('\n');
+    const looked = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/apps/${HOSTED}/connect/check`, { timeout: WAIT });
+    looked.catch(() => {});
+    await card.locator('#ask-check').click();
+    const answer = await (await looked).json();
+    // The home of this run holds no settings of any program: the folder of the app's settings is
+    // not there, and the look leaves the home as it was.
+    check(answer.state === 'no_folder' && typeof answer.folder === 'string', `the look at the settings file answered ${JSON.stringify(answer)}`);
+    const found = card.locator('#ask-found');
+    await found.waitFor({ state: 'visible', timeout: WAIT });
+    check((await found.textContent()).includes(answer.folder), `about the file the step says: ${await found.textContent()}`);
+    check(looks() === 1, `the settings file was looked at ${looks()} times for one press`);
+    check(fs.readdirSync(app.home).sort().join('\n') === homeBefore, `the look changed the home of the run: ${fs.readdirSync(app.home)}`);
+    // The text is there without a look too, and it names this vault.
+    await card.locator('#ask-all').click();
+    const text = await card.locator('.ask-all pre.code').first().textContent();
+    const server = Object.values(JSON.parse(text).mcpServers)[0];
+    check(server.args.join(' ').includes(`gate mcp --client ${HOSTED} --store ${second}`), `the text does not name this vault: ${text}`);
+    check(!text.includes(PASSPHRASE), 'the text holds the passphrase');
+    // The start of the question goes to the clipboard. Only Chromium lets a test read it back.
+    if (options.browser === 'chromium') {
+      await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(base).origin });
+      await card.locator('#ask-copy').click();
+      await eventually(async () => (await page.evaluate(() => navigator.clipboard.readText())) === TEXT.askStart(product), WAIT, 'the clipboard does not hold the start of the question');
+    }
+    await picture('32-first-question');
+    // A reload stays on the step: where setting up stands is read from the vault, not kept in the page.
+    const before = address();
+    await page.reload();
+    await card.locator('li.ask-step[data-key="ask-3"]').waitFor({ state: 'visible', timeout: 40000 });
+    check(address() === before, `after a reload the address is ${address()}, not ${before}`);
+    check(looks() === 1, 'a reload looked at the settings file');
   });
 
-  await step('first run: the first call of the app ends the getting-started list', async () => {
+  await step('first run: the first request arrives on this screen and ends setting up', async () => {
+    const card = setupCard('step-4');
     const first = agent(second, HOSTED, 'status');
     check(first.code === 'OK' && first.text.includes(`documents (${AGENT.refsOnly}`), `status: ${first.text}`);
+    const arrived = card.locator('p.ask-wait.ask-arrived');
+    await arrived.waitFor({ state: 'visible', timeout: WAIT });
+    const words = await arrived.textContent();
+    check(words.includes(HOSTED) && TEXT.unverified.test(words), `about the first request the step says: ${words}`);
+    // The three lines have done their work, the request is listed under them, and a way on is offered.
+    await eventually(async () => (await card.locator('ol.ask-steps').count()) === 0, WAIT, 'the three lines are still unfolded');
+    await card.locator('ul.ask-rows .act-row').first().waitFor({ state: 'visible', timeout: WAIT });
+    await card.locator('.ask-end #ask-open').waitFor({ state: 'visible', timeout: WAIT });
+    await eventually(async () => (await state()).interface.setup === 'done', WAIT, 'the first request did not end setting up');
+    await picture('33-first-request');
+  });
+
+  await step('first run: a passage waits on this screen with its exact text, is released once, and the vault opens on what left', async () => {
+    const card = setupCard('step-4');
+    const found = agent(second, HOSTED, 'search', 'monthly rent deposit', 'documents');
+    check(found.code === 'OK' && found.text.includes(AGENT.withheld), `search: ${found.text}`);
+    const ref = REF.exec(found.text)[1];
+    const refused = agent(second, HOSTED, 'read', ref);
+    check(refused.code === 'NEEDS_APPROVAL', `read: ${refused.code}`);
+    const key = `ap-${HOSTED}-${ref}`;
+    const waitingCard = card.locator(`section[data-key="ask-approvals"] .approval[data-key="${key}"]`);
+    await waitingCard.waitFor({ state: 'visible', timeout: WAIT });
+    const passage = await waitingCard.locator('pre.released').textContent();
+    check(passage.includes('The monthly rent is 1,180 EUR'), `the card shows: ${passage}`);
+    check(TEXT.cannotBeRecalled.test(await waitingCard.locator('.approval-sentence').textContent()), 'the card does not say where the text goes');
+    // The card stands above what was asked so far, and while it waits no button of the screen is the loud one.
+    const [cardBox, rowsBox] = [await waitingCard.boundingBox(), await card.locator('ul.ask-rows').boundingBox()];
+    check(cardBox.y + cardBox.height <= rowsBox.y, `the card does not stand above the rows: ${JSON.stringify([cardBox, rowsBox])}`);
+    check((await page.locator('.btn-primary').count()) === 0, 'a button is filled while a passage waits');
+    await picture('34-first-approval');
+    await decideApproval(page, key, 'release');
+    await card.locator('.ask-end #ask-end-title').waitFor({ state: 'visible', timeout: WAIT });
+    const read = agent(second, HOSTED, 'read', ref);
+    check(read.code === 'OK' && read.text.includes('The monthly rent is 1,180 EUR'), `read after approval: ${JSON.stringify(read)}`);
+    // The end: what left, the way on, and how the app is opened again.
+    await card.locator('.ask-end h2#ask-end-title').waitFor({ state: 'visible', timeout: WAIT });
+    const command = await card.locator('.ask-end .launch pre.code').textContent();
+    check(command.includes(' gate app') && command.includes(`--store ${second}`), `the command that opens the app again: ${command}`);
+    await picture('35-first-released');
+    await card.locator('#ask-open').click();
+    await page.locator(FRAME.basic).waitFor({ state: 'visible', timeout: WAIT });
+    check(address() === '#/basic', `"Open my vault" leads to ${address()}`);
+    await eventually(async () => (await page.locator('#panel pre.released').textContent({ timeout: 2000 })) === read.text, WAIT, 'the details do not show the text the app received');
+    check(TEXT.cannotTakeBack.test(await page.locator('#panel .gone').textContent()), 'under the text the details do not say that it cannot be taken back');
+    check((await count('.card-setup')) === 0, 'the Basic page still asks to finish setting up');
+    await picture('36-basic-after-first-run');
+    await closePanel();
+  });
+
+  await step('first run: in Pro the vault is as the first run left it, and nothing is left to get started', async () => {
+    // This vault is new too, so it opens on the Basic page; what follows is checked in Pro.
+    await switchView(page, 'pro');
+    await page.locator('.hero-line').waitFor({ state: 'visible', timeout: WAIT });
+    check((await page.locator('.hero-line').textContent()).includes(HOSTED), `the overview does not name the app that is answered: ${await page.locator('.hero-line').textContent()}`);
     const question = await eventually(async () => (await activity()).find((item) => item.kind === 'question'), WAIT, 'the question is not in the record');
     await page.locator(`.card[data-key="latest"] li.act-item[data-key="a${question.seq}"]`).waitFor({ state: 'visible', timeout: WAIT });
-    await page.locator('.card-start').waitFor({ state: 'detached', timeout: WAIT });
+    check((await count('.card-start')) === 0, 'the getting-started list is shown after the app has called');
+    const apps = await get('/api/apps');
+    check(apps.apps.length === 1 && apps.apps[0].grants.documents === 'approve', `apps: ${JSON.stringify(apps.apps.map((entry) => [entry.name, entry.grants]))}`);
+    await picture('37-overview-after-first-run');
   });
 
   await step('at the end the app quits with status 0 and an empty standard error', async () => {

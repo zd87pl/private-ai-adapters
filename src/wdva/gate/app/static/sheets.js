@@ -237,6 +237,90 @@ export function appFormProblem(form, known) {
   return "";
 }
 
+/** For an app the list does not name: where its model runs. */
+function kindRow(form, update, prefix) {
+  return el(
+    "div",
+    { class: "choice-row", role: "radiogroup", "aria-labelledby": `${prefix}-where` },
+    el("span", { class: "choice-row-label field-label", id: `${prefix}-where` }, "Where does its model run?"),
+    [
+      [true, "On someone else's servers"],
+      [false, "On this Mac"],
+    ].map(([hosted, label]) =>
+      el(
+        "label",
+        { class: "radio" },
+        el("input", {
+          type: "radio",
+          name: `${prefix}-kind`,
+          value: hosted ? "hosted" : "local",
+          checked: form.hosted === hosted,
+          onchange: () => {
+            form.hosted = hosted;
+            form.destination = hosted ? "" : "local model on this computer";
+            update();
+          },
+        }),
+        el("span", null, label),
+      ),
+    ),
+  );
+}
+
+/** For an app the list does not name, whose model runs elsewhere: who receives the text. */
+function destinationField(form, update, prefix) {
+  return field({
+    label: "Who receives the text?",
+    id: `${prefix}-destination`,
+    hint: "The company or service behind the app, for example its model provider.",
+    control: el("input", {
+      type: "text",
+      id: `${prefix}-destination`,
+      class: "input",
+      value: form.destination,
+      maxlength: 80,
+      autocomplete: "off",
+      oninput: (event) => {
+        form.destination = event.target.value;
+        update();
+      },
+    }),
+  });
+}
+
+/** The name an app has in the vault. */
+function nameField(form, update, prefix) {
+  return field({
+    label: "Name in this vault",
+    id: `${prefix}-name`,
+    hint: "Lower-case letters, digits and hyphens. This is how the app appears in Activity.",
+    error: form.name && !NAME_PATTERN.test(form.name) ? "Use lower-case letters, digits and hyphens, starting with a letter; 32 at most." : "",
+    control: el("input", {
+      type: "text",
+      id: `${prefix}-name`,
+      class: "input input-mono",
+      value: form.name,
+      maxlength: 32,
+      autocomplete: "off",
+      autocapitalize: "off",
+      spellcheck: "false",
+      oninput: (event) => {
+        form.name = event.target.value;
+        update();
+      },
+    }),
+  });
+}
+
+/**
+ * The three things the owner says about an app the list does not name: where its
+ * model runs, who receives the text (for one whose model runs elsewhere), and its
+ * name in the vault. The form of Pro and the first run both ask with these fields.
+ */
+export function otherAppFields(form, update, prefix) {
+  return [kindRow(form, update, prefix), form.hosted ? destinationField(form, update, prefix) : null, nameField(form, update, prefix)];
+}
+
 /** The fields of the "add an app" form: which application, its name, where text goes. */
 export function appFormFields(form, known, update, prefix, short = false) {
   const entry = knownEntry(known, form.choice);
@@ -285,73 +369,9 @@ export function appFormFields(form, known, update, prefix, short = false) {
           `${entry.label} cannot use this vault. It only calls servers that ${entry.destination || "its provider"}'s cloud can reach, and ${PRODUCT} runs on your Mac only. Use the same company's desktop app instead.`,
         )
       : [
-          generic
-            ? el(
-                "div",
-                { class: "choice-row", role: "radiogroup", "aria-labelledby": `${prefix}-where` },
-                el("span", { class: "choice-row-label field-label", id: `${prefix}-where` }, "Where does its model run?"),
-                [
-                  [true, "On someone else's servers"],
-                  [false, "On this Mac"],
-                ].map(([hosted, label]) =>
-                  el(
-                    "label",
-                    { class: "radio" },
-                    el("input", {
-                      type: "radio",
-                      name: `${prefix}-kind`,
-                      value: hosted ? "hosted" : "local",
-                      checked: form.hosted === hosted,
-                      onchange: () => {
-                        form.hosted = hosted;
-                        form.destination = hosted ? "" : "local model on this computer";
-                        update();
-                      },
-                    }),
-                    el("span", null, label),
-                  ),
-                ),
-              )
-            : null,
-          generic && form.hosted
-            ? field({
-                label: "Who receives the text?",
-                id: `${prefix}-destination`,
-                hint: "The company or service behind the app, for example its model provider.",
-                control: el("input", {
-                  type: "text",
-                  id: `${prefix}-destination`,
-                  class: "input",
-                  value: form.destination,
-                  maxlength: 80,
-                  autocomplete: "off",
-                  oninput: (event) => {
-                    form.destination = event.target.value;
-                    update();
-                  },
-                }),
-              })
-            : null,
-          field({
-            label: "Name in this vault",
-            id: `${prefix}-name`,
-            hint: "Lower-case letters, digits and hyphens. This is how the app appears in Activity.",
-            error: form.name && !NAME_PATTERN.test(form.name) ? "Use lower-case letters, digits and hyphens, starting with a letter; 32 at most." : "",
-            control: el("input", {
-              type: "text",
-              id: `${prefix}-name`,
-              class: "input input-mono",
-              value: form.name,
-              maxlength: 32,
-              autocomplete: "off",
-              autocapitalize: "off",
-              spellcheck: "false",
-              oninput: (event) => {
-                form.name = event.target.value;
-                update();
-              },
-            }),
-          }),
+          generic ? kindRow(form, update, prefix) : null,
+          generic && form.hosted ? destinationField(form, update, prefix) : null,
+          nameField(form, update, prefix),
           el(
             "div",
             { class: ["goes-to", short && "goes-to-short"] },

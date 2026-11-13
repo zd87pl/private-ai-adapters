@@ -103,6 +103,8 @@ REQUIRED_SENTENCES = [
     "After you release a passage, the app gets it when it asks again. If it does not ask by "
     "itself, tell it: \u201ctry again\u201d.",
     "A name is a label: ${PRODUCT} cannot check which program is really asking.",
+    # Where the first run sends the owner to another program.
+    "Nothing is changed for you: you copy the text and put it where the app reads it.",
 ]
 
 # Words that belong to the engine and stay out of what the owner reads. "MCP" may
@@ -593,8 +595,10 @@ def test_a_release_cannot_be_pressed_through() -> None:
         assert "api.release(" not in code, f"{name} releases a passage itself"
         assert "api.dismiss(" not in code, f"{name} decides about a passage itself"
         assert "approval-actions" not in code, f"{name} draws the buttons of a card itself"
-    basic = without_comments(scripts()["basic.js"])
-    assert re.search(r'import \{[^}]*\bapprovalCards\b[^}]*\} from "\./views\.js";', basic)
+    # The Basic page and the step "First question" show cards, and get them from that module.
+    for name in ("basic.js", "gateway.js"):
+        code = without_comments(scripts()[name])
+        assert re.search(r'import \{[^}]*\bapprovalCards\b[^}]*\} from "\./views\.js";', code), name
 
 
 def test_approval_cards_are_drawn_by_one_function() -> None:
@@ -611,8 +615,8 @@ def test_approval_cards_are_drawn_by_one_function() -> None:
     assert "approvalCard(" not in page
     assert "decidedLine(" not in page
     assert views.count("approvalCard(ctx,") == 2  # where it is defined, and inside approvalCards
-    # So does the Basic page. The step "First question" joins this list when it shows a card.
-    for name in ("basic.js",):
+    # So do the Basic page and the step "First question".
+    for name in ("basic.js", "gateway.js"):
         assert "approvalCards(ctx, {" in sources[name], f"{name} does not show the cards"
     # No other script gives an element the class of a card.
     assert "approval" in class_names(views)
@@ -889,7 +893,7 @@ def test_the_sentence_is_drawn_before_access_is_given() -> None:
         if "api.setGrant(" in code:
             assert "basicGrantSentence(" in code or "grantSentence(" in code, name
     # On the Basic page "Save" does nothing for a choice other than "No access" unless the
-    # sentence is on the sheet at that moment. The first run joins this when its app step is built.
+    # sentence is on the sheet at that moment.
     basic = sources["basic.js"]
     save = function_body(basic, "async function saveAccess(ctx, sheet, form, mode) {")
     guard = 'if (!form.sentenceShown && mode !== "none") return;'
@@ -909,13 +913,48 @@ def test_the_sentence_is_drawn_before_access_is_given() -> None:
     # It stands in the sheet itself whenever the choice is not "No access": no press unfolds it.
     assert 'form.mode !== "none" ? accessSentence(form) : null,' in sheet
     assert basic.count("accessSentence(form)") == 2  # where it is defined, and in the sheet
+    # The first run: the press that adds an app and gives it access does nothing unless the
+    # sentence of that app is on the screen, and nothing but drawing it says that it is.
+    gateway = sources["gateway.js"]
+    add = function_body(gateway, "async function addFirstApp(ctx) {")
+    guard = "if (!form.sentenceShown) return;"
+    assert add.splitlines()[2].strip() == guard, "the guard is not the first thing the press does"
+    assert (
+        add.index(guard)
+        < add.index("api.addApp(")
+        < add.index("api.setCollection(")
+        < add.index("api.setGrant(")
+    )
+    drawn = function_body(gateway, "function firstSentence(form, described) {")
+    assert "form.sentenceShown = true;" in drawn
+    assert "text = basicGrantSentence(described);" in drawn
+    assert 'return amber("first-sentence", text);' in drawn
+    assert gateway.count("sentenceShown = true") == 1
+    assert 'role: "note"' in function_body(gateway, "function amber(id, text) {")
+    step = function_body(gateway, "function appStep(ctx) {")
+    assert step.index("form.sentenceShown = false;") < step.index("firstSentence(form, described)")
+    assert "form.sentenceShown = false;" in function_body(
+        gateway, "function chooseApp(ctx, entry) {"
+    )
+    # It is the sentence of the app only once the app is chosen and described; until then the
+    # one that holds for every app stands there, and the press cannot count.
+    assert "let text = GENERAL_SENTENCE;" in drawn
+    assert drawn.index("if (described) {") < drawn.index("form.sentenceShown = true;")
+    assert gateway.count("addFirstApp(") == 2  # where it is defined, and when the form is sent
+    assert "if (ready && !form.busy) addFirstApp(ctx);" in step
 
 
 def test_basic_changes_access_only_where_the_vault_has_one_group() -> None:
     basic = without_comments(scripts()["basic.js"])
     # What the Basic page asks the app to change, in full. Removing goes through today's sheets
-    # of Pro, adding a file through the one function that adds files.
-    assert set(re.findall(r"\bapi\.(\w+)\(", basic)) == {"setCollection", "setGrant"}
+    # of Pro, adding a file through the one function that adds files. The third call changes
+    # nothing of the vault: it says that setting up is over, a word kept beside the vault.
+    assert set(re.findall(r"\bapi\.(\w+)\(", basic)) == {
+        "setCollection",
+        "setGrant",
+        "setInterface",
+    }
+    assert re.findall(r"api\.setInterface\(([^)]*)\)", basic) == ['{ setup: "done" }']
     assert 'from "./api.js"' in basic
     for call in (
         "removeDocument(ctx, document)",
@@ -1235,7 +1274,11 @@ def test_the_view_has_two_labels_and_no_toast() -> None:
     assert "applyState(await api.setInterface({ view }));" in kept
     assert "toast" not in kept
     assert "toastError(error);" in failed
-    for head in ("async function chooseView(view) {", "async function stayInPro() {"):
+    for head in (
+        "async function chooseView(view) {",
+        "async function stayInPro() {",
+        "async function setUpInPro() {",
+    ):
         assert "toast" not in function_body(main, head), head
     # A visit to Pro, when the view that is kept is Basic already, keeps nothing.
     choose = function_body(main, "async function chooseView(view) {")
@@ -1374,6 +1417,268 @@ def test_the_details_fold_the_record_on_the_basic_page() -> None:
     basic = without_comments(scripts()["basic.js"])
     around = basic[basic.index("const around = [") :]
     assert 'ctx.panel ? "panel" : "",' in around[: around.index("].join(")]
+
+
+# -- setting up: three steps that are addresses -------------------------------------
+
+
+def test_the_first_run_lives_in_the_address_and_the_vault_not_in_the_page() -> None:
+    sources = {name: without_comments(source) for name, source in scripts().items()}
+    for name, code in sources.items():
+        assert "onboarding" not in code, f"{name} keeps the first run in the page's memory"
+    main = sources["main.js"]
+    assert 'const SETUP_STEPS = ["app", "documents", "connect"];' in main
+    route = function_body(main, "function routeFromHash() {")
+    assert 'ctx.setupStep = SETUP_STEPS.includes(step) ? step : "app";' in route
+    assert route.index('return "setup";') < route.index("return defaultRoute();")
+    screen = function_body(main, "function screen() {")
+    step = 'if (ctx.route === "setup") return setupScreen(ctx, loadProblem());'
+    assert screen.index("return lockedScreen(ctx);") < screen.index(step)
+    assert screen.index(step) < screen.index('if (ctx.route === "basic")')
+    # What a step loads, and what the step "First question" loads besides: the calls of its app,
+    # asked for by the app's name.
+    assert 'setup: ["apps", "approvals", "settings", "documents", "stops"],' in main
+    needs = function_body(main, "function needs() {")
+    assert (
+        'if (ctx.route === "setup" && ctx.setupStep === "connect") '
+        'return NEEDS.setup.concat("asked");'
+    ) in needs
+    asked = function_body(main, "async function loadAsked() {")
+    assert "const page = await api.activity({ limit: ASKED_FIRST, app });" in asked
+    # A step that opens has cards that appear anew, an empty form and its title in focus.
+    opened = function_body(main, "function onRoute() {")
+    assert "openStep(ctx);" in opened
+    gateway = sources["gateway.js"]
+    opening = function_body(gateway, "export function openStep(ctx) {")
+    assert "ctx.ui.setup = freshFirstRun().setup;" in opening
+    assert 'ctx.ui.focusId = "setup-title";' in opening
+    # After "Create the vault" the address names the step that adds an app, or Overview in Pro.
+    created = function_body(gateway, "async function createVault(ctx) {")
+    assert (
+        'ctx.navigate(state.interface && state.interface.view === "basic" ? '
+        '"setup/app" : "overview");'
+    ) in created
+    assert created.index("ctx.navigate(") < created.index("ctx.applyState(state);")
+    # Four parts, and pairing is not one of them. A part carries a check only when it is true of
+    # the vault.
+    assert 'const STEPS = ["Passphrase", "App", "Documents", "First question"];' in gateway
+    stepper = function_body(gateway, "function stepper(current, done = []) {")
+    assert "const checked = done[index] === true && !here;" in stepper
+    head = function_body(gateway, "function stepsHead(ctx, current) {")
+    assert "return stepper(current, [true, facts.app, facts.document, facts.asked]);" in head
+    assert "if (!ctx.ui.steps.guided) return null;" in head
+    # The cards keep the keys the walk-throughs know; the card that only showed a configuration
+    # and the three-way choice of access are gone.
+    for key in ('key: "step-3"', 'key: "step-2"', 'key: "step-4"'):
+        assert key in gateway, key
+    for gone in ("step-3-done", "Open the vault", "goes-to", "connectBlocks(", "connectTitle("):
+        assert gone not in gateway, gone
+    frame = function_body(gateway, 'export function setupScreen(ctx, problem = "") {')
+    assert '"You can stop at any point. What you have done stays. ",' in frame
+    assert '"Set everything up yourself in Pro",' in frame
+    assert "bar: basicBars(ctx, problem)," in frame
+    # The foot link keeps Pro as the view, through the one function that keeps a view.
+    pro = function_body(main, "async function setUpInPro() {")
+    assert 'if (!known && !(await keepView("pro"))) return;' in pro
+    assert 'navigate("overview");' in pro
+
+
+def test_the_app_step_ticks_nothing_and_gives_ask_me_each_time() -> None:
+    gateway = without_comments(scripts()["gateway.js"])
+    fresh = function_body(gateway, "export function freshFirstRun() {")
+    assert "setup: { choice: null, " in fresh
+    step = function_body(gateway, "function appStep(ctx) {")
+    assert 'name: "first-app-known",' in step
+    # A row is ticked when it is the owner's choice, and for no other reason. Only the press on
+    # a row makes a choice.
+    assert re.findall(r"\bchecked: ([^,\n]+),", step) == ["form.choice === entry.id"]
+    assert gateway.count("form.choice = ") == 1
+    assert "form.choice = entry.id;" in function_body(gateway, "function chooseApp(ctx, entry) {")
+    assert "onchange: () => chooseApp(ctx, entry)," in step
+    assert gateway.count("chooseApp(") == 2
+    # The rows are the programs that can be connected. "Another app" is one of them only while
+    # the vault has no app.
+    assert (
+        "known.filter((entry) => entry.local_program && "
+        '(entry.id !== "generic" || data.apps.length === 0));'
+    ) in step
+    # What the app may do is stated and not asked: "Ask me each time", for every app.
+    assert re.findall(r"api\.setGrant\(([^)]*)\)", gateway) == ['app.name, group, "approve"']
+    for absent in ("first-mode", '"read"', "segmented(", "GRANT_LABEL"):
+        assert absent not in gateway, absent
+    assert 'el("strong", null, "Ask me each time."),' in step
+    assert "`Let ${form.name} ask me each time`" in step
+    assert '"Choose an app"' in step
+    assert "disabled: !ready," in step
+    # The size of a passage is the vault's own figure.
+    assert "num(settings.ceilings.passage_chars)" in step
+    assert re.search(r"(?<![\w.])\d{3,}(?![\w.])", step) is None
+    # Where one value would not describe what a new app may do, the step adds none.
+    assert "if (data.collections.length > 1 || data.apps.some((app) => !app.hosted)) {" in step
+    # A name that is taken is said, and no other name is made up.
+    add = function_body(gateway, "async function addFirstApp(ctx) {")
+    assert 'form.taken = error.code === "conflict" ? form.name : "";' in add
+    assert add.count("api.addApp(") == 1
+
+
+def test_the_sample_letter_says_that_it_is_invented_and_is_sent_apart() -> None:
+    sources = {name: without_comments(source) for name, source in scripts().items()}
+    manage = sources["manage.js"]
+    assert 'file: "invented-sample-letter.txt",' in manage
+    assert '"SAMPLE DOCUMENT, INVENTED. It was added to try out the vault. ' in manage
+    gateway = sources["gateway.js"]
+    send = function_body(gateway, "async function addSample(ctx, group) {")
+    assert "const answer = await api.addDocument(group, SAMPLE.file, SAMPLE.text);" in send
+    # It is sent by its own function and never through the one that sends the owner's files, so
+    # it is not among the files of which the page says that they are still where they were.
+    assert gateway.count("api.addDocument(") == 1
+    assert "uploadFiles(" not in gateway
+    # Never without a press: the one call stands in the handler of its button.
+    assert gateway.count("addSample(") == 2
+    step = function_body(gateway, "function documentsStep(ctx) {")
+    assert "onclick: () => addSample(ctx, group)," in step
+    assert 'id: "sample-add",' in step
+    # No other script sends the letter.
+    for name, code in sources.items():
+        if name != "gateway.js":
+            assert "SAMPLE.file" not in code, name
+    # The step's zone says who can ask for a file, and the step says where text goes.
+    assert (
+        "dropZone(ctx, group, { large: true, who: true, filled: total === 0 && !refused })," in step
+    )
+    assert (
+        'senders.length ? amber("docs-sentence", senders.length === 1 ? '
+        "basicGrantSentence(senders[0]) : GENERAL_SENTENCE) : null,"
+    ) in step
+
+
+def test_no_sentence_about_another_program_is_shown_that_nobody_checked() -> None:
+    # The app can write a line for a terminal that opens a settings file in the system's editor.
+    # What that line does in another program was not tried with that program, so the page shows
+    # neither the line nor a sentence about it: the file is opened in whatever editor the owner has.
+    for name, source in scripts().items():
+        assert "open_line" not in without_comments(source), f"{name} reads the line"
+        shown = "\n".join(quoted_texts(source))
+        for word in ("TextEdit", "xdg-open", "pbcopy", "\u2318Q", "\u2318A", "\u2318V", "\u2318S"):
+            assert word not in shown, f"{name} says {word!r}"
+    gateway = without_comments(scripts()["gateway.js"])
+    steps = function_body(gateway, "function fileSteps(ctx, ask, app, connect, block, check) {")
+    assert '"Open this file in a plain-text editor:"' in steps
+    assert '"Make this file in a plain-text editor:"' in steps
+    assert '"Copy the path"' in function_body(gateway, "function pathLine(ctx, path) {")
+    # The three places an entry can go in a file that holds other settings.
+    for where in (
+        "Inside \u201cmcpServers\u201d, after its last entry, type a comma, then paste this:",
+        "Between the braces after \u201cmcpServers\u201d, paste this:",
+        "Right after the first \u201c{\u201d, paste this, then type a comma:",
+        "Replace that entry with this one:",
+    ):
+        assert where in steps, where
+
+
+def test_a_settings_file_is_looked_at_only_on_a_press() -> None:
+    sources = {name: without_comments(source) for name, source in scripts().items()}
+    for name, code in sources.items():
+        if name not in ("api.js", "gateway.js"):
+            assert "checkConnect" not in code, f"{name} looks at a settings file"
+    gateway = sources["gateway.js"]
+    assert gateway.count("api.checkConnect(") == 1
+    look = function_body(gateway, "async function checkFile(ctx, ask, name, host) {")
+    assert "ask.check = await api.checkConnect(name, host);" in look
+    # The one call stands in the handler of the button, and this module has no timer at all.
+    assert gateway.count("checkFile(") == 2
+    button = function_body(gateway, "function checkButton(ctx, ask, app, connect, filled) {")
+    assert "onclick: () => checkFile(ctx, ask, app.name, connect.host)," in button
+    assert "setTimeout" not in gateway
+    assert "setInterval" not in gateway
+    # What was found is one of the app's words, and each has its sentence.
+    found = function_body(gateway, "function foundWords(check, label, block) {")
+    for state in (
+        "present",
+        "no_folder",
+        "no_file",
+        "empty",
+        "other",
+        "differs",
+        "unreadable",
+        "not_read",
+    ):
+        assert f'case "{state}":' in found, state
+
+
+def test_the_first_question_says_a_name_and_never_who_asked() -> None:
+    gateway = without_comments(scripts()["gateway.js"])
+    step = function_body(gateway, "function connectStep(ctx, problem) {")
+    waiting = "`Waiting for the first request under the name ${name}. "
+    assert waiting + "This page notices it by itself.`" in step
+    assert "`A first request arrived under the name ${name} ${at(first, ctx.now)}.`" in step
+    assert ", unverified.`" in step
+    # A name is all the page knows: no sentence says that a program called or is connected.
+    shown = "\n".join(quoted_texts(scripts()["gateway.js"]))
+    assert re.search(r"\b(connected|called|calling)\b", shown) is None
+    # The cards come from the one function that draws cards, with what stands around them: the
+    # words of the line above, a bar, a sheet.
+    assert "approvalCards(ctx, { limit: all ? null : 3, around });" in step
+    around = step[step.index("const around = [") :]
+    around = around[: around.index("].join(")]
+    for part in (
+        "words,",
+        'ctx.offline ? "offline" : problem,',
+        'ctx.ui.sheets > 0 ? "sheet" : ""',
+    ):
+        assert part in around, part
+    # Setting up is finished by the first request, never by a release: the three endings have
+    # the same buttons, and "Don't release" is one of the endings.
+    assert "const endButtons = (seq) =>" in step
+    assert step.count("endButtons(") == 3  # the first request, a release that was read, a no
+    assert '"Not released"' in step
+    assert (
+        "`Nothing from that passage left. If ${name} asks again, the passage waits here again.`"
+    ) in step
+    # While a passage waits no button of the screen is the filled one.
+    assert "const filled = anyWaiting === 0;" in step
+    # The way out while nothing has come stores nothing.
+    later = step[step.index('button("Finish later", {') :]
+    assert 'onclick: () => ctx.navigate("basic")' in later[:200]
+
+
+def test_setting_up_ends_by_itself_only_where_the_app_keeps_that_word() -> None:
+    sources = {name: without_comments(source) for name, source in scripts().items()}
+    basic = sources["basic.js"]
+    still = function_body(basic, "function setupOpen(ctx) {")
+    assert 'return Boolean(kept && kept.stored && kept.setup === "open");' in still
+    done = function_body(basic, "export async function setupDone(ctx) {")
+    assert done.splitlines()[1].strip() == "if (!setupOpen(ctx)) return null;"
+    assert 'ctx.applyState(await api.setInterface({ setup: "done" }));' in done
+    # Once the vault has an app, a document and a first request, the page says so once, on
+    # whatever screen it is: after each load.
+    settle = function_body(basic, "export function settleSetup(ctx) {")
+    assert "!setupOpen(ctx) || ctx.ui.setupSaid" in settle
+    assert "if (!facts || !facts.app || !facts.document || !facts.asked) return;" in settle
+    assert settle.index("ctx.ui.setupSaid = true;") < settle.index("setupDone(ctx);")
+    assert "settleSetup(ctx);" in function_body(sources["main.js"], "async function load(names) {")
+    # Nobody else keeps that word.
+    for name, code in sources.items():
+        if name not in ("api.js", "basic.js", "main.js"):
+            assert "setInterface" not in code, name
+    # The card on the Basic page: never in a demo, one line, and "Hide" ends it.
+    card = function_body(basic, "function setupCard(ctx) {")
+    assert "if (ctx.state.demo || !setupOpen(ctx)) return null;" in card
+    for words in (
+        '"Next: choose your AI app."',
+        '"Next: add a document."',
+        '"Next: ask your AI app a first question."',
+        '"Finish setting up"',
+        "`${num(done)} of 4 done`",
+    ):
+        assert words in card, words
+    assert 'id: "setup-hide",' in card
+    assert "const failed = await setupDone(ctx);" in card
+    # Its button is the one filled button of the page, and not while a passage waits.
+    assert 'class: ["btn", waits ? "btn-default" : "btn-primary"], id: "setup-continue"' in card
+    # An app is added from the Basic page through the step that states its access.
+    apps = function_body(basic, "function appsSection(ctx, stops) {")
+    assert 'id: "basic-add-app", href: "#/setup/app"' in apps
 
 
 # -- what the interface says ------------------------------------------------------

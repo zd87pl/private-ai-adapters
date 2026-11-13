@@ -194,13 +194,18 @@ async function closeSheets(page) {
 // -- the app --------------------------------------------------------------------------
 
 /**
- * Start `wdva gate app --no-browser` with `args`, through launch_app.py, which only
- * changes how long owner mode lasts. Returns at once; `started` waits for the lines.
+ * Start `wdva gate app --no-browser` with `args`, through launch_app.py, which changes
+ * how long owner mode lasts and gives the app a home of its own. Returns at once;
+ * `started` waits for the lines.
+ *
+ * `home` is that home: an empty folder this run owns (`app.home`), made here unless one
+ * is given. The app looks for the settings file of an AI app under it and nowhere else,
+ * so a walk-through never reads the settings of a program on this computer.
  */
-function startApp(options, { args = [], ownerSeconds = options.ownerSeconds, port = options.port } = {}) {
+function startApp(options, { args = [], ownerSeconds = options.ownerSeconds, port = options.port, home = shortDirectory('gh-') } = {}) {
   const command = [path.join(HERE, 'launch_app.py'), String(ownerSeconds), 'gate', 'app', '--no-browser', '--port', String(port), ...args];
-  const child = spawn(options.python, command, { stdio: ['ignore', 'pipe', 'pipe'] });
-  const app = { child, out: '', err: '', exit: null, lines: [], url: '', port: 0 };
+  const child = spawn(options.python, command, { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GATE_HOME: home } });
+  const app = { child, home, out: '', err: '', exit: null, lines: [], url: '', port: 0 };
   child.stdout.setEncoding('utf8');
   child.stderr.setEncoding('utf8');
   child.stdout.on('data', (text) => {
