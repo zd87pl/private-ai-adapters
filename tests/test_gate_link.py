@@ -129,6 +129,20 @@ def connect(path: Path, timeout: float = 5.0) -> socket.socket:
     return conn
 
 
+def was_hung_up(conn: socket.socket) -> bool:
+    """Whether the listener has ended this connection. Reads nothing and does not wait."""
+    timeout = conn.gettimeout()
+    conn.setblocking(False)
+    try:
+        return conn.recv(1, socket.MSG_PEEK) == b""
+    except BlockingIOError:  # still open, nothing sent
+        return False
+    except ConnectionResetError:
+        return True
+    finally:
+        conn.settimeout(timeout)
+
+
 def raw(path: Path, payload: bytes, *, role: bytes = b"c") -> tuple[bytes, bytes]:
     """Send ``role`` and ``payload``; return the hello and everything that came after it."""
     with connect(path) as conn:
@@ -595,21 +609,30 @@ def test_callers_that_say_nothing_keep_nobody_out(
         gate = RemoteGate(store, CLIENT)
         for _ in range(3):
             assert gate.status(caller()).code == "OK"
-        # ... because the first one took the place of the caller that had waited longest,
-        # and that place was free for the calls after it.
+        # ... because the first one took the place of the caller that had waited longest.
         assert read_until_closed(held[0]) == b""
+        # A later call takes the place the call before it has left. When the listener has
+        # not yet seen that place become free (its thread ends a moment after the reply
+        # is read), the call takes the place of the next silent caller. So the callers
+        # told to go are the ones that waited longest, and at most one for each call.
+        told_to_go = [conn for conn in held if was_hung_up(conn)]
+        assert 1 <= len(told_to_go) <= 3
+        assert told_to_go == held[: len(told_to_go)]
         # A caller that was told to go is not served after all: its request comes too late.
         with contextlib.suppress(BrokenPipeError, ConnectionResetError):
             held[0].sendall(b"c" + frame(request("read", args={"ref": "d-3f9a2c41b07e.7"})))
         # The others still wait, and can still make their call.
-        held[1].sendall(b"c" + frame(request("status")))
-        assert decode(read_until_closed(held[1]))["code"] == "OK"
+        waiting = held[len(told_to_go)]
+        waiting.sendall(b"c" + frame(request("status")))
+        assert decode(read_until_closed(waiting))["code"] == "OK"
         assert [call[0] for call in backend.calls] == ["status"] * 4
 
-        # More silent callers than there are places only replace one another.
+        # More silent callers than there are places only replace one another: each is let
+        # in for the one that has waited longest, or turned away at the door while the
+        # listener is still ending as many callers as it lets leave at one time.
         for _ in range(40):
             conn = connect(path)
-            assert conn.recv(5) == b"WDVG1"
+            assert conn.recv(5) in (b"WDVG1", b"")
             held.append(conn)
         deadline = time.monotonic() + 10
         while len(server._connections) > link.MAX_CONNECTIONS:
