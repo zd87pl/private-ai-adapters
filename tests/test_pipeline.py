@@ -249,6 +249,11 @@ def test_sealing_and_loading_never_touch_the_network(
     )
     with warnings.catch_warnings():
         warnings.simplefilter("error")  # in particular: no "could not find a config file"
+        # A library saying that one of its own names will go is not what this test is about,
+        # and one library reading a name another has just deprecated must not fail it. A
+        # deprecation that is attributed to this package still counts.
+        for notice in (DeprecationWarning, PendingDeprecationWarning, FutureWarning):
+            warnings.filterwarnings("ignore", category=notice, module=r"(?!wdva\b)")
         result = engine.train(tmp_path / "v.wdva", key=key, texts=FACTS, config=quick_config())
         engine.load(result.adapter_path, key=key)
         assert engine.is_loaded
