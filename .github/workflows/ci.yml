@@ -257,7 +257,7 @@ jobs:
           "transformers==4.56.0"
           "peft==0.15.0"
           "safetensors==0.4.3"
-          "pypdf==4.0.0"
+          "pypdf==7.0.1"
           "langchain-core==0.3.0"
       - name: Install the package (keeps the pins above, which satisfy its floors)
         run: python -m pip install -e ".[ml,langchain,pdf,test]"

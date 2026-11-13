@@ -50,7 +50,7 @@ ml = [
     "safetensors>=0.4.3",
 ]
 # PDF text extraction for `wdva train some.pdf`.
-pdf = ["pypdf>=4.0"]
+pdf = ["pypdf>=7.0.1"]
 # LangChain chat model.
 langchain = ["wdva[ml]", "langchain-core>=0.3"]
 # The MCP server that agent applications start for `wdva gate` (Python 3.11 or newer).
