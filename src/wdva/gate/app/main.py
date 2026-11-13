@@ -64,7 +64,7 @@ OWN_VAULT_LINE = "To start with your own documents: "
 _DEFAULT_LOCK_AFTER = 8.0  # hours; the default of --lock-after
 _PR_SET_DUMPABLE = 4
 _WINDOW_MODULE = "webview"  # the package pywebview, which is not a dependency
-_WAIT_SECONDS = 0.5
+_WAIT_SECONDS = 0.1  # how soon Ctrl-C is noticed, at the latest
 _DEMO_PREFIX = f"{brand.SLUG}-demo-"
 _DEMO_NAME = re.compile(re.escape(_DEMO_PREFIX) + "[a-z0-9_]{8}")  # as mkdtemp makes them
 _DEMO_SETTLED = 60.0  # seconds without a change after which no demo is still making a directory
@@ -73,21 +73,40 @@ _SHORT_PLACE = "/tmp"  # noqa: S108 - what is made there is made by mkdtemp, pri
 
 
 class _Stop:
-    """Set when the program is asked to end; remembers why."""
+    """Set when the program is asked to end; remembers why.
+
+    A signal handler runs in the main thread between two steps of whatever
+    that thread is doing, also in the middle of ``Event.wait``, at a moment
+    when the event's own lock is held. A handler that set the event there
+    would wait for a lock its own thread holds, and the program would hang
+    with the vault unlocked. So a handler only writes one attribute
+    (:meth:`signalled`), which takes no lock, and :meth:`wait` reads it
+    between its short waits.
+    """
 
     def __init__(self) -> None:
         self.event = threading.Event()
         self.reason = "close"
+        self._signal: str | None = None
 
     def ask(self, reason: str) -> None:
+        """Ask the program to end. Not for a signal handler: see :meth:`signalled`."""
         if not self.event.is_set():
             self.reason = reason
         self.event.set()
 
+    def signalled(self, reason: str) -> None:
+        """What a signal handler calls. It touches no lock; :meth:`wait` notices it."""
+        if self._signal is None:
+            self._signal = reason
+
     def wait(self) -> None:
-        # In short waits, so that a signal is noticed on every system.
-        while not self.event.wait(_WAIT_SECONDS):
-            pass
+        # In short waits: a signal sets no event, so it is noticed when a wait ends.
+        while True:
+            if self._signal is not None:
+                self.ask(self._signal)
+            if self.event.wait(_WAIT_SECONDS):
+                return
 
 
 def _harden() -> None:
@@ -438,10 +457,10 @@ def _handle_signals(stop: _Stop) -> _Handlers:
         return previous
 
     def interrupted(signum: int, frame: FrameType | None) -> None:
-        stop.ask("interrupt")
+        stop.signalled("interrupt")
 
     def ended(signum: int, frame: FrameType | None) -> None:
-        stop.ask("signal")
+        stop.signalled("signal")
 
     wanted = [(signal.SIGINT, interrupted), (signal.SIGTERM, ended)]
     hangup = getattr(signal, "SIGHUP", None)

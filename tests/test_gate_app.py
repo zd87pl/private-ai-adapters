@@ -1592,6 +1592,71 @@ def test_a_demo_that_stops_says_how_to_start_for_real(tmp_path: Path) -> None:
     assert not own_place.exists(), "the demo made something at the place for a vault of one's own"
 
 
+def test_a_signal_handler_takes_no_lock() -> None:
+    # A handler runs in the main thread in the middle of whatever that thread is doing, also
+    # inside Event.wait at a moment when the event's lock is held. A handler that set the
+    # event there waited for a lock of its own thread: Ctrl-C at that instant hung the app
+    # with the vault unlocked. So a handler may not touch the event at all.
+    class Touched(AssertionError):
+        pass
+
+    class Untouchable:
+        def is_set(self) -> bool:
+            raise Touched("a signal handler asked the event")
+
+        def set(self) -> None:
+            raise Touched("a signal handler set the event")
+
+        def wait(self, timeout: float | None = None) -> bool:
+            raise Touched("a signal handler waited for the event")
+
+    for number, reason in ((signal.SIGINT, "interrupt"), (signal.SIGTERM, "signal")):
+        stop = main._Stop()
+        previous = main._handle_signals(stop)
+        try:
+            handler = signal.getsignal(number)
+            assert callable(handler), "the app's own handler is installed"
+            event = stop.event
+            stop.event = Untouchable()  # type: ignore[assignment]
+            try:
+                handler(number, None)  # what the system calls
+                handler(number, None)  # a second Ctrl-C changes nothing
+            finally:
+                stop.event = event
+        finally:
+            main._restore_signals(previous)
+        assert not stop.event.is_set(), "nothing is set until the wait looks"
+        stop.wait()  # returns: the wait notices what the handler left
+        assert stop.reason == reason
+
+
+def test_ctrl_c_at_any_moment_of_the_wait_ends_it() -> None:
+    # The same in practice, in a process of its own so that a hang is a failure and not a
+    # test run that never ends: signals sent at many moments of a wait that is made short.
+    code = (
+        "import os, signal, sys, threading, time\n"
+        "import wdva.gate.app.main as main\n"
+        "main._WAIT_SECONDS = 0.0\n"
+        "for number in range(1000):\n"
+        "    stop = main._Stop()\n"
+        "    previous = main._handle_signals(stop)\n"
+        "    delay = (number % 50) * 0.00002\n"
+        "    sender = threading.Thread(\n"
+        "        target=lambda: (time.sleep(delay), os.kill(os.getpid(), signal.SIGINT))\n"
+        "    )\n"
+        "    sender.start()\n"
+        "    stop.wait()\n"
+        "    sender.join()\n"
+        "    main._restore_signals(previous)\n"
+        "    assert stop.reason == 'interrupt', stop.reason\n"
+        "print('ended every time')\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=120, check=False
+    )
+    assert (done.returncode, done.stdout.strip(), done.stderr) == (0, "ended every time", "")
+
+
 def test_a_demo_whose_terminal_has_gone_still_ends_cleanly() -> None:
     # The last line has nobody to read it when the output was closed: that is no error.
     process = start_command("--demo", "--no-browser")
