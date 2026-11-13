@@ -32,7 +32,10 @@ one is checked on every request, before the request's body is read.
   one is refused from its declared length alone.
 * **Static files** are the files found in one flat directory when the server
   starts, read into memory then. A request path is only ever looked up in
-  that table; nothing derived from a request reaches the file system.
+  that table; nothing derived from a request reaches the file system. The
+  page itself is the one file that is not sent as it lies there: where it
+  says ``{{product}}`` the server has put the product's name, so that the
+  page shows it from its first moment and the scripts read it from the page.
 
 Nothing about a request is logged. When the service fails unexpectedly, one
 line with the name of the exception class goes to standard error and the
@@ -48,6 +51,7 @@ from __future__ import annotations
 
 import contextlib
 import hmac
+import html
 import json
 import os
 import re
@@ -65,6 +69,7 @@ from typing import Any, cast
 from urllib.parse import parse_qsl
 
 from wdva._util import strict_json_loads
+from wdva.gate import brand
 from wdva.gate.app.api import Service, ServiceError
 from wdva.gate.extract import MAX_UPLOAD_BYTES
 
@@ -117,6 +122,9 @@ _CONTENT_TYPES = {
 _JSON = "application/json"
 _INDEX = "index.html"
 _PAGE_PATHS = ("/", "/" + _INDEX)
+_NAME_PLACE = b"{{product}}"  # where the page gets the product's name
+# The product's name as a header value: plain letters, a hyphen for each space.
+_SERVER_HEADER = "-".join(re.sub(r"[^A-Za-z0-9 ]", "", brand.PRODUCT).split()) or "app"
 
 _LENGTH = re.compile(r"[0-9]{1,12}")
 _WHOLE_NUMBER = re.compile(r"[0-9]{1,15}")
@@ -434,7 +442,10 @@ def _load_static(directory: Path) -> dict[str, tuple[str, bytes]]:
             continue
         table["/" + entry.name] = (content_type, entry.read_bytes())
     if "/" + _INDEX in table:
-        table["/"] = table["/" + _INDEX]
+        content_type, page = table["/" + _INDEX]
+        # The name is text in the page and inside attribute values: escape it for both.
+        name = html.escape(brand.PRODUCT, quote=True).encode("utf-8")
+        table["/" + _INDEX] = table["/"] = (content_type, page.replace(_NAME_PLACE, name))
     return table
 
 
@@ -461,7 +472,8 @@ class _App:
         if port == 80:  # the one port a browser leaves out of the Host header
             self.hosts |= {"127.0.0.1", "localhost"}
         self.code = _draw_pairing_code() if pairing else None
-        self.cookie_name = f"wdva_gate_{port}"  # cookies are shared between ports of one host
+        # Cookies are shared between the ports of one host, so the name carries the port.
+        self.cookie_name = f"{brand.SLUG.replace('-', '_')}_{port}"
         self.stopped = threading.Event()
         self._token = secrets.token_hex(32)
         self._lock = threading.Lock()
@@ -568,7 +580,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def version_string(self) -> str:
         """The ``Server`` header: the app's name, not the versions of what it runs on."""
-        return "WDVA-Gate"
+        return _SERVER_HEADER
 
     def handle_expect_100(self) -> bool:
         """Do not invite a body before the request was checked (see ``_read_body``)."""
@@ -661,6 +673,7 @@ class _Handler(BaseHTTPRequestHandler):
                     "pairing": "code" if app.pairing else "none",
                     "demo": app.demo,
                     "version": app.version,
+                    "name": brand.PRODUCT,
                 }
             )
         if (method, path) == ("POST", "/api/session/pair"):
@@ -828,9 +841,10 @@ class AppServer:
     ``demo`` mode, only the first one otherwise. So load nothing from the
     server before the page that is meant to have it.
 
-    ``version`` and ``demo`` are what the session endpoint reports. The
-    interface's files are read from ``static_dir`` (default: the directory
-    shipped with this package) once, here.
+    ``version`` and ``demo`` are what the session endpoint reports, next to the
+    product's name. The interface's files are read from ``static_dir``
+    (default: the directory shipped with this package) once, here; the name is
+    put into the page then.
     """
 
     def __init__(
@@ -884,7 +898,9 @@ class AppServer:
                 raise RuntimeError("the server was stopped")
             if self._thread is not None:
                 return
-            self._thread = threading.Thread(target=self._serve, name="wdva-gate-http", daemon=True)
+            self._thread = threading.Thread(
+                target=self._serve, name=f"{brand.SLUG}-http", daemon=True
+            )
             self._thread.start()
 
     def _serve(self) -> None:

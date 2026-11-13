@@ -3,9 +3,10 @@
 """The MCP server an agent application starts: three read-only tools and nothing else.
 
 ``wdva gate mcp --client NAME`` runs :func:`run_stdio`. The process holds no key
-and opens no vault. It relays ``wdva_status``, ``wdva_search`` and ``wdva_read``
-to the app that has the store unlocked (:class:`~wdva.gate.link.RemoteGate`) and
-hands back the text it gets. Every decision is made on the other side.
+and opens no vault. It relays the three tools (status, search and read, under
+the names in :data:`wdva.gate.messages.AGENT_TOOL_NAMES`) to the app that has
+the store unlocked (:class:`~wdva.gate.link.RemoteGate`) and hands back the
+text it gets. Every decision is made on the other side.
 
 The server always starts and always lists its tools. A locked store, a store
 that cannot be found and a backend that fails are tool results with a fixed
@@ -38,17 +39,17 @@ from mcp.types import Implementation, TextContent, ToolAnnotations
 from pydantic import Field
 
 from wdva._version import __version__
-from wdva.gate import messages
+from wdva.gate import brand, messages
 from wdva.gate.errors import GateError
 from wdva.gate.link import MAX_CLAIMED_CHARS, RemoteGate
 from wdva.gate.messages import (
+    AGENT_TOOL_READ,
+    AGENT_TOOL_SEARCH,
+    AGENT_TOOL_STATUS,
     ARGUMENT_DESCRIPTIONS,
     SERVER_INSTRUCTIONS,
     SERVER_NAME,
     TOOL_DESCRIPTIONS,
-    TOOL_READ,
-    TOOL_SEARCH,
-    TOOL_STATUS,
     TOOL_TITLES,
 )
 from wdva.gate.paths import resolve_store
@@ -159,24 +160,26 @@ def build_server(backend: Backend, client: str) -> MCPServer:
         open_world_hint=False,
     )
 
-    def wdva_status(ctx: Context) -> str:
-        return _answer(TOOL_STATUS, lambda: backend.status(_caller(ctx, client)))
+    # The functions are named for what they do; they get the names agents see below.
+    def status(ctx: Context) -> str:
+        return _answer(AGENT_TOOL_STATUS, lambda: backend.status(_caller(ctx, client)))
 
-    def wdva_search(
-        ctx: Context, query: _Query, collection: _Collection = "", limit: _Limit = 5
-    ) -> str:
+    def search(ctx: Context, query: _Query, collection: _Collection = "", limit: _Limit = 5) -> str:
         return _answer(
-            TOOL_SEARCH, lambda: backend.search(_caller(ctx, client), query, collection, limit)
+            AGENT_TOOL_SEARCH,
+            lambda: backend.search(_caller(ctx, client), query, collection, limit),
         )
 
-    def wdva_read(ctx: Context, ref: _Ref) -> str:
-        return _answer(TOOL_READ, lambda: backend.read(_caller(ctx, client), ref))
+    def read(ctx: Context, ref: _Ref) -> str:
+        return _answer(AGENT_TOOL_READ, lambda: backend.read(_caller(ctx, client), ref))
 
     for name, function in (
-        (TOOL_STATUS, wdva_status),
-        (TOOL_SEARCH, wdva_search),
-        (TOOL_READ, wdva_read),
+        (AGENT_TOOL_STATUS, status),
+        (AGENT_TOOL_SEARCH, search),
+        (AGENT_TOOL_READ, read),
     ):
+        # The SDK names a tool's argument schema after its function.
+        function.__name__ = function.__qualname__ = name
         server.tool(
             name=name,
             title=TOOL_TITLES[name],
@@ -190,8 +193,9 @@ def build_server(backend: Backend, client: str) -> MCPServer:
 def run_stdio(store_dir: str | os.PathLike[str] | None, client: str) -> None:
     """Serve the three tools on standard input and output until the application closes them.
 
-    ``store_dir`` is the store directory; ``None`` means the one named by
-    ``WDVA_GATE_STORE``, else the per-user default. Nothing is checked here: a
+    ``store_dir`` is the store directory; ``None`` means the one named by the
+    environment variable :data:`wdva.gate.paths.ENV_STORE`, else the per-user
+    default. Nothing is checked here: a
     store that is missing or locked, and a client name that is not served, show
     up as the result of a tool call, where the user of the application sees them.
 
@@ -216,7 +220,7 @@ class ProbeResult:
 
 
 def probe_stdio(argv: Sequence[str], *, timeout: float = 10.0) -> ProbeResult:
-    """Start ``argv`` as a stdio MCP server, list its tools and call ``wdva_status``.
+    """Start ``argv`` as a stdio MCP server, list its tools and call the status tool.
 
     This is what an agent application does when it connects, done with the
     SDK's own client. It shows that the command starts and answers; it says
@@ -233,14 +237,14 @@ def probe_stdio(argv: Sequence[str], *, timeout: float = 10.0) -> ProbeResult:
     async def probe() -> ProbeResult:
         started = time.monotonic()
         parameters = StdioServerParameters(command=command[0], args=command[1:])
-        identity = Implementation(name="wdva-gate-probe", version=__version__)
+        identity = Implementation(name=f"{brand.SLUG}-probe", version=__version__)
         with anyio.fail_after(timeout):
             async with Client(parameters, client_info=identity) as session:
                 tools = tuple(tool.name for tool in (await session.list_tools()).tools)
                 seconds = time.monotonic() - started
                 status_text = None
                 try:
-                    result = await session.call_tool(TOOL_STATUS, {})
+                    result = await session.call_tool(AGENT_TOOL_STATUS, {})
                 except Exception as exc:
                     _LOG.debug("the status call failed (%s)", type(exc).__name__)
                 else:

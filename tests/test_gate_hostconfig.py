@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 
 from wdva.errors import MissingDependencyError, WDVAError
-from wdva.gate import hostconfig
+from wdva.gate import brand, hostconfig
 from wdva.gate.hostconfig import (
     INSTALL_LINE,
     KNOWN_HOSTS,
@@ -33,6 +33,9 @@ from wdva.gate.hostconfig import (
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32", reason="the gate does not run on Windows yet"
 )
+
+# The product's name comes from one place; the tests take it from there too.
+PRODUCT, SLUG = brand.PRODUCT, brand.SLUG
 
 LOCAL = ["claude-desktop", "claude-code", "codex", "openclaw", "generic"]
 WEB_ONLY = ["chatgpt-web", "claude-web", "grok-web", "grok-bot"]
@@ -91,16 +94,16 @@ def commands_in(config: hostconfig.HostConfig) -> list[list[str]]:
         if block.language == "json":
             data = json.loads(block.text)
             assert list(data) == ["mcpServers"]
-            assert list(data["mcpServers"]) == ["wdva-gate"]
-            entry = data["mcpServers"]["wdva-gate"]
+            assert list(data["mcpServers"]) == [SLUG]
+            entry = data["mcpServers"][SLUG]
             assert sorted(entry) == ["args", "command"]
             found.append([entry["command"], *entry["args"]])
         elif block.language == "json5":
             data = json.loads(json5_to_json(block.text))
             assert list(data) == ["mcp"]
             assert list(data["mcp"]) == ["servers"]
-            assert list(data["mcp"]["servers"]) == ["wdva-gate"]
-            entry = data["mcp"]["servers"]["wdva-gate"]
+            assert list(data["mcp"]["servers"]) == [SLUG]
+            entry = data["mcp"]["servers"][SLUG]
             assert sorted(entry) == ["args", "command"]
             found.append([entry["command"], *entry["args"]])
         elif block.language == "toml":
@@ -110,8 +113,8 @@ def commands_in(config: hostconfig.HostConfig) -> list[list[str]]:
 
             data = tomllib.loads(block.text)
             assert list(data) == ["mcp_servers"]
-            assert list(data["mcp_servers"]) == ["wdva-gate"]
-            entry = data["mcp_servers"]["wdva-gate"]
+            assert list(data["mcp_servers"]) == [SLUG]
+            entry = data["mcp_servers"][SLUG]
             assert sorted(entry) == ["args", "command"]
             found.append([entry["command"], *entry["args"]])
         else:
@@ -129,9 +132,9 @@ def commands_in(config: hostconfig.HostConfig) -> list[list[str]]:
                         "stdio",
                         "--scope",
                         "user",
-                        "wdva-gate",
+                        SLUG,
                     ],
-                    ["codex", "mcp", "add", "wdva-gate"],
+                    ["codex", "mcp", "add", SLUG],
                 )
                 words = words[separator + 1 :]
             found.append(words)
@@ -282,10 +285,10 @@ def test_each_application_gets_its_documented_shapes() -> None:
         "generic": [("json", ()), ("shell", ())],
     }
     claude_code = render("claude-code", client="a", store=PLAIN).blocks[0].text
-    assert claude_code.startswith("claude mcp add --transport stdio --scope user wdva-gate -- ")
+    assert claude_code.startswith(f"claude mcp add --transport stdio --scope user {SLUG} -- ")
     codex = render("codex", client="a", store=PLAIN)
-    assert codex.blocks[0].text.startswith("codex mcp add wdva-gate -- ")
-    assert codex.blocks[1].text.startswith("[mcp_servers.wdva-gate]\ncommand = ")
+    assert codex.blocks[0].text.startswith(f"codex mcp add {SLUG} -- ")
+    assert codex.blocks[1].text.startswith(f"[mcp_servers.{SLUG}]\ncommand = ")
     assert any(
         "~/.grok/config.toml" in note and "ChatGPT desktop app" in note for note in codex.notes
     )
@@ -604,3 +607,101 @@ def test_nothing_here_loads_the_sdk_or_opens_a_socket() -> None:
         )
     for word in ("open(", "write_text", "write_bytes", "os.replace", "subprocess"):
         assert word not in source
+
+
+# -- can the command of a configuration start at all? ----------------------------------------
+
+
+def run_config(*arguments: str, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+    """``wdva gate config`` as a child process, away from the source tree."""
+    done = subprocess.run(
+        [sys.executable, "-m", "wdva", "gate", "config", *arguments],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        cwd="/",
+        env=env,
+        check=False,
+    )
+    return done.returncode, done.stdout, done.stderr
+
+
+def test_the_start_check_tries_this_python_the_way_the_command_runs_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from wdva.gate.app import startcheck
+
+    argv = startcheck._child_argv()
+    command = host_command("my-app", "/srv/vault")
+    # The same interpreter, in the same isolated mode, as the command of a configuration.
+    assert argv[:4] == command[:4] == [sys.executable, "-I", "-X", "utf8"]
+    assert argv[4] == "-c"
+    assert "import wdva.gate" in argv[5]
+
+    # Here the package is installed where an isolated Python finds it.
+    problem = startcheck.start_problem()
+    if all(importlib.util.find_spec(name) for name in ("mcp", "pydantic", "anyio")):
+        assert problem is None
+    else:
+        assert problem == str(missing_sdk_error())
+
+    # A Python that does not find the package: the sentence about virtual environments.
+    monkeypatch.setattr(
+        startcheck, "_child_argv", lambda: [sys.executable, "-I", "-c", "import no_such_wdva"]
+    )
+    assert startcheck.start_problem() == startcheck.NOT_FOUND_MESSAGE
+    assert "virtual environment" in startcheck.NOT_FOUND_MESSAGE
+    # One that finds the package and not the SDK: what to install.
+    monkeypatch.setattr(
+        startcheck, "_child_argv", lambda: [sys.executable, "-c", "raise SystemExit(3)"]
+    )
+    assert startcheck.start_problem() == str(missing_sdk_error())
+    # One that cannot be started, and one that hangs: a sentence, never an exception.
+    monkeypatch.setattr(startcheck, "_child_argv", lambda: ["/nonexistent/python", "-c", "0"])
+    assert "could not be started" in (startcheck.start_problem() or "")
+    monkeypatch.setattr(
+        startcheck,
+        "_child_argv",
+        lambda: [sys.executable, "-c", "import time; time.sleep(30)"],
+    )
+    assert "TimeoutExpired" in (startcheck.start_problem(timeout=0.2) or "")
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="the MCP server needs Python 3.11")
+def test_the_config_command_tries_the_command_before_it_prints_it() -> None:
+    if sdk_status()["message"] is not None:
+        pytest.skip("this environment has no MCP SDK, which the text itself says")
+    code, out, err = run_config("claude-desktop", "--client", "claude-desktop", "--store", "/srv/v")
+    assert (code, err) == (0, "")
+    printed = json.loads(out.split("\n\n")[2])
+    assert printed["mcpServers"][SLUG]["args"][-2:] == ["--store", "/srv/v"]
+
+
+def test_the_config_command_exits_1_with_the_reason_when_the_start_check_fails(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from wdva import cli
+    from wdva.gate.app import startcheck
+
+    if sdk_status()["message"] is not None:
+        pytest.skip("without the SDK or on an old Python the text says so and nothing is tried")
+    tried: list[int] = []
+
+    def fails() -> str:
+        tried.append(1)
+        return startcheck.NOT_FOUND_MESSAGE
+
+    monkeypatch.setattr(startcheck, "start_problem", fails)
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["gate", "config", "claude-code", "--client", "claude-code", "--store", "/v"])
+    shown = capsys.readouterr()
+    assert stopped.value.code == 1
+    assert shown.out == "", "a configuration that cannot work was printed"
+    assert startcheck.NOT_FOUND_MESSAGE in shown.err
+    assert tried == [1]
+    # A product that starts no program has nothing to try, and gets its explanation.
+    code = cli.main(["gate", "config", "chatgpt-web", "--client", "my-app", "--store", "/v"])
+    shown = capsys.readouterr()
+    assert code == 0
+    assert "cannot reach this vault" in shown.out.replace("\n", " ")
+    assert tried == [1]

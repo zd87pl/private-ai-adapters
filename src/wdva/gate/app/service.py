@@ -23,9 +23,11 @@ app has beyond the store itself:
   only the hosted ones are answered until the owner has chosen.
 * **The activity list.** One entry per record, written as a sentence, built
   from the record when the vault is unlocked and extended as records are
-  appended. The exact text of a release is read from the record when it is
-  asked for, and nowhere else is document text handed to the interface except
-  the passage the owner is asked to approve.
+  appended. A call that asks what an app may use is listed as a question, not
+  as a release: it hands out no document text. The exact text of a release
+  is read from the record when it is asked for, and nowhere else is document
+  text handed to the interface except the passage the owner is asked to
+  approve.
 
 The methods take and return plain JSON values and raise
 :class:`~wdva.gate.app.api.ServiceError`. A passphrase is used and forgotten:
@@ -54,8 +56,9 @@ from typing import Any, TypeVar, cast
 from wdva import vault
 from wdva._version import __version__
 from wdva.errors import WDVAError, WrongKeyError
-from wdva.gate import extract, hostconfig, messages, paths
+from wdva.gate import brand, extract, hostconfig, messages, paths
 from wdva.gate.app.api import JSONObject, ServiceError
+from wdva.gate.app.startcheck import start_problem
 from wdva.gate.core import (
     DAY,
     UNREGISTERED,
@@ -131,8 +134,12 @@ MAX_HOURS = 168.0
 NOT_REGISTERED = "(not registered)"
 """The app name under which calls are listed that were made under a name nobody answers."""
 
-ACTIVITY_KINDS = ("release", "refusal", "approval", "change", "session")
-"""The kinds of entries in the activity list."""
+ACTIVITY_KINDS = ("release", "question", "refusal", "approval", "change", "session")
+"""The kinds of entries in the activity list.
+
+A ``question`` is a status call: an app asked what it may use and was told,
+without any document text. It is not a release and is counted apart from them.
+"""
 
 _DEFAULT_PAGE = 50
 _MAX_PAGE = 200
@@ -165,8 +172,8 @@ _OVER_LIMIT_WORDS = {
 _LOCK_WORDS = {
     "lock-command": "you locked the vault",
     "timer": "you let the timer lock the vault",
-    "interrupt": "you stopped WDVA Gate, which locked the vault",
-    "signal": "you stopped WDVA Gate, which locked the vault",
+    "interrupt": f"you stopped {brand.PRODUCT}, which locked the vault",
+    "signal": f"you stopped {brand.PRODUCT}, which locked the vault",
 }
 
 _F = TypeVar("_F", bound=Callable[..., Any])
@@ -685,13 +692,14 @@ class _Feed:
         destination, hosted = self._app(client)
         return self._item(
             data,
-            kind="release",
+            kind="question",
             summary="asked what it may use (no document text)",
             app=client,
             destination=destination,
             hosted=hosted,
             tool="status",
             code="OK",
+            details=[("answered with", "its collections and limits, no document text")],
         )
 
     def _approval(self, data: Mapping[str, Any]) -> dict[str, Any]:
@@ -747,7 +755,10 @@ class _Feed:
         chars = _whole(data.get("chars"))
         if chars is not None:
             details.append(("characters", f"{chars:,}"))
-        details.append(("original kept", "yes" if data.get("original") else "no"))
+        # What the record knows: whether the bytes of the added file were sealed with the
+        # text. Where that file came from, and whether it is still there, it does not know.
+        kept = "sealed" if data.get("original") else "none"
+        details.append(("copy of the file in the vault", kept))
         return self._item(
             data,
             kind="change",
@@ -861,8 +872,11 @@ class GateService:
     """The app for one store directory: every call of the interface, and the lock state.
 
     ``store_dir`` is where the vault is or will be created. ``demo`` is only
-    reported in the state. ``lock_after_hours`` is how long the vault stays
-    unlocked when an unlock does not say. ``clock`` supplies every time (of
+    reported in the state. ``demo_passphrase`` is the passphrase of a demo
+    vault, which the state then carries so that the interface can show it; it
+    is refused without ``demo``, and the state of a real vault never has that
+    field. ``lock_after_hours`` is how long the vault stays unlocked when an
+    unlock does not say. ``clock`` supplies every time (of
     records, limits, owner mode and the moment the vault locks itself);
     ``scrypt_n`` is the cost of the passphrase stretch of a vault created
     here (``None``: the default).
@@ -877,6 +891,7 @@ class GateService:
         store_dir: str | os.PathLike[str],
         *,
         demo: bool = False,
+        demo_passphrase: str | None = None,
         lock_after_hours: float = 8.0,
         clock: Callable[[], datetime] | None = None,
         scrypt_n: int | None = None,
@@ -884,8 +899,11 @@ class GateService:
         hours = float(lock_after_hours)
         if not MIN_HOURS <= hours <= MAX_HOURS:
             raise ValueError(f"lock_after_hours must be between {MIN_HOURS} and {MAX_HOURS:g}")
+        if demo_passphrase is not None and not demo:
+            raise ValueError("only a demo vault has a passphrase that is shown")
         self._path = Path(os.path.abspath(os.path.expanduser(os.fspath(store_dir))))
         self._demo = bool(demo)
+        self._demo_passphrase = demo_passphrase
         self._default_hours = hours
         self._clock: Callable[[], datetime] = clock or utc_now
         self._scrypt_n = scrypt_n
@@ -895,6 +913,7 @@ class GateService:
         self._cursor_lock = threading.Lock()
         self._cursor = 1
         self._info: tuple[Any, StoreInfo] | None = None
+        self._start_checked: tuple[str | None] | None = None  # the one result of the start check
         self._backend = _AgentSide(self)
 
     # -- what others may ask --------------------------------------------------------
@@ -908,6 +927,11 @@ class GateService:
     def backend(self) -> Backend:
         """What answers the three tool calls: the gate while unlocked, ``LOCKED`` otherwise."""
         return self._backend
+
+    @property
+    def unlocked(self) -> bool:
+        """Whether the vault is unlocked at this moment."""
+        return self._current() is not None
 
     def close(self, reason: str = "close") -> None:
         """Lock the vault, if it is unlocked, because the app is stopping."""
@@ -1040,7 +1064,7 @@ class GateService:
         """What a program that only asks whether the app is there is told. No document text."""
         session = self._session
         return {
-            "app": messages.APP_NAME,
+            "app": brand.PRODUCT,
             "version": __version__,
             "pid": os.getpid(),
             "locks_at": None if session is None else _iso(session.locks_at),
@@ -1106,7 +1130,7 @@ class GateService:
             store["sealed_bytes"] = info.sealed_bytes
         with self._cursor_lock:
             cursor = self._cursor
-        return {
+        out: JSONObject = {
             "version": __version__,
             "demo": self._demo,
             "cursor": cursor,
@@ -1121,6 +1145,10 @@ class GateService:
             "today": None,
             "warnings": None,
         }
+        if self._demo and self._demo_passphrase is not None:
+            # Only the demo vault, whose documents are invented, has a passphrase that is shown.
+            out["demo_passphrase"] = self._demo_passphrase
+        return out
 
     def _locked_state(self) -> JSONObject:
         info = self._store_info(None)
@@ -1160,7 +1188,7 @@ class GateService:
 
         info = self._store_info(session)
         out = self._base_state(info)
-        releases = refusals = 0
+        releases = questions = refusals = 0
         earliest = format_time(now - DAY)  # record times are text that sorts by time
         with session.feed.lock:
             head_time = session.feed.items[-1]["time"] if session.feed.items else None
@@ -1169,8 +1197,10 @@ class GateService:
                     continue
                 if item["time"] <= earliest:
                     break
-                if item["kind"] == "release" and item["tool"] != "status":
+                if item["kind"] == "release":
                     releases += 1
+                elif item["kind"] == "question":
+                    questions += 1
                 elif item["kind"] == "refusal":
                     refusals += item["count"]
         collections = set(policy.collections) | {entry.collection for entry in documents}
@@ -1206,6 +1236,7 @@ class GateService:
             today={
                 "releases": releases,
                 "characters": sum(pool.chars_day for pool in usage.pools.values()),
+                "questions": questions,
                 "refusals": refusals,
                 "approvals_waiting": len(waiting),
             },
@@ -1240,7 +1271,7 @@ class GateService:
         if session.gate.started.previous_session == "unclean":
             warn(
                 "previous_session_unclean",
-                f"{messages.APP_NAME} did not lock the vault before it stopped last time.",
+                f"{brand.PRODUCT} did not lock the vault before it stopped last time.",
             )
         if kinds_served(policy, served) == BOTH:
             warn(
@@ -1272,12 +1303,12 @@ class GateService:
             warn(
                 "python_too_old",
                 "Apps cannot connect: the program they start needs Python 3.11 or newer, and "
-                f"{messages.APP_NAME} runs on an older one.",
+                f"{brand.PRODUCT} runs on an older one.",
             )
         elif session.sdk.get("sdk") is False:
             warn(
                 "no_sdk",
-                f"Apps cannot connect yet: the MCP SDK is not installed where {messages.APP_NAME} "
+                f"Apps cannot connect yet: the MCP SDK is not installed where {brand.PRODUCT} "
                 "runs.",
                 [hostconfig.INSTALL_LINE],
             )
@@ -1521,6 +1552,7 @@ class GateService:
         """The passages waiting for the owner and the approvals not yet used."""
         session = self._unlocked()
         gate = session.gate
+        allowance = gate.policy().per_document
         waiting: list[dict[str, Any]] = []
         for entry in gate.pending():
             try:
@@ -1541,6 +1573,7 @@ class GateService:
                     "first_asked": _iso(entry.first_at),
                     "last_asked": _iso(entry.last_at),
                     "times_asked": entry.count,
+                    "mode": preview.mode,
                     "inside_free_allowance": not preview.needs_approval,
                     "fits_limits": preview.fits_limits,
                     "body": preview.body,
@@ -1551,6 +1584,7 @@ class GateService:
                         "characters": preview.doc_chars,
                         "released": preview.doc_released,
                         "after": preview.doc_after,
+                        "free": allowance.free_allowance(preview.doc_chars),
                         "to": f"{preview.pool} apps",
                     },
                     "today": {
@@ -1924,13 +1958,26 @@ class GateService:
             ) from None
         status = hostconfig.sdk_status()
         message = status["message"]
+        starts = message is None
+        if starts and config.local_program:
+            # The configuration names a command: see once whether it can start at all.
+            message = self._start_problem()
+            starts = message is None
         out = config.as_dict()
         out["ready"] = {
             "sdk": bool(status["sdk"]),
             "python": bool(status["python"]),
+            "starts": starts,
             "message": None if message is None else f"Apps cannot connect yet: {message}",
         }
         return out
+
+    def _start_problem(self) -> str | None:
+        """What keeps the command of a configuration from starting; tried once per app run."""
+        checked = self._start_checked
+        if checked is None:
+            checked = self._start_checked = (start_problem(),)
+        return checked[0]
 
     # -- settings -----------------------------------------------------------------------
 

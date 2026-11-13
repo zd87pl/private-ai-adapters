@@ -2269,3 +2269,98 @@
     text-align: left;
   }
 }
+
+/* -- the demo's passphrase, where one is asked for ---------------------------------- */
+
+.demo-pass .note-text {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+}
+
+.demo-pass-word {
+  white-space: nowrap;
+  -webkit-user-select: all;
+  user-select: all;
+}
+
+.demo-pass .btn {
+  margin-top: 3px;
+}
+
+/* -- what a new vault still needs, in order ----------------------------------------- */
+
+.stats-aside {
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+.start-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.start-step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 8px 0;
+  color: var(--text-2);
+}
+
+.start-step + .start-step {
+  border-top: 1px solid var(--line-soft);
+}
+
+.start-dot {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--line);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.start-step.is-next {
+  color: var(--text);
+}
+
+.start-step.is-next .start-dot {
+  background: var(--accent-fill);
+  box-shadow: none;
+  color: #fff;
+}
+
+.start-step.is-done .start-dot {
+  background: var(--fill-quiet);
+  box-shadow: none;
+}
+
+.start-dot .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.start-title {
+  font-weight: 600;
+}
+
+.start-step.is-done .start-title {
+  font-weight: 400;
+}
+
+.start-hint {
+  color: var(--text-2);
+}
+
+.upload-outside {
+  display: block;
+  padding-top: 4px;
+}

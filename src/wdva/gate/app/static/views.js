@@ -5,6 +5,7 @@
 // Approvals.
 
 import { api } from "./api.js";
+import { PRODUCT } from "./brand.js";
 import { el, icon } from "./dom.js";
 import { ago, at, count, list, num, sentence, untilShort, when, whenFull } from "./format.js";
 import { loadingBlock, servingStrip } from "./manage.js";
@@ -35,7 +36,7 @@ function servingSentence(ctx) {
   const served = serving.hosted.concat(serving.local);
   const registered = ctx.data.apps ? ctx.data.apps.apps.map((app) => app.name) : served;
   const idle = registered.filter((name) => !served.includes(name));
-  if (!registered.length) return "No app is connected, so nothing can leave.";
+  if (!registered.length) return "No app has been added, so nothing can leave.";
   const first = served.length ? `Answering ${list(served)}.` : "No app is answered right now.";
   if (!idle.length) return first;
   return `${first} Not answered: ${list(idle)}.`;
@@ -74,14 +75,88 @@ function stateCard(ctx) {
         stat(num(today.releases), today.releases === 1 ? "release" : "releases"),
         stat(num(today.refusals), today.refusals === 1 ? "call refused" : "calls refused"),
       ),
+      // A question about what an app may use releases no text, so it is not among the releases.
+      today.questions > 0
+        ? el(
+            "span",
+            { class: "stats-aside", title: "An app asked what it may use and was told. No document text was released." },
+            today.questions === 1 ? "and 1 question without document text" : `and ${num(today.questions)} questions without document text`,
+          )
+        : null,
     ),
+  );
+}
+
+/**
+ * What a new vault still needs before an app can ask it anything, in the order to
+ * do it. Shown until an app has made its first call; never in the demo, which
+ * starts with all of it done.
+ */
+function startCard(ctx) {
+  const data = ctx.data.apps;
+  if (!data || ctx.state.demo) return null;
+  const apps = data.apps;
+  const documents = ctx.state.encryption ? ctx.state.encryption.documents : 0;
+  const steps = [
+    {
+      done: documents > 0,
+      title: "Add documents",
+      text: "Drop text files or PDFs into a collection. A sealed copy of each goes into the vault.",
+      href: "#/documents",
+      action: "Add documents",
+    },
+    {
+      done: apps.length > 0,
+      title: "Add an app",
+      text: "Say which assistant may ask, for example Claude Desktop, and where the text it receives goes.",
+      href: "#/apps",
+      action: "Add an app",
+    },
+    {
+      done: apps.some((app) => Object.keys(app.grants || {}).length > 0),
+      title: "Give the app a collection",
+      text: "Under Apps, choose “Can read” or “Ask me each time” for a collection. Until you do, the app is told there is nothing for it.",
+      href: "#/apps",
+      action: "Open Apps",
+    },
+    {
+      done: apps.some((app) => app.last_seen),
+      title: "Connect the app",
+      text: "Under Apps, press Connect, copy the configuration into the app’s own settings and restart the app. Its first call then shows up under Activity.",
+      href: "#/apps",
+      action: "Open Apps",
+    },
+  ];
+  const next = steps.findIndex((step) => !step.done);
+  if (next < 0) return null;
+  return card(
+    "Getting started",
+    el(
+      "ol",
+      { class: "start-list" },
+      steps.map((step, index) =>
+        el(
+          "li",
+          { class: ["start-step", step.done && "is-done", index === next && "is-next"], key: `start-${index}`, "aria-current": index === next ? "step" : null },
+          el("span", { class: "start-dot" }, step.done ? icon("check") : String(index + 1)),
+          el(
+            "div",
+            { class: "start-text" },
+            el("p", { class: "start-title" }, step.title, step.done ? el("span", { class: "sr-only" }, " (done)") : null),
+            step.done ? null : el("p", { class: "start-hint" }, step.text),
+          ),
+          index === next ? el("a", { class: "btn btn-primary btn-small", href: step.href }, el("span", { class: "btn-label" }, step.action)) : null,
+        ),
+      ),
+    ),
+    { key: "start", class: "card-start", action: el("span", { class: "card-aside" }, `Step ${num(next + 1)} of ${num(steps.length)}`) },
   );
 }
 
 /** Notices the page words itself, because they need a consequence said with them. */
 const NOTICE_TEXT = {
   previous_session_unclean:
-    "WDVA Gate ended without locking last time (a crash or a forced quit). The files stayed sealed; calls per minute are counted from zero again.",
+    `${PRODUCT} ended without locking last time (a crash or a forced quit). The files stayed sealed; calls per minute are counted from zero again.`,
 };
 
 /** Notices that ask nothing of the owner: they can be put away. */
@@ -142,7 +217,7 @@ function sentCard(ctx) {
   if (!data) content = loadingBlock();
   else if (!data.apps.length) {
     content = emptyState({
-      text: "No app is connected yet, so nothing can leave the vault.",
+      text: "No app has been added yet, so nothing can leave the vault.",
       action: el("a", { class: "btn btn-default btn-small", href: "#/apps" }, el("span", { class: "btn-label" }, "Add an app")),
     });
   } else {
@@ -282,7 +357,7 @@ function encryptionCard(ctx) {
         button(ctx.ui.verifying ? "Verifying…" : "Verify now", { small: true, glyph: "refresh", busy: ctx.ui.verifying, onclick: () => verifyNow(ctx) }),
       ),
       record.previous_session === "unclean" && putAway.has("previous_session_unclean")
-        ? el("p", { class: "muted small card-foot-line" }, "Last time WDVA Gate ended without locking.")
+        ? el("p", { class: "muted small card-foot-line" }, `Last time ${PRODUCT} ended without locking.`)
         : null,
     ],
     { key: "encryption" },
@@ -324,6 +399,7 @@ export function overviewView(ctx) {
       stateCard(ctx),
       ctx.state.serving && ctx.state.serving.choice_needed ? servingStrip(ctx, apps) : null,
       warningList(ctx),
+      startCard(ctx),
       el(
         "div",
         { class: "overview-grid", key: "grid" },
@@ -339,6 +415,7 @@ export function overviewView(ctx) {
 const KINDS = [
   { value: "", label: "All" },
   { value: "release", label: "Released" },
+  { value: "question", label: "Questions" },
   { value: "refusal", label: "Refused" },
   { value: "approval", label: "Approvals" },
   { value: "change", label: "Changes" },
@@ -396,8 +473,8 @@ export function activityView(ctx) {
         : emptyState({
             glyph: "activity",
             title: "Nothing has happened yet",
-            text: "Every search and every passage an app asks for appears here, with what was released and what was refused.",
-            action: el("a", { class: "btn btn-default btn-small", href: "#/apps" }, el("span", { class: "btn-label" }, "Connect an app")),
+            text: "Every search and every passage an app asks for appears here, with what was released and what was refused. Your own changes are listed too.",
+            action: el("a", { class: "btn btn-default btn-small", href: "#/apps" }, el("span", { class: "btn-label" }, "Open Apps")),
           }),
     );
   } else {
@@ -451,6 +528,11 @@ const VARIANT_TEXT = {
 
 const RULE_TEXT = { "grant:read": "Can read", approval: "Your approval, used once" };
 
+/** What an entry of the kind "question" means: a call that asks what the app may use. */
+const QUESTION_TEXT =
+  "No document text was released. The app asked what it may use and was told its collections and how much it may still receive. " +
+  "Such a question is not a release and is listed at most once an hour for each app.";
+
 function detailRow(label, value, mono = false) {
   if (value === null || value === undefined || value === "") return null;
   return el("div", { class: "fact", key: label }, el("dt", null, label), el("dd", { class: mono ? "mono" : null }, value));
@@ -503,6 +585,7 @@ function panelBody(ctx, panel) {
         )
       : null,
     refusal ? note(item.code === "NEEDS_APPROVAL" ? "amber" : "plain", (item.code === "OVER_LIMIT" && VARIANT_TEXT[item.variant]) || REFUSAL_TEXT[item.code] || "Nothing was released.") : null,
+    item.kind === "question" ? note("plain", QUESTION_TEXT) : null,
     refusal && item.code === "NEEDS_APPROVAL" ? el("a", { class: "btn btn-default btn-small panel-link", href: "#/approvals" }, el("span", { class: "btn-label" }, "Open Approvals")) : null,
     refusal && item.count > 1
       ? el(
@@ -684,6 +767,23 @@ function decidedLine(ctx, done) {
   );
 }
 
+/**
+ * Why a passage waits for the owner: the app has to ask for every passage of this
+ * collection, or it may read but this passage goes past what a document gives
+ * without asking.
+ */
+function whyItWaits(item) {
+  const document = item.document || {};
+  if (item.mode === "read" && !item.inside_free_allowance) {
+    const free = typeof document.free === "number" ? `, ${num(document.free)} characters of this document` : "";
+    return `It waits for you although this app can read “${item.collection}”: without asking, apps of its kind get only a document’s free allowance${free}, and this passage would go past it. The allowance is set under Vault.`;
+  }
+  if (item.inside_free_allowance) {
+    return "This passage is inside the document’s free allowance. It waits for you because this app is set to “Ask me each time”.";
+  }
+  return `It waits for you because this app is set to “Ask me each time” for “${item.collection}”.`;
+}
+
 function approvalCard(ctx, item, index) {
   const busy = ctx.ui.deciding.has(pairKey(item));
   const ready = releaseArmed(ctx) && !ctx.ui.deciding.size;
@@ -743,9 +843,7 @@ function approvalCard(ctx, item, index) {
         `This document: ${num(document.released)} of ${num(document.characters)} characters already released to ${document.to || "apps of this kind"}; ${num(document.after)} after this.`,
       ),
       el("li", null, `This app, last 24 hours: ${num(today.used)} of ${num(today.limit)} characters used.`),
-      item.inside_free_allowance
-        ? el("li", null, "This passage is inside the document’s free allowance. It waits for you because this app is set to “Ask me each time”.")
-        : null,
+      el("li", null, whyItWaits(item)),
       item.fits_limits === false
         ? el("li", { class: "is-amber" }, "The app’s limits would refuse this passage right now, even with your approval.")
         : null,

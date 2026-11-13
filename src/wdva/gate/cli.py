@@ -14,7 +14,9 @@ import argparse
 import sys
 from typing import Any, Protocol
 
+from wdva.gate import brand
 from wdva.gate.errors import GateError
+from wdva.gate.paths import ENV_STORE
 
 WINDOWS_MESSAGE = "the gate does not run on Windows yet"
 
@@ -58,9 +60,19 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
 
 def _cmd_config(args: argparse.Namespace) -> int:
     _refuse_on_windows()
-    from wdva.gate.hostconfig import render_text
+    from wdva.gate.app.startcheck import start_problem
+    from wdva.gate.hostconfig import known_host, render_text, sdk_status
 
-    print(render_text(args.host, client=args.client, store=args.store))
+    text = render_text(args.host, client=args.client, store=args.store)
+    status = sdk_status()
+    if known_host(args.host).local_program and status["python"] and status["sdk"]:
+        # The text names a command. Try it once the way an application would start it,
+        # so that nobody copies a configuration that cannot work. (A missing SDK or an
+        # old Python is said at the end of the text itself.)
+        problem = start_problem()
+        if problem is not None:
+            raise GateError(problem)
+    print(text)
     return 0
 
 
@@ -69,10 +81,7 @@ def add_gate_parser(subparsers: _SubParsers) -> None:
     gate = subparsers.add_parser(
         "gate",
         help="let AI agents search and read your sealed documents inside limits you set",
-        description=(
-            "A local gate between your sealed documents and AI agents. "
-            "Start it with `wdva gate app`."
-        ),
+        description=f"{brand.PRODUCT}. {brand.TAGLINE} Start it with `wdva gate app`.",
         epilog=(
             "gate commands read no credential from the environment: "
             "WDVA_KEY, WDVA_KEY_FILE and WDVA_PASSPHRASE are ignored"
@@ -86,7 +95,7 @@ def add_gate_parser(subparsers: _SubParsers) -> None:
             "--store",
             metavar="DIR",
             default=None,
-            help="the store directory (default: WDVA_GATE_STORE, else the per-user location)",
+            help=f"the store directory (default: {ENV_STORE}, else the per-user location)",
         )
         return parser
 

@@ -20,7 +20,7 @@ import pytest
 
 from wdva._version import __version__
 from wdva.errors import WDVAError
-from wdva.gate import extract, messages
+from wdva.gate import brand, extract, messages
 from wdva.gate.app import service as service_module
 from wdva.gate.app.api import Service, ServiceError
 from wdva.gate.app.service import NOT_REGISTERED, OWNER_MODE, GateService
@@ -31,6 +31,9 @@ from wdva.gate.types import Caller
 
 from . import gate_support as gs
 from .conftest import FakeClock
+
+# The product's name comes from one place; the tests take it from there too.
+PRODUCT, SLUG = brand.PRODUCT, brand.SLUG
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32", reason="the gate does not run on Windows yet"
@@ -171,6 +174,7 @@ def test_state_locked_and_unlocked(vault: GateService, gate_clock: FakeClock) ->
     assert state["today"] == {
         "releases": 0,
         "characters": 0,
+        "questions": 0,
         "refusals": 0,
         "approvals_waiting": 0,
     }
@@ -798,7 +802,7 @@ def test_activity_tells_each_call_and_the_detail_holds_the_exact_text(
     told = [(i["kind"], i["app"], i["tool"], i["summary"], i["code"]) for i in reversed(items)]
     results = len(REF.findall(search.text))
     assert told == [
-        ("release", "claude-desktop", "status", "asked what it may use (no document text)", "OK"),
+        ("question", "claude-desktop", "status", "asked what it may use (no document text)", "OK"),
         ("release", "claude-desktop", "search", f"searched home and tax: {results} results", "OK"),
         (
             "release",
@@ -1013,6 +1017,7 @@ def test_today_counts_the_last_24_hours(unlocked: GateService, gate_clock: FakeC
     assert today == {
         "releases": 2,
         "characters": len(search.text) + len(read.text),
+        "questions": 1,
         "refusals": 0,
         "approvals_waiting": 0,
     }
@@ -1024,9 +1029,54 @@ def test_today_counts_the_last_24_hours(unlocked: GateService, gate_clock: FakeC
     assert unlocked.state()["today"] == {
         "releases": 0,
         "characters": 0,
+        "questions": 0,
         "refusals": 0,
         "approvals_waiting": 0,
     }
+
+
+def test_a_question_is_not_a_release(unlocked: GateService) -> None:
+    status = unlocked.backend.status(CLAUDE)
+    assert (status.code, status.released) == ("OK", False)
+    search = unlocked.backend.search(CLAUDE, "rent deposit", "home")
+    assert service_module.ACTIVITY_KINDS == (
+        "release",
+        "question",
+        "refusal",
+        "approval",
+        "change",
+        "session",
+    )
+    (question,) = unlocked.activity(kind="question")["items"]
+    assert (question["kind"], question["tool"], question["code"]) == ("question", "status", "OK")
+    assert (question["app"], question["destination"], question["hosted"]) == (
+        "claude-desktop",
+        "Anthropic",
+        True,
+    )
+    assert question["summary"] == "asked what it may use (no document text)"
+    assert question["characters"] == 0
+    # It is not among the releases: not in the list, not in the figures, not per app.
+    released = unlocked.activity(kind="release")["items"]
+    assert [item["tool"] for item in released] == ["search"]
+    today = unlocked.state()["today"]
+    assert (today["releases"], today["questions"]) == (1, 1)
+    assert today["characters"] == len(search.text)
+    (claude,) = (app for app in unlocked.apps()["apps"] if app["name"] == "claude-desktop")
+    assert claude["usage"]["releases_day"] == 1
+    assert claude["usage"]["chars_day"] == len(search.text)
+    # Its detail holds no text: the answer to a status call is not kept, and names no document.
+    detail = unlocked.activity_detail(seq=question["seq"])
+    assert detail["text"] is None
+    assert detail["claimed"] == "claude-ai 1.2"
+    assert ["answered with", "its collections and limits, no document text"] in detail["details"]
+    # The list that is rebuilt from the record at the next unlock says the same.
+    unlocked.lock()
+    unlocked.unlock(passphrase=gs.PASSPHRASE)
+    assert [item["seq"] for item in unlocked.activity(kind="question")["items"]] == [
+        question["seq"]
+    ]
+    assert unlocked.state()["today"]["questions"] == 1
 
 
 def test_the_cursor_grows_with_everything_the_interface_shows(
@@ -1093,6 +1143,7 @@ def test_approval_flow_from_a_refused_read_to_a_released_passage(
         "first_asked": "2026-11-12T09:00:00Z",
         "last_asked": "2026-11-12T09:00:30Z",
         "times_asked": 2,
+        "mode": "approve",
         "inside_free_allowance": False,
         "fits_limits": True,
         "body_sha256": waiting["body_sha256"],
@@ -1102,6 +1153,8 @@ def test_approval_flow_from_a_refused_read_to_a_released_passage(
             "characters": info.chars,
             "released": 0,
             "after": info.chars,
+            # Half of the document, rounded up: what hosted apps get of it without asking.
+            "free": (info.chars + 1) // 2,
             "to": "hosted apps",
         },
         "today": {"used": waiting["today"]["used"], "limit": 20000},
@@ -1521,13 +1574,14 @@ def test_connect(unlocked: GateService, short_store_dir: Path) -> None:
     )
     assert answer["explanation"] is None
     (block,) = answer["blocks"]
-    command = json.loads(block["text"])["mcpServers"]["wdva-gate"]
+    command = json.loads(block["text"])["mcpServers"][SLUG]
     assert command["command"] == sys.executable
     assert command["args"][-4:] == ["--client", "claude-desktop", "--store", str(short_store_dir)]
-    assert set(answer["ready"]) == {"sdk", "python", "message"}
+    assert set(answer["ready"]) == {"sdk", "python", "starts", "message"}
     assert (answer["ready"]["message"] is None) == (
         answer["ready"]["sdk"] and answer["ready"]["python"]
     )
+    assert answer["ready"]["starts"] is (answer["ready"]["message"] is None)
     assert gs.PASSPHRASE not in json.dumps(answer)
 
     generic = unlocked.connect(name="lm-studio")  # not an application the gate knows by name
@@ -1784,3 +1838,160 @@ def test_the_auto_lock_time_is_what_the_gate_enforces(
     assert session is not None
     assert session.gate.started.lock_at == gate_clock.now + timedelta(hours=2)
     assert state["locks_at"] == "2026-11-12T11:00:00Z"
+
+
+# -- the demo's passphrase, and never a real one --------------------------------------------
+
+
+def answers_beside_the_state(service: GateService) -> str:
+    """What every reading call but the state returns from an unlocked vault, as one text."""
+    activity = service.activity(limit=200)
+    answers: list[Any] = [
+        service.approvals(),
+        service.documents(),
+        service.apps(),
+        service.settings(),
+        service.verify(),
+        activity,
+    ]
+    answers.extend(service.activity_detail(seq=item["seq"]) for item in activity["items"])
+    answers.extend(service.connect(name=app["name"]) for app in service.apps()["apps"])
+    return json.dumps(answers, ensure_ascii=False)
+
+
+def test_a_demo_vault_sends_its_passphrase_with_the_state_and_only_there(
+    short_store_dir: Path, gate_clock: FakeClock
+) -> None:
+    shown = "a-passphrase-everybody-may-see"
+    gs.make_store(short_store_dir, passphrase=shown, clock=gate_clock).close()
+    service = GateService(
+        short_store_dir,
+        demo=True,
+        demo_passphrase=shown,
+        clock=gate_clock,
+        scrypt_n=gs.FAST_SCRYPT,
+    )
+    try:
+        locked = service.state()
+        assert (locked["demo"], locked["locked"], locked["demo_passphrase"]) == (True, True, shown)
+        # It is the real one: whoever reads it can unlock, lock and answer when asked again.
+        assert service.unlock(passphrase=shown)["demo_passphrase"] == shown
+        gate_clock.advance(minutes=11)
+        with refused(403, "reauth_required"):
+            service.add_app(name="another-app", hosted=False)
+        service.reauth(passphrase=shown)
+        service.add_app(name="another-app", hosted=False)
+        assert service.lock()["demo_passphrase"] == shown
+        assert service.unlock(passphrase=shown)["locked"] is False
+        # No other answer repeats it.
+        assert shown not in answers_beside_the_state(service)
+    finally:
+        service.close()
+
+
+def test_a_real_vault_never_sends_a_passphrase(
+    service: GateService, short_store_dir: Path, gate_clock: FakeClock
+) -> None:
+    assert "demo_passphrase" not in service.state()  # no vault yet
+    created = service.create_store(passphrase=gs.PASSPHRASE)
+    assert created["demo"] is False
+    service.add_document(collection="home", name="note.txt", data=b"A note about the boiler.")
+    service.add_app(name="claude-desktop", hosted=True, destination="Anthropic")
+    service.backend.status(CLAUDE)
+    for state in (created, service.state(), service.lock()):
+        assert "demo_passphrase" not in state
+        assert "passphrase" not in json.dumps(state)
+    service.unlock(passphrase=gs.PASSPHRASE)
+    everything = every_answer(service)
+    assert gs.PASSPHRASE not in everything
+    assert "demo_passphrase" not in everything
+    # A passphrase to show can only be given together with the word "demo".
+    with pytest.raises(ValueError, match="demo"):
+        GateService(short_store_dir, demo_passphrase=gs.PASSPHRASE, clock=gate_clock)
+    # And a demo that was given none shows none.
+    quiet = GateService(short_store_dir / "elsewhere", demo=True, clock=gate_clock)
+    assert "demo_passphrase" not in quiet.state()
+
+
+def test_unlocked_says_whether_the_vault_is_open(vault: GateService) -> None:
+    assert vault.unlocked is False
+    vault.unlock(passphrase=gs.PASSPHRASE)
+    assert vault.unlocked is True
+    vault.lock()
+    assert vault.unlocked is False
+
+
+# -- what the app knows about a file that was added -----------------------------------------
+
+
+def test_the_app_says_only_what_it_knows_about_an_added_file(service: GateService) -> None:
+    service.create_store(passphrase=gs.PASSPHRASE)
+    added = service.add_document(collection="home", name="boiler.txt", data=b"The boiler note.")
+    # What it knows: a copy of the file's bytes is sealed with the text.
+    assert added["document"]["original_kept"] is True
+    assert service.state()["encryption"]["originals_kept"] == 1
+    entry = service.activity(kind="change", limit=1)["items"][0]
+    assert entry["summary"] == "you added boiler to home (1 passage)"
+    details = dict(service.activity_detail(seq=entry["seq"])["details"])
+    assert details["copy of the file in the vault"] == "sealed"
+    # What it does not know: where the chosen file lies and whether it is still there.
+    # So no warning speaks of files outside the vault, and no field holds a place.
+    state = service.state()
+    assert [w["code"] for w in state["warnings"] if w["code"] == "plaintext_originals"] == []
+    everything = every_answer(service)
+    assert "original kept" not in everything
+    assert "outside the vault" not in everything
+    assert "plaintext" not in everything
+
+
+# -- why a passage waits, and whether the command of a configuration can start -------------
+
+
+def test_a_passage_past_the_free_allowance_waits_although_the_app_may_read(
+    service: GateService,
+) -> None:
+    service.create_store(passphrase=gs.PASSPHRASE)
+    text = b"The boiler was serviced in March. The next service is due in March."
+    document = service.add_document(collection="home", name="boiler.txt", data=text)["document"]
+    assert document["passages"] == 1
+    service.set_collection(name="home", allow_hosted=True)
+    service.add_app(name="claude-desktop", hosted=True, destination="Anthropic")
+    service.set_grant(app="claude-desktop", collection="home", mode="read")
+    ref = first_ref(service, CLAUDE, "boiler", "home")
+    # The one passage is the whole document: more than the half that is free.
+    assert service.backend.read(CLAUDE, ref).code == "NEEDS_APPROVAL"
+    (waiting,) = service.approvals()["waiting"]
+    assert (waiting["mode"], waiting["inside_free_allowance"]) == ("read", False)
+    assert waiting["document"]["characters"] == document["characters"]
+    assert waiting["document"]["free"] == (document["characters"] + 1) // 2
+    assert waiting["document"]["after"] > waiting["document"]["free"]
+
+
+def test_connect_says_when_the_command_cannot_start(
+    unlocked: GateService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ready = unlocked.connect(name="claude-desktop")["ready"]
+    if not (ready["sdk"] and ready["python"]):
+        pytest.skip("this environment cannot run the MCP server at all, which is said first")
+    assert ready == {"sdk": True, "python": True, "starts": True, "message": None}
+
+    asked: list[int] = []
+
+    def no_start() -> str:
+        asked.append(1)
+        return "wdva must be installed in a virtual environment"
+
+    monkeypatch.setattr(service_module, "start_problem", no_start)
+    unlocked._start_checked = None
+    for host in ("claude-desktop", "codex", "claude-desktop"):
+        ready = unlocked.connect(name="claude-desktop", host=host)["ready"]
+        assert ready == {
+            "sdk": True,
+            "python": True,
+            "starts": False,
+            "message": "Apps cannot connect yet: wdva must be installed in a virtual environment",
+        }
+    assert asked == [1], "the command is tried once, not for every look at the sheet"
+    # A product that starts nothing has nothing to try.
+    web = unlocked.connect(name="claude-desktop", host="chatgpt-web")
+    assert web["ready"]["message"] is None

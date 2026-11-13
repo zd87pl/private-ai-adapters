@@ -4,6 +4,7 @@
 // The screens where the owner changes things: Documents, Apps and Vault.
 
 import { api } from "./api.js";
+import { PRODUCT } from "./brand.js";
 import { el, icon } from "./dom.js";
 import { ago, bytes, count, dayShort, list, megabytes, num, when, whenFull } from "./format.js";
 import {
@@ -69,7 +70,7 @@ export async function uploadFiles(ctx, collection, files) {
       item.message = `Not added: only ${list(rules.types)} files can be read.`;
     } else if (kind === ".pdf" && rules.pdf === false) {
       item.status = "error";
-      item.message = "Not added: reading PDFs is not installed with WDVA Gate.";
+      item.message = `Not added: reading PDFs is not installed with ${PRODUCT}.`;
     } else if (item.file.size > rules.max_bytes) {
       item.status = "error";
       item.message = `Not added: larger than ${megabytes(rules.max_bytes)}.`;
@@ -100,6 +101,20 @@ export async function uploadFiles(ctx, collection, files) {
   else if (added) toast(`${num(added)} added to “${collection}”, ${num(failed)} not added.`, "amber");
   else toast(batch.length === 1 ? batch[0].message : "No document was added.", "red");
   await ctx.refresh();
+}
+
+function sealedCount(state) {
+  return state.items.filter((item) => item.status === "done").length;
+}
+
+/**
+ * What is true of a file after it was added. The browser hands the app the file's
+ * name and content, never its place, so the app can say only this.
+ */
+export function leftOutsideText(sealed) {
+  return sealed === 1
+    ? "The file you chose is still where it was, not encrypted. Removing or moving it is up to you: this app cannot do it for you, and it cannot hand a file back out of the vault."
+    : "The files you chose are still where they were, not encrypted. Removing or moving them is up to you: this app cannot do it for you, and it cannot hand a file back out of the vault.";
 }
 
 /** The place to drop files, with a button for people who would rather pick them. */
@@ -169,7 +184,7 @@ export function dropZone(ctx, collection, options = {}) {
     el(
       "p",
       { class: "drop-hint" },
-      `Text files and PDFs, up to ${megabytes(rules.max_bytes)} each. Each file is sealed in the vault; the original stays where it is.`,
+      `Text files and PDFs, up to ${megabytes(rules.max_bytes)} each. A sealed copy of each file goes into the vault.`,
     ),
     state.items.length
       ? el(
@@ -188,6 +203,10 @@ export function dropZone(ctx, collection, options = {}) {
               ),
             ),
           ),
+          // Said once per list: where the file came from is not something the app is told.
+          sealedCount(state)
+            ? el("li", { class: "upload-outside", key: "outside" }, note("amber", leftOutsideText(sealedCount(state))))
+            : null,
           !state.busy
             ? el(
                 "li",
@@ -648,8 +667,8 @@ export function appsView(ctx) {
         { class: "card card-empty", key: "no-apps" },
         emptyState({
           glyph: "apps",
-          title: "No app is connected",
-          text: "Add an app, such as Claude Desktop, and choose what it may read. Until then nothing can leave the vault.",
+          title: "No app has been added",
+          text: "Add an app, such as Claude Desktop, choose what it may read, then connect it. Until then nothing can leave the vault.",
           action: button("Add app", { kind: "primary", glyph: "plus", onclick: () => openAddApp(ctx) }),
         }),
       ),
@@ -943,7 +962,7 @@ export function vaultView(ctx) {
           fact("Location", pathText(state.store.path, !state.demo)),
           fact("Sealed files", `${num(state.store.sealed_files)} · ${bytes(state.store.sealed_bytes)}`),
           fact("Inside", `${count(facts.documents, "document", "documents")} in ${count(facts.collections, "collection", "collections")} · ${num(facts.characters)} characters`),
-          fact("Originals kept", `${num(facts.originals_kept)}, sealed like the text`),
+          fact("Copies of the files you added", facts.originals_kept > 0 ? `${num(facts.originals_kept)}, sealed like the text` : "None"),
           fact("Last entry of the record", `#${record.head_seq} ${record.head_hash}`, { mono: true }),
         ),
         { key: "location" },
@@ -1028,14 +1047,14 @@ export function vaultView(ctx) {
         { key: "words", class: "span-2" },
       ),
       card(
-        "What WDVA Gate cannot do",
+        `What ${PRODUCT} cannot do`,
         el("ul", { class: "cannot" }, CANNOT.map((text, index) => el("li", { key: `cannot-${index}` }, text))),
         { key: "cannot", class: "span-2" },
       ),
       el(
         "p",
         { class: "version span-2", key: "version" },
-        `WDVA Gate ${state.version} · a preview: it has not yet been tried against the agent applications it lists, and it does not run on Windows.`,
+        `${PRODUCT} ${state.version} · a preview: it has not yet been tried against the agent applications it lists, and it does not run on Windows.`,
       ),
     ),
   };

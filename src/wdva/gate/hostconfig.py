@@ -35,8 +35,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from wdva.errors import MissingDependencyError
+from wdva.gate import brand
 from wdva.gate.errors import GateError
-from wdva.gate.messages import APP_NAME
 from wdva.gate.paths import resolve_store
 
 __all__ = [
@@ -62,7 +62,7 @@ INSTALL_LINE = 'pip install "wdva[gate] @ git+https://github.com/zd87pl/private-
 
 PYTHON_MESSAGE = "the MCP server needs Python 3.11 or newer"
 
-SERVER_KEY = "wdva-gate"
+SERVER_KEY = brand.SLUG
 """The name the gate's server gets in an application's configuration."""
 
 CLIENT_NAME_PATTERN = re.compile(r"[a-z][a-z0-9-]{0,31}")
@@ -522,7 +522,7 @@ def _explanation(entry: KnownHost) -> str:
         f"cannot reach this vault and there is nothing to configure. "
         f"{_LOCAL_ALTERNATIVE[entry.id]}, or copy the text you want it to see into the "
         f"conversation yourself. Text you paste goes to {entry.destination} like any other "
-        f"message; {APP_NAME} neither limits nor records it."
+        f"message; {brand.PRODUCT} neither limits nor records it."
     )
 
 

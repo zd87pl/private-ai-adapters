@@ -6,12 +6,14 @@
 // are answered.
 
 import { api } from "./api.js";
+import { PRODUCT } from "./brand.js";
 import { el, icon } from "./dom.js";
 import { num } from "./format.js";
 import {
   button,
   confirmSheet,
   copyText,
+  demoPassphraseNote,
   destinationChip,
   field,
   note,
@@ -44,8 +46,12 @@ export function grantSentence(app, collection) {
 
 let reauthOpen = null;
 
-/** Ask for the passphrase. Resolves to true once it was accepted, false when the owner gave up. */
-export function requestReauth() {
+/**
+ * Ask for the passphrase. Resolves to true once it was accepted, false when the owner gave up.
+ * `demoPassphrase` is the passphrase of the demo vault when this is the demo: the sheet then
+ * shows it, because nobody could answer otherwise.
+ */
+export function requestReauth(demoPassphrase = null) {
   if (reauthOpen) return reauthOpen;
   const form = { passphrase: "", busy: false, error: "" };
   const submit = async (event, sheet) => {
@@ -77,6 +83,13 @@ export function requestReauth() {
           "Enter your passphrase again",
           "A change that lets more text leave the vault needs your passphrase when you last typed it more than 10 minutes ago.",
         ),
+        demoPassphraseNote(demoPassphrase, () => {
+          form.passphrase = demoPassphrase;
+          form.error = "";
+          self.update();
+          const input = document.getElementById("reauth-passphrase");
+          if (input) input.focus();
+        }),
         field({
           label: "Passphrase",
           id: "reauth-passphrase",
@@ -252,7 +265,7 @@ export function appFormFields(form, known, update, prefix, short = false) {
     web
       ? note(
           "plain",
-          `${entry.label} cannot use this vault. It only calls servers that ${entry.destination || "its provider"}'s cloud can reach, and WDVA Gate runs on your Mac only. Use the same company's desktop app instead.`,
+          `${entry.label} cannot use this vault. It only calls servers that ${entry.destination || "its provider"}'s cloud can reach, and ${PRODUCT} runs on your Mac only. Use the same company's desktop app instead.`,
         )
       : [
           generic
@@ -495,7 +508,7 @@ export function connectBlocks(view, update) {
       ? el(
           "p",
           { class: "muted small" },
-          "This configuration holds no passphrase and no key. It starts a small MCP server that passes each search and each passage request to WDVA Gate, which decides and records it.",
+          `This configuration holds no passphrase and no key. It starts a small MCP server that passes each search and each passage request to ${PRODUCT}, which decides and records it.`,
         )
       : null,
   ];

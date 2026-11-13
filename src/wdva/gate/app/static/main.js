@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025 Enclave
 //
-// The interface of WDVA Gate. This module holds what the page knows, asks for the
+// The interface of the app. This module holds what the page knows, asks for the
 // state every two seconds, and decides which screen is shown.
 
 import { ApiError, api, configure } from "./api.js";
+import { PRODUCT } from "./brand.js";
 import { el, icon, render } from "./dom.js";
 import { at, num } from "./format.js";
 import { bootScreen, createScreen, lockedScreen, offlineScreen, pairingScreen, setupScreen } from "./gateway.js";
@@ -126,7 +127,7 @@ function sidebar() {
       "div",
       { class: "brand" },
       el("img", { src: "favicon.svg", width: 24, height: 24, alt: "" }),
-      el("span", { class: "brand-name" }, "WDVA Gate"),
+      el("span", { class: "brand-name" }, PRODUCT),
       state.demo ? chip("Demo", "accent") : null,
     ),
     el(
@@ -197,7 +198,7 @@ function shell() {
       "main",
       { class: "main", id: "main", tabindex: -1 },
       ctx.offline
-        ? el("div", { class: "offline-bar", role: "alert", key: "offline" }, icon("warning"), el("span", null, "WDVA Gate is not answering. Is it still running in its terminal? What you see may be out of date."))
+        ? el("div", { class: "offline-bar", role: "alert", key: "offline" }, icon("warning"), el("span", null, `${PRODUCT} is not answering. Is it still running in its terminal? What you see may be out of date.`))
         : loadProblem()
           ? el("div", { class: "offline-bar", role: "alert", key: "load-error" }, icon("warning"), el("span", null, `This page could not be brought up to date: ${loadProblem()} Trying again.`))
           : null,
@@ -226,7 +227,7 @@ function stuckScreen() {
       "section",
       { class: "gate-card" },
       el("h1", { class: "gate-title" }, "This page has no session"),
-      el("p", { class: "gate-lead" }, "WDVA Gate did not give this browser a session. Reload the page. If that does not help, quit WDVA Gate in its terminal and start it again."),
+      el("p", { class: "gate-lead" }, `${PRODUCT} did not give this browser a session. Reload the page. If that does not help, quit ${PRODUCT} in its terminal and start it again.`),
       button("Reload", { kind: "primary", onclick: () => window.location.reload() }),
     ),
   );
@@ -272,9 +273,9 @@ function paint() {
   drawInPlace();
   const state = ctx.state;
   const waiting = state && state.today ? state.today.approvals_waiting : 0;
-  let title = "WDVA Gate";
-  if (state && state.store.exists && state.locked) title = "WDVA Gate – locked";
-  else if (waiting > 0) title = `(${num(waiting)}) WDVA Gate`;
+  let title = PRODUCT;
+  if (state && state.store.exists && state.locked) title = `${PRODUCT} – locked`;
+  else if (waiting > 0) title = `(${num(waiting)}) ${PRODUCT}`;
   if (document.title !== title) document.title = title;
   if (ctx.ui.focusApproval && ctx.route === "approvals" && ctx.data.approvals) {
     focusApproval(ctx.ui.focusApproval);
@@ -598,7 +599,7 @@ async function lockNow() {
 
 // -- starting -----------------------------------------------------------------------
 
-const RELOAD_MARK = "wdva-gate-reloaded";
+const RELOAD_MARK = "page-reloaded";
 
 function mark(value) {
   try {
@@ -667,7 +668,7 @@ function sessionEnded() {
   start();
 }
 
-configure({ unauthorized: sessionEnded, reauth: requestReauth });
+configure({ unauthorized: sessionEnded, reauth: () => requestReauth(ctx.state ? ctx.state.demo_passphrase : null) });
 
 window.addEventListener("hashchange", onRoute);
 

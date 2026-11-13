@@ -88,6 +88,8 @@ export function statusChip(item) {
   if (item.kind === "release") {
     return item.approved ? chip("Released after approval", "quiet", "check") : chip("Released", "quiet");
   }
+  // An app asked what it may use. Nothing left the vault, so the chip is the quietest of all.
+  if (item.kind === "question") return chip("Question", "outline", null, "A question about what the app may use. No document text was released.");
   if (item.kind === "refusal") {
     return item.code === "NEEDS_APPROVAL" ? chip("Needs approval", "amber") : chip("Refused", "red");
   }
@@ -204,6 +206,27 @@ export function emptyState({ glyph, title, text, action }) {
 export function note(tone, text, extra = null) {
   const glyph = tone === "amber" || tone === "red" ? "warning" : "info";
   return el("div", { class: ["note", `note-${tone}`] }, icon(glyph), el("div", { class: "note-text" }, text, extra));
+}
+
+/**
+ * In the demo only: the passphrase of the demo vault in plain words, with a button
+ * that types it. `passphrase` is what the app sent with its state, which it does for
+ * the demo vault alone; without one nothing is shown. `fill` puts it into the field.
+ */
+export function demoPassphraseNote(passphrase, fill) {
+  if (typeof passphrase !== "string" || !passphrase) return null;
+  return el(
+    "div",
+    { class: "note note-plain demo-pass", key: "demo-pass" },
+    icon("info"),
+    el(
+      "div",
+      { class: "note-text" },
+      el("p", null, "This is the demo. The passphrase of its vault is ", el("strong", { class: "mono demo-pass-word" }, passphrase), "."),
+      el("p", { class: "muted small" }, "It is shown because the demo holds invented documents only. The passphrase of a real vault is never shown."),
+      button("Fill it in", { small: true, onclick: fill, id: "demo-pass-fill" }),
+    ),
+  );
 }
 
 export function card(title, content, options = {}) {
@@ -395,6 +418,7 @@ export const UNANSWERED = "(not registered)";
 
 function rowGlyph(item) {
   if (item.kind === "refusal") return item.code === "NEEDS_APPROVAL" ? "approvals" : "refused";
+  if (item.kind === "question") return "info";
   if (item.kind === "release") return TOOL_GLYPH[item.tool] || "out";
   if (item.kind === "approval") return "check";
   if (item.kind === "session") return "key";

@@ -26,9 +26,8 @@ import contextlib
 import os
 import random
 import re
-import secrets
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -41,6 +40,7 @@ __all__ = [
     "BANK_MARKER",
     "DEMO_APPS",
     "DEMO_DOCUMENTS",
+    "DEMO_PASSPHRASE",
     "INJECTED_LINE",
     "LEASE_MARKER",
     "MARKERS",
@@ -51,6 +51,15 @@ __all__ = [
     "DemoCall",
     "make_demo_store",
 ]
+
+DEMO_PASSPHRASE = "only-a-demo-vault"  # noqa: S105 - shown on purpose, see below
+"""The passphrase of every demo vault.
+
+It is fixed and shown, on the terminal and in the interface, so that whoever
+tries the demo can lock the vault, unlock it again and answer when a change
+asks for the passphrase. That is acceptable for the demo alone: its documents
+are invented and its store is removed when the app stops.
+"""
 
 LEASE_MARKER = "QRH-2025-0448-L7731"
 BANK_MARKER = "SMS-BL-2026-0412-QZ7"
@@ -318,21 +327,22 @@ _LIGHT_QUESTIONS = (
     "liability insurance",
 )
 _MAX_INJECTED_READS = 12
+_LOCKED_WAIT = 1.0  # seconds between two looks at whether the vault is unlocked again
 
 
 def make_demo_store(directory: str | os.PathLike[str], *, scrypt_n: int | None = None) -> str:
     """Create the demo store in ``directory`` and return its passphrase.
 
-    The passphrase is drawn at random and exists nowhere but in the returned
-    value. The store gets the invented documents, the three apps with their
-    grants, and daily limits small enough to be reached while somebody
-    watches. Every step is made through a gate and recorded like the owner's
+    The passphrase is :data:`DEMO_PASSPHRASE`, the same for every demo and
+    shown to whoever runs it. The store gets the invented documents, the
+    three apps with their grants, and daily limits small enough to be reached
+    while somebody watches. Every step is made through a gate and recorded like the owner's
     own changes. The store is closed again when this returns.
 
     ``directory`` must not hold anything yet. ``scrypt_n`` is the cost of the
     passphrase stretch (``None``: the default of every store).
     """
-    passphrase = secrets.token_urlsafe(24)
+    passphrase = DEMO_PASSPHRASE
     store = init_store(
         directory, passphrase=passphrase, scrypt_n=scrypt_n, policy=default_policy().to_json()
     )
@@ -401,6 +411,11 @@ class DemoAgent(threading.Thread):
     at once, for a test that does not want to wait. ``backend`` is anything
     that answers the three tool calls; the agent sees only what an application
     would see. :attr:`calls` lists what it did.
+
+    ``ready`` says whether the vault is unlocked. While it says no, the thread
+    makes no call and looks again every second, so that the story is not played
+    to a locked vault and goes on where it stopped once the vault is unlocked
+    again. Without ``ready`` the agent never waits.
     """
 
     def __init__(
@@ -411,9 +426,11 @@ class DemoAgent(threading.Thread):
         idle_seconds: float = 30.0,
         retry_seconds: float = 10.0,
         rng: random.Random | None = None,
+        ready: Callable[[], bool] | None = None,
     ) -> None:
-        super().__init__(name="wdva-gate-demo-agent", daemon=True)
+        super().__init__(name="demo-agent", daemon=True)
         self._backend = backend
+        self._ready = ready
         self._pause = pause
         self._idle_seconds = idle_seconds
         self._retry_seconds = retry_seconds
@@ -535,16 +552,33 @@ class DemoAgent(threading.Thread):
         with contextlib.suppress(Exception):
             act()
 
+    def _wait_until_unlocked(self) -> bool:
+        """Wait while the vault is locked. False when the agent was stopped meanwhile."""
+        while self._ready is not None and not self._is_ready():
+            if self._halt.wait(_LOCKED_WAIT):
+                return False
+        return not self._halt.is_set()
+
+    def _is_ready(self) -> bool:
+        try:
+            return self._ready is None or bool(self._ready())
+        except Exception:
+            return False
+
     def run(self) -> None:
         """Play the script with pauses, then the quiet routine, until :meth:`stop`."""
         if self._halt.wait(self._rng.uniform(*self._pause)):
             return
         while self.scripted:
+            if not self._wait_until_unlocked():
+                return
             self._safely(self.step)
             if self._halt.wait(self._rng.uniform(*self._pause)):
                 return
         while True:
             waiting = self.waiting_ref is not None
             if self._halt.wait(self._retry_seconds if waiting else self._idle_seconds):
+                return
+            if not self._wait_until_unlocked():
                 return
             self._safely(self.step)

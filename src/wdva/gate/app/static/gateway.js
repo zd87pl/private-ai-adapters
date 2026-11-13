@@ -4,10 +4,11 @@
 // The screens before the vault is open: pairing, the first run, and the locked vault.
 
 import { api } from "./api.js";
+import { PRODUCT } from "./brand.js";
 import { el, icon } from "./dom.js";
 import { bytes, num } from "./format.js";
 import { dropZone } from "./manage.js";
-import { button, chip, field, note, pathText, segmented, toast } from "./parts.js";
+import { button, chip, demoPassphraseNote, field, note, pathText, segmented, toast } from "./parts.js";
 import {
   GRANT_LABEL,
   appFormFields,
@@ -26,7 +27,7 @@ function brand(ctx) {
     "div",
     { class: "gate-brand" },
     el("img", { src: "favicon.svg", width: 28, height: 28, alt: "" }),
-    el("span", { class: "gate-name" }, "WDVA Gate"),
+    el("span", { class: "gate-name" }, PRODUCT),
     ctx.session && ctx.session.demo ? chip("Demo", "accent") : null,
   );
 }
@@ -37,7 +38,7 @@ function gateScreen(ctx, key, content, options = {}) {
     { class: ["gate", options.wide && "gate-wide"], key },
     brand(ctx),
     content,
-    el("p", { class: "gate-foot" }, options.foot || `Version ${ctx.session ? ctx.session.version : ""}. Everything on this page comes from WDVA Gate on this computer.`),
+    el("p", { class: "gate-foot" }, options.foot || `Version ${ctx.session ? ctx.session.version : ""}. Everything on this page comes from ${PRODUCT} on this computer.`),
   );
 }
 
@@ -46,11 +47,11 @@ export function bootScreen() {
     "div",
     { class: "boot", key: "boot" },
     el("img", { src: "favicon.svg", width: 40, height: 40, alt: "" }),
-    el("p", { class: "boot-name" }, "WDVA Gate"),
+    el("p", { class: "boot-name" }, PRODUCT),
   );
 }
 
-/** Shown when WDVA Gate does not answer at all. */
+/** Shown when the app does not answer at all. */
 export function offlineScreen(ctx) {
   return gateScreen(
     ctx,
@@ -59,11 +60,11 @@ export function offlineScreen(ctx) {
       "section",
       { class: "gate-card" },
       el("div", { class: "gate-glyph gate-glyph-amber" }, icon("warning")),
-      el("h1", { class: "gate-title" }, "WDVA Gate is not answering"),
-      el("p", { class: "gate-lead" }, "This page talks to WDVA Gate on this computer. It seems to have stopped. Start it again in a terminal; the page continues by itself."),
+      el("h1", { class: "gate-title" }, `${PRODUCT} is not answering`),
+      el("p", { class: "gate-lead" }, `This page talks to ${PRODUCT} on this computer. It seems to have stopped. Start it again in a terminal; the page continues by itself.`),
       button("Try now", { onclick: () => ctx.start() }),
     ),
-    { foot: "When WDVA Gate stops, the vault is locked." },
+    { foot: `When ${PRODUCT} stops, the vault is locked.` },
   );
 }
 
@@ -115,10 +116,10 @@ export function pairingScreen(ctx) {
       el(
         "p",
         { class: "gate-lead", id: "pair-lead" },
-        "Type the pairing code from the terminal where you started WDVA Gate. It is on the line that begins with “pairing code”.",
+        `Type the pairing code from the terminal where you started ${PRODUCT}. It is on the line that begins with “pairing code”.`,
       ),
       form.disabled
-        ? note("red", "Pairing is switched off after five wrong codes. Quit WDVA Gate in its terminal and start it again to get a new code.")
+        ? note("red", `Pairing is switched off after five wrong codes. Quit ${PRODUCT} in its terminal and start it again to get a new code.`)
         : [
             field({
               label: "Pairing code",
@@ -227,6 +228,13 @@ export function lockedScreen(ctx) {
             )
           : null,
       ),
+      demoPassphraseNote(state.demo_passphrase, () => {
+        form.passphrase = state.demo_passphrase;
+        form.error = "";
+        ctx.render();
+        const input = document.getElementById("unlock-passphrase");
+        if (input) input.focus();
+      }),
       field({
         label: "Passphrase",
         id: "unlock-passphrase",
@@ -388,6 +396,8 @@ export function createScreen(ctx) {
 function finish(ctx) {
   ctx.onboarding = null;
   ctx.navigate("overview");
+  // The last step is a long card: the vault opens at its top, not where that card was left.
+  window.scrollTo(0, 0);
   ctx.refresh();
 }
 

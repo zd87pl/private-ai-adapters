@@ -10,7 +10,9 @@ ended.
 
 The start-up lines are the only thing written to standard output. With pairing
 they include the code that a browser must present; the address that is opened
-or printed never carries a secret.
+or printed never carries a secret. A demo adds one line with the passphrase of
+its vault, which is the same for every demo and guards invented documents
+only. The passphrase of a real vault is never printed.
 """
 
 from __future__ import annotations
@@ -27,17 +29,20 @@ from pathlib import Path
 from types import FrameType
 
 from wdva._version import __version__
-from wdva.gate import messages, paths
+from wdva.gate import brand, paths
 from wdva.gate.app.api import ServiceError
 from wdva.gate.app.demo import DemoAgent, make_demo_store
 from wdva.gate.app.httpd import AppServer
 from wdva.gate.app.service import MAX_HOURS, MIN_HOURS, GateService
 from wdva.gate.errors import GateError
 
-__all__ = ["DEMO_STORE_LINE", "run_app"]
+__all__ = ["DEMO_LINE_NOTE", "DEMO_STORE_LINE", "run_app"]
 
 DEMO_STORE_LINE = "a temporary demo store with invented documents"
 """What the start-up lines say instead of a path in demo mode."""
+
+DEMO_LINE_NOTE = "(the page shows it too; the passphrase of a real vault is never shown)"
+"""What follows the passphrase on the start-up line that a demo adds."""
 
 _PR_SET_DUMPABLE = 4
 _WINDOW_MODULE = "webview"  # the package pywebview, which is not a dependency
@@ -82,12 +87,12 @@ def _harden() -> None:
 
 def _demo_directory() -> Path:
     """A new, empty, private directory for the demo store, short enough for its socket."""
-    directory = Path(tempfile.mkdtemp(prefix="wdva-gate-demo-"))
+    directory = Path(tempfile.mkdtemp(prefix=f"{brand.SLUG}-demo-"))
     try:
         paths.check_socket_path(directory)
     except GateError:
         shutil.rmtree(directory, ignore_errors=True)
-        directory = Path(tempfile.mkdtemp(prefix="wdva-", dir="/tmp"))
+        directory = Path(tempfile.mkdtemp(prefix="demo-", dir="/tmp"))
     return directory
 
 
@@ -114,7 +119,7 @@ def _show_window(url: str) -> bool:
     """
     try:
         webview = importlib.import_module(_WINDOW_MODULE)
-        webview.create_window(messages.APP_NAME, url)
+        webview.create_window(brand.PRODUCT, url)
         webview.start()
     except Exception:
         return False
@@ -143,8 +148,9 @@ def run_app(
 ) -> int:
     """Start the app and block until it is stopped. Returns the process exit status.
 
-    ``store`` is the store directory; ``None`` means the one named by
-    ``WDVA_GATE_STORE``, else the per-user location. ``port`` 0 picks a free
+    ``store`` is the store directory; ``None`` means the one named by the
+    environment variable :data:`wdva.gate.paths.ENV_STORE`, else the per-user
+    location. ``port`` 0 picks a free
     port. With ``demo`` the store is a temporary one with invented documents:
     it is unlocked at once, an agent is played against it, and it is removed
     when the app stops. ``window`` shows the interface in its own window when
@@ -160,12 +166,14 @@ def run_app(
     stop = _Stop()
     demo_directory: Path | None = None
     try:
-        passphrase = ""
+        demo_passphrase: str | None = None
         if demo:
             demo_directory = _demo_directory()
-            passphrase = make_demo_store(demo_directory)
+            demo_passphrase = make_demo_store(demo_directory)
         path = demo_directory or paths.resolve_store(store)
-        service = GateService(path, demo=demo, lock_after_hours=lock_after_hours)
+        service = GateService(
+            path, demo=demo, demo_passphrase=demo_passphrase, lock_after_hours=lock_after_hours
+        )
 
         in_window = window and _window_available()
         if window and not in_window:
@@ -185,16 +193,16 @@ def run_app(
         agent: DemoAgent | None = None
         previous = _handle_signals(stop)
         try:
-            if demo:
+            if demo_passphrase is not None:
                 try:
-                    service.unlock(passphrase=passphrase)
+                    service.unlock(passphrase=demo_passphrase)
                 except ServiceError as exc:
                     raise GateError(
                         f"the demo store could not be unlocked: {exc.message}"
                     ) from None
-                agent = DemoAgent(service.backend)
+                agent = DemoAgent(service.backend, ready=lambda: service.unlocked)
             server.start()
-            _say(f"{messages.APP_NAME} {__version__}")
+            _say(f"{brand.PRODUCT} {__version__}")
             _say(f"store: {DEMO_STORE_LINE if demo else path}")
             _say(f"open:  {server.url}")
             if server.pairing_code is not None:
@@ -202,6 +210,8 @@ def run_app(
                     f"pairing code: {server.pairing_code}   "
                     "(type it into the page; anyone who can read this terminal can pair)"
                 )
+            if demo_passphrase is not None:
+                _say(f"demo passphrase: {demo_passphrase}   {DEMO_LINE_NOTE}")
             _say("Ctrl-C locks the vault and quits.")
             if agent is not None:
                 agent.start()

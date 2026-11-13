@@ -13,8 +13,9 @@ import threading
 import time
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import pytest
@@ -26,6 +27,7 @@ from wdva.gate import messages, textproc
 from wdva.gate import store as gate_store
 from wdva.gate.core import (
     MAX_PENDING,
+    MAX_PENDING_PER_CLIENT,
     UNREGISTERED,
     Gate,
     PassageChangedError,
@@ -1038,6 +1040,270 @@ def test_status_and_release_numbers_do_not_reflect_the_other_pool(worlds: WorldM
 
 
 # ---------------------------------------------------------------------------
+# A clock with fractions of a second
+# ---------------------------------------------------------------------------
+#
+# The real clock has microseconds; a record keeps whole seconds. No window may
+# end early because of that, and nothing else that is timed may happen early.
+
+TICK = timedelta(microseconds=1)
+SECOND = timedelta(seconds=1)
+FRACTIONS = [1, 500_000, 999_999]  # microseconds past the whole second
+
+
+def clock_at(microseconds: int) -> FakeClock:
+    return FakeClock(datetime(2026, 11, 12, 9, 0, 0, microseconds, tzinfo=timezone.utc))
+
+
+@pytest.mark.parametrize("microseconds", FRACTIONS)
+@pytest.mark.parametrize(("variant", "path", "window"), BOUNDARIES)
+def test_no_character_window_ends_early_whatever_fraction_the_clock_has(
+    worlds: WorldMaker, variant: str, path: str, window: timedelta, microseconds: int
+) -> None:
+    clock = clock_at(microseconds)
+    world = worlds(clock=clock)
+    gate = world.gate
+    made = clock.now
+    first = gate.search(DESKTOP, "zzzabsent")
+    assert first.code == "OK"
+    world.set({path: len(first.text) + 1})  # room for this result and for no other
+    assert gate.search(DESKTOP, "zzzabsent") == over_limit(variant)
+
+    def counted() -> int:
+        used = gate.usage()
+        figure = (
+            used.clients["claude-desktop"] if variant.startswith("client") else used.pools["hosted"]
+        )
+        return figure.chars_day if window == DAY else figure.chars_30_days
+
+    # One microsecond before the release is as old as the window, it still counts.
+    clock.now = made + window - TICK
+    assert counted() == len(first.text)
+    assert gate.search(DESKTOP, "zzzabsent") == over_limit(variant)
+    assert gate.read(DESKTOP, world.ref("lease-2025")) == over_limit(variant)
+    assert gate.usage().clients["claude-desktop"].left == 1
+    # It stops counting within a second of that moment, not later.
+    clock.now = made + window + SECOND
+    assert counted() == 0
+    assert gate.search(DESKTOP, "zzzabsent").code == "OK"
+
+
+@pytest.mark.parametrize("microseconds", FRACTIONS)
+def test_searches_per_day_do_not_end_early_whatever_fraction_the_clock_has(
+    worlds: WorldMaker, microseconds: int
+) -> None:
+    limits = {"clients.claude-desktop.limits.searches_per_day": 2, **FREE}
+    clock = clock_at(microseconds)
+    world = worlds(policy=edited(limits), clock=clock)
+    gate = world.gate
+    made = clock.now
+    assert [gate.search(DESKTOP, query).code for query in ("rent", "zzzabsent")] == ["OK", "OK"]
+    assert gate.search(DESKTOP, "rent") == over_limit("searches")
+    clock.now = made + DAY - TICK
+    assert gate.usage().clients["claude-desktop"].searches_day == 2
+    assert gate.search(DESKTOP, "rent") == over_limit("searches")
+    clock.now = made + DAY + SECOND
+    assert gate.usage().clients["claude-desktop"].searches_day == 0
+    assert gate.search(DESKTOP, "rent").code == "OK"
+
+    # A search that a character limit refused is kept with the clock's own time, in
+    # memory: it counts until it is exactly 24 hours old.
+    tight = {
+        "clients.claude-desktop.limits.searches_per_day": 1,
+        "clients.claude-desktop.limits.chars_per_day": 300,
+        **FREE,
+    }
+    clock = clock_at(microseconds)
+    world = worlds(policy=edited(tight), clock=clock)
+    gate = world.gate
+    made = clock.now
+    assert gate.search(DESKTOP, "rent") == over_limit("client-day")
+    clock.now = made + DAY - TICK
+    assert gate.search(DESKTOP, "zzzabsent") == over_limit("searches")
+    clock.now = made + DAY
+    assert gate.search(DESKTOP, "zzzabsent").code == "OK"
+
+
+@pytest.mark.parametrize("microseconds", FRACTIONS)
+def test_calls_per_minute_do_not_end_early_whatever_fraction_the_clock_has(
+    worlds: WorldMaker, microseconds: int
+) -> None:
+    clients = {f"app-{n}": hosted_client(home="read") for n in range(5)}
+    clock = clock_at(microseconds)
+    world = worlds(policy=edited({"clients": clients}), clock=clock)
+    gate = world.gate
+    minute = timedelta(seconds=60)
+    # One name: its 30 calls count until each is exactly a minute old.
+    made = clock.now
+    first = Caller("app-0")
+    assert [gate.status(first).code for _ in range(30)] == ["OK"] * 30
+    assert gate.status(first) == over_limit("calls")
+    clock.now = made + minute - TICK
+    assert gate.status(first) == over_limit("calls")
+    clock.now = made + minute
+    assert gate.status(first).code == "OK"
+    # All names together: the same for the 120 calls of the whole gate.
+    clock.advance(minutes=5)
+    made = clock.now
+    codes = [gate.status(Caller(f"app-{n % 4}")).code for n in range(120)]
+    assert codes == ["OK"] * 120
+    last = Caller("app-4")  # it made no call of its own in this minute
+    assert gate.status(last) == over_limit("calls")
+    clock.now = made + minute - TICK
+    assert gate.status(last) == over_limit("calls")
+    clock.now = made + minute
+    assert gate.status(last).code == "OK"
+
+
+def test_hourly_records_are_not_written_early_whatever_fraction_the_clock_has(
+    worlds: WorldMaker,
+) -> None:
+    clock = clock_at(999_999)
+    world = worlds(clock=clock)
+    gate = world.gate
+    made = clock.now
+
+    def written() -> tuple[int, int]:
+        assert gate.status(DESKTOP).code == "OK"
+        assert gate.read(DESKTOP, "d-ffffffffffff.1") == NOT_FOUND
+        return len(world.of_kind("status")), len(world.of_kind("denial"))
+
+    assert written() == (1, 1)
+    # At most one status record and one refusal of a kind per client in an hour.
+    clock.now = made + timedelta(hours=1) - TICK
+    assert written() == (1, 1)
+    clock.now = made + timedelta(hours=1) + SECOND
+    assert written() == (2, 2)
+    assert world.of_kind("denial")[-1]["folded_before"] == 1
+
+
+def test_record_times_keep_their_order_and_are_never_before_their_moment(
+    worlds: WorldMaker,
+) -> None:
+    clock = clock_at(250_000)
+    seen: list[tuple[Mapping[str, Any], datetime]] = []
+    world = worlds(
+        policy=edited({"approval.ttl_minutes": 5}),
+        clock=clock,
+        on_record=lambda record: seen.append((record, clock.now)),
+    )
+    gate = world.gate
+    note = world.ref("tax-note-2025")
+
+    def step() -> None:
+        clock.advance(microseconds=370_001)
+
+    assert gate.search(DESKTOP, "rent").code == "OK"
+    step()
+    assert gate.read(DESKTOP, world.ref("lease-2025")).code == "OK"
+    step()
+    assert gate.read(DESKTOP, note).code == "NEEDS_APPROVAL"
+    step()
+    assert gate.status(DESKTOP).code == "OK"
+    step()
+    gate.approve("claude-desktop", note, gate.preview("claude-desktop", note).body_sha256)
+    step()
+    assert gate.read(DESKTOP, note).code == "OK"
+    step()
+    world.set({"clients.claude-desktop.limits.searches_per_day": 7})
+    step()
+    added = gate.add_document(collection="home", title="memo", text="A memo about mkmemo01.")
+    step()
+    gate.remove_document(added.doc_id)
+    step()
+    gate.close()
+
+    kinds = [record["kind"] for record, _ in seen]
+    assert kinds == [
+        "unlock",
+        "release",
+        "release",
+        "denial",
+        "status",
+        "approval",
+        "release",
+        "policy",
+        "add",
+        "remove",
+        "lock",
+    ]
+    times = [gate_ledger.parse_time(record["time"]) for record, _ in seen]
+    for stamp, (_, moment) in zip(times, seen, strict=True):
+        # Dated at or after the moment the record was made, by less than a second.
+        assert moment <= stamp < moment + SECOND
+    assert times == sorted(times)
+    assert len(set(times)) > 3  # the run crossed several seconds
+    # What a fresh reading of the files gives is the same, and in the same order.
+    on_disk = [record.time for record in world.store.ledger.records(first=seen[0][0]["seq"])]
+    assert on_disk == times
+    # The release under the approval lies between the approval and its end, as recorded.
+    approval, release = seen[5][0], seen[6][0]
+    assert release["rule"] == "approval"
+    assert approval["time"] <= release["time"] <= approval["valid_until"]
+
+
+def test_approvals_and_the_lock_time_are_exact_whatever_fraction_the_clock_has(
+    worlds: WorldMaker,
+) -> None:
+    clock = clock_at(300_000)
+    lock_at = clock.now + timedelta(hours=2, microseconds=400_000)
+    policy = edited({"approval.ttl_minutes": 5})
+    documents = [*support.SAMPLE_DOCUMENTS, ("tax", "tax-advance", "advance.txt", TAX_TWO)]
+    world = worlds(policy=policy, documents=documents, clock=clock, lock_at=lock_at)
+    gate = world.gate
+    note, advance = world.ref("tax-note-2025"), world.ref("tax-advance")
+
+    given = clock.now
+    until = approve(world, "claude-desktop", note)
+    # The approval holds for exactly its lifetime; the record rounds its end up.
+    assert until == given + timedelta(minutes=5)
+    recorded = gate_ledger.parse_time(world.records[-1]["valid_until"])
+    assert world.records[-1]["valid_until"] == gate_ledger.format_time(until)
+    assert until <= recorded < until + SECOND
+    assert [(entry.ref, entry.valid_until) for entry in gate.approvals()] == [(note, until)]
+    clock.now = until - TICK
+    assert gate.read(DESKTOP, note).code == "OK"
+    assert world.records[-1]["time"] <= world.records[-2]["valid_until"]
+
+    given = clock.now
+    until = approve(world, "claude-desktop", advance)
+    assert until == given + timedelta(minutes=5)
+    clock.now = until  # not a microsecond longer, whatever the record's rounded time says
+    assert gate.read(DESKTOP, advance).code == "NEEDS_APPROVAL"
+    assert gate.approvals() == []
+
+    # The gate locks at the time it was given, to the microsecond.
+    unlock = world.of_kind("unlock")[0]
+    assert unlock["auto_lock"] == gate_ledger.format_time(lock_at)
+    clock.now = lock_at - TICK
+    assert gate.status(DESKTOP).code == "OK"
+    clock.now = lock_at
+    assert gate.status(DESKTOP) == LOCKED
+    lock = world.of_kind("lock")[0]
+    assert lock["reason"] == "timer"
+    assert lock["time"] >= unlock["auto_lock"]
+
+
+def test_usage_names_the_last_caller_also_within_one_second(worlds: WorldMaker) -> None:
+    clock = clock_at(200_000)
+    world = worlds(policy=edited(FREE), clock=clock)
+    gate = world.gate
+    first = Caller("claude-desktop", "first-program", "1", "2025-11-25", "stdio")
+    second = Caller("claude-desktop", "second-program", "2", "2025-11-25", "stdio")
+    assert gate.status(first).code == "OK"
+    clock.advance(microseconds=100_000)
+    assert gate.read(first, world.ref("lease-2025")).code == "OK"
+    clock.advance(microseconds=200_000)
+    last = clock.now
+    # This call writes no record: the status record of this hour exists already.
+    assert gate.status(second).code == "OK"
+    assert world.records[-1]["kind"] == "release"
+    usage = gate.usage().clients["claude-desktop"]
+    assert (usage.claimed_name, usage.claimed_version) == ("second-program", "2")
+    assert usage.last_call == last
+
+
+# ---------------------------------------------------------------------------
 # Arguments and callers
 # ---------------------------------------------------------------------------
 
@@ -1535,6 +1801,69 @@ def test_approved_release_counts_toward_every_limit(worlds: WorldMaker) -> None:
         assert len(released.text) == enough
         assert left(released) == 0
         assert gate.approvals() == []
+
+
+@pytest.mark.parametrize(("variant", "path", "window"), BOUNDARIES)
+def test_a_waiting_passage_is_refused_for_room_at_the_same_point_whatever_its_length(
+    worlds: WorldMaker, variant: str, path: str, window: timedelta
+) -> None:
+    # Two passages that need approval, one about eight times as long as the other.
+    documents = [
+        ("tax", "tax-advance", "advance.txt", TAX_TWO),
+        ("tax", "tax-long", "long.txt", pages("mklongtax", 1)),
+    ]
+    world = worlds(documents=documents)
+    gate, clock = world.gate, world.clock
+    short, long = world.ref("tax-advance"), world.ref("tax-long")
+    short_chars = gate.preview("claude-desktop", short).result_chars
+    long_chars = gate.preview("claude-desktop", long).result_chars
+    assert long_chars - short_chars > 600
+
+    def answer(ref: str, limit: int) -> Reply:
+        clock.advance(seconds=3)
+        world.set({path: limit})  # nothing was released, so this is what is left
+        return gate.read(DESKTOP, ref)
+
+    def turning_point(ref: str) -> int:
+        """The least that must be left for the passage to be put before the owner."""
+        low, high = 0, 8000
+        assert answer(ref, low) == over_limit(variant)
+        assert answer(ref, high).code == "NEEDS_APPROVAL"
+        while high - low > 1:
+            middle = (low + high) // 2
+            reply = answer(ref, middle)
+            if reply.code == "NEEDS_APPROVAL":
+                high = middle
+            else:
+                assert reply == over_limit(variant)
+                low = middle
+        return high
+
+    # Without an approval the answer says nothing about the length of the passage:
+    # it turns from NEEDS_APPROVAL to OVER_LIMIT at one point for both.
+    turn = turning_point(short)
+    assert turning_point(long) == turn
+    # That point lies above both, so nobody is asked to approve what would not fit.
+    assert turn > long_chars
+
+    # Below it a passage is not put before the owner ...
+    for entry in gate.pending():
+        gate.dismiss(entry.client, entry.ref)
+    assert answer(long, turn - 1) == over_limit(variant)
+    assert answer(short, turn - 1) == over_limit(variant)
+    assert gate.pending() == []
+    # ... but an approval the owner gives all the same is measured with the real length.
+    approve(world, "claude-desktop", long)
+    clock.advance(seconds=3)
+    released = gate.read(DESKTOP, long)
+    assert released.code == "OK"
+    assert len(released.text) <= long_chars
+    assert world.records[-1]["rule"] == "approval"
+    # An approval that has run out is no approval: the one figure decides again.
+    approve(world, "claude-desktop", short)
+    clock.advance(minutes=10)
+    assert gate.read(DESKTOP, short) == over_limit(variant)
+    assert gate.pending() == []
 
 
 def test_shown_text_equals_released_text(worlds: WorldMaker) -> None:
@@ -2145,28 +2474,163 @@ def test_pending_list_follows_requests_and_answers(worlds: WorldMaker) -> None:
     assert world.reopen().pending() == []
 
 
-def test_pending_list_is_bounded(worlds: WorldMaker) -> None:
+def test_pending_list_is_bounded_for_each_client(worlds: WorldMaker) -> None:
     documents = [("tax", "big", "big.txt", pages("mkbig", MAX_PENDING + 5))]
-    world = worlds(documents=documents)
+    policy = edited({"clients.chatgpt-desktop": hosted_client(tax="approve")})
+    world = worlds(policy=policy, documents=documents)
     gate, clock = world.gate, world.clock
 
-    def ask(passage: int) -> None:
+    def ask(caller: Caller, passage: int) -> None:
         clock.advance(seconds=3)
-        assert gate.read(DESKTOP, world.ref("big", passage)).code == "NEEDS_APPROVAL"
+        assert gate.read(caller, world.ref("big", passage)).code == "NEEDS_APPROVAL"
 
+    def waiting(client: str) -> list[str]:
+        return [entry.ref for entry in gate.pending() if entry.client == client]
+
+    # One app asks for one passage. Then another name asks for 200 others.
+    ask(OTHER_HOSTED, 7)
+    honest = gate.pending()
     for passage in range(1, MAX_PENDING + 1):
-        ask(passage)
-    assert len(gate.pending()) == MAX_PENDING == 200
-    ask(2)  # asked again: no longer the one asked for longest ago after number 1
-    ask(MAX_PENDING + 1)
-    ask(MAX_PENDING + 2)
-    waiting = [entry.ref for entry in gate.pending()]
-    assert len(waiting) == MAX_PENDING
-    assert world.ref("big", 1) not in waiting
-    assert world.ref("big", 3) not in waiting
-    assert waiting[-3:] == [world.ref("big", n) for n in (2, MAX_PENDING + 1, MAX_PENDING + 2)]
-    assert waiting[0] == world.ref("big", 4)
+        ask(DESKTOP, passage)
+    assert MAX_PENDING == 200
+    assert MAX_PENDING_PER_CLIENT == 50
+    # The first app's passage still waits, where it was: the other name only pushed
+    # its own requests off the list.
+    assert gate.pending()[0] == honest[0]
+    assert waiting("chatgpt-desktop") == [world.ref("big", 7)]
+    assert waiting("claude-desktop") == [world.ref("big", n) for n in range(151, 201)]
+    assert len(gate.pending()) == MAX_PENDING_PER_CLIENT + 1
+
+    ask(DESKTOP, 152)  # asked again: no longer the one asked for longest ago after 151
+    ask(DESKTOP, MAX_PENDING + 1)
+    ask(DESKTOP, MAX_PENDING + 2)
+    own = waiting("claude-desktop")
+    assert len(own) == MAX_PENDING_PER_CLIENT
+    assert world.ref("big", 151) not in own
+    assert world.ref("big", 153) not in own
+    assert own[-3:] == [world.ref("big", n) for n in (152, MAX_PENDING + 1, MAX_PENDING + 2)]
+    assert own[0] == world.ref("big", 154)
+    assert [entry.count for entry in gate.pending() if entry.ref == own[-3]] == [2]
+    assert waiting("chatgpt-desktop") == [world.ref("big", 7)]
     assert gate.usage().documents[world.ids["big"]].released == {"hosted": 0, "local": 0}
+
+
+def test_pending_list_is_bounded_over_all_clients(worlds: WorldMaker) -> None:
+    names = [f"app-{n}" for n in range(6)]
+    clients = {name: hosted_client(tax="approve") for name in names}
+    documents = [("tax", "big", "big.txt", pages("mkbig", MAX_PENDING_PER_CLIENT + 2))]
+    world = worlds(policy=edited({"clients": clients}), documents=documents)
+    gate, clock = world.gate, world.clock
+
+    def ask(name: str, passage: int) -> None:
+        clock.advance(seconds=3)
+        assert gate.read(Caller(name), world.ref("big", passage)).code == "NEEDS_APPROVAL"
+
+    def held() -> Counter[str]:
+        return Counter(entry.client for entry in gate.pending())
+
+    quiet, *busy = names
+    ask(quiet, 1)
+    ask(quiet, 2)
+    for name in busy[:3]:
+        for passage in range(1, MAX_PENDING_PER_CLIENT + 1):
+            ask(name, passage)
+    assert held() == {quiet: 2, **dict.fromkeys(busy[:3], MAX_PENDING_PER_CLIENT)}
+    # Two more names fill the list past 200. Room is made by a name that holds the
+    # most, never by the one that holds two.
+    for name in busy[3:]:
+        for passage in range(1, MAX_PENDING_PER_CLIENT + 1):
+            ask(name, passage)
+            assert len(gate.pending()) <= MAX_PENDING
+            assert held()[quiet] == 2
+    counts = held()
+    assert sum(counts.values()) == MAX_PENDING
+    assert max(counts.values()) <= MAX_PENDING_PER_CLIENT
+    assert min(counts[name] for name in busy) >= 39  # the 198 others are shared almost evenly
+    assert [entry.ref for entry in gate.pending() if entry.client == quiet] == [
+        world.ref("big", 1),
+        world.ref("big", 2),
+    ]
+    # What a name gave up was its oldest request.
+    asked = [world.ref("big", n) for n in range(1, MAX_PENDING_PER_CLIENT + 1)]
+    last = [entry.ref for entry in gate.pending() if entry.client == busy[-1]]
+    assert 0 < len(last) < len(asked)
+    assert last == asked[-len(last) :]
+
+
+def test_dismiss_ignores_what_is_not_text(worlds: WorldMaker) -> None:
+    world = approval_world(worlds)
+    gate = world.gate
+    note, advance = world.ref("tax-note-2025"), world.ref("tax-advance")
+    assert gate.read(DESKTOP, note).code == "NEEDS_APPROVAL"
+    approve(world, "claude-desktop", advance)
+    before = (gate.pending(), gate.approvals())
+    assert [len(part) for part in before] == [1, 1]
+    records, head = len(world.records), gate.head()
+    odd_values: list[Any] = [
+        None,
+        7,
+        2.5,
+        True,
+        [],
+        ["claude-desktop"],
+        {},
+        {"a": 1},
+        ("claude-desktop",),
+        b"claude-desktop",
+        object(),
+    ]
+    for odd in odd_values:
+        for client, ref in (
+            (odd, note),
+            ("claude-desktop", odd),
+            (odd, odd),
+            (odd, advance),
+            ([odd], [odd]),
+        ):
+            assert gate.dismiss(client, ref) is None
+    # Names and refs that are text but name nothing on the list change nothing either.
+    gate.dismiss("nobody", note)
+    gate.dismiss("claude-desktop", "d-ffffffffffff.1")
+    gate.dismiss("claude-desktop", "not a ref")
+    assert (gate.pending(), gate.approvals()) == before
+    assert (len(world.records), gate.head()) == (records, head)
+    # The gate still works, and the real thing is still dismissed.
+    assert gate.read(DESKTOP, advance).code == "OK"
+    gate.dismiss("claude-desktop", f" REF={note.upper()} ")
+    assert gate.pending() == []
+    gate.close()
+    with pytest.raises(GateError, match="locked"):
+        gate.dismiss([], {})
+
+
+def test_add_document_refuses_a_source_that_is_not_a_mapping(worlds: WorldMaker) -> None:
+    world = worlds()
+    gate = world.gate
+    files, records, head = support.snapshot(world.path), len(world.records), gate.head()
+    odd_values: list[Any] = [5, 2.5, True, "memo.txt", b"memo", ["name"], ("name", "x"), object()]
+    for odd in odd_values:
+        # A collection that does not exist yet: nothing of it may be left behind.
+        with pytest.raises(TypeError, match=r"^source must be a mapping$"):
+            gate.add_document(collection="fresh", title="memo", text="A memo.", source=odd)
+        with pytest.raises(TypeError, match=r"^source must be a mapping$"):
+            gate.add_document(
+                collection="home", title="memo", text="A memo.", source=odd, original=b"A memo."
+            )
+    assert support.snapshot(world.path) == files  # no file was written, changed or removed
+    assert (len(world.records), gate.head()) == (records, head)
+    assert "fresh" not in gate.policy().collections
+    assert len(gate.documents()) == len(support.SAMPLE_DOCUMENTS)
+    # None and every kind of mapping are taken as before.
+    plain = gate.add_document(collection="home", title="memo-1", text="Memo mkmemo0001.")
+    described = gate.add_document(
+        collection="home",
+        title="memo-2",
+        text="Memo mkmemo0002.",
+        source=MappingProxyType({"name": "memo-2.txt", "sha256": "ab" * 32, "bytes": 16}),
+    )
+    assert (plain.source_sha256, described.source_sha256) == (None, "ab" * 32)
+    assert [record["kind"] for record in world.records[records:]] == ["add", "add"]
 
 
 def test_add_document_cleans_seals_records_and_indexes(worlds: WorldMaker) -> None:

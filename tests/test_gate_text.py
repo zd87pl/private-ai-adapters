@@ -375,20 +375,36 @@ def test_text_pipeline_time_is_linear() -> None:
 def test_the_time_check_catches_a_quadratic_pattern() -> None:
     # A link pattern as one writes it first, with unbounded repeats: on a run of
     # "[" it tries every later position from every bracket, so twice the input
-    # takes four times as long. Small runs, the best of five, and no allowance:
+    # takes four times as long. Small runs, the best of several, and no allowance:
     # at the sizes of the real test this pattern would run for many minutes.
     unbounded = re.compile(r"\[([^\]\n]*)\]\([^)\n]*\)")
 
     def unbounded_links(text: str) -> str:
         return unbounded.sub(r"\1", text)
 
-    base = min(_seconds(unbounded_links, _run_of("[", 2_000)) for _ in range(5))
-    doubled = min(_seconds(unbounded_links, _run_of("[", 4_000)) for _ in range(5))
-    assert not grows_linearly(base, doubled, slack=0.0)
+    def best_times(function: Callable[[str], object], linear: bool) -> tuple[float, float]:
+        """The best time for 2,000 and for 4,000 brackets, measured turn by turn.
+
+        Other work on the machine only ever makes a run slower, and it must not
+        fall on one size alone: so the two sizes take turns, and the best of
+        each is kept. Five rounds as a rule. While their verdict is not the one
+        that the growth of ``function`` gives, the rounds were disturbed and
+        more follow, up to 25; the best times only get closer to the true ones.
+        """
+        short, long = _run_of("[", 2_000), _run_of("[", 4_000)
+        base = doubled = float("inf")
+        for rounds in range(1, 26):
+            base = min(base, _seconds(function, short))
+            doubled = min(doubled, _seconds(function, long))
+            if rounds >= 5 and grows_linearly(base, doubled, slack=0.0) is linear:
+                break
+        return base, doubled
+
+    base, doubled = best_times(unbounded_links, linear=False)
+    assert not grows_linearly(base, doubled, slack=0.0), (base, doubled)
     # The same measurement of the pattern that replaced it passes.
-    base = min(_seconds(sanitize, _run_of("[", 2_000)) for _ in range(5))
-    doubled = min(_seconds(sanitize, _run_of("[", 4_000)) for _ in range(5))
-    assert grows_linearly(base, doubled, slack=0.0)
+    base, doubled = best_times(sanitize, linear=True)
+    assert grows_linearly(base, doubled, slack=0.0), (base, doubled)
     assert not grows_linearly(1.0, 3.6)
     assert not grows_linearly(9.0, 21.0)
 

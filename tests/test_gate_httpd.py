@@ -17,9 +17,14 @@ from typing import Any
 
 import pytest
 
+from wdva.gate import brand
 from wdva.gate.app import httpd
 from wdva.gate.app.api import Service, ServiceError
 from wdva.gate.app.httpd import AppServer
+
+# The product's name comes from one place; the tests take it from there too.
+PRODUCT, SLUG = brand.PRODUCT, brand.SLUG
+COOKIE_PREFIX = SLUG.replace("-", "_")
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32", reason="the gate does not run on Windows yet"
@@ -31,7 +36,8 @@ CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
     "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 )
-INDEX = b"<!doctype html><title>WDVA Gate</title><script src=app.js></script>"
+INDEX = b"<!doctype html><title>{{product}}</title><script src=app.js></script>"
+INDEX_SERVED = INDEX.replace(b"{{product}}", PRODUCT.encode())
 APP_JS = b"console.log('interface');"
 
 
@@ -354,7 +360,7 @@ def test_other_host_names_are_refused(
     assert answer.status == 403
     assert answer.error() == "forbidden"
     assert_headers(answer)
-    assert INDEX not in answer.body
+    assert INDEX_SERVED not in answer.body
     assert service.calls == []
 
 
@@ -391,7 +397,13 @@ def test_pairing_code_is_eight_unambiguous_characters(make_server: MakeServer) -
 def test_session_endpoint_answers_before_pairing(server: AppServer, service: FakeService) -> None:
     answer = Browser(server).call("GET", "/api/session")
     assert answer.status == 200
-    assert answer.json() == {"paired": False, "pairing": "code", "demo": False, "version": VERSION}
+    assert answer.json() == {
+        "paired": False,
+        "pairing": "code",
+        "demo": False,
+        "version": VERSION,
+        "name": PRODUCT,
+    }
     assert_headers(answer)
     assert service.calls == []
 
@@ -437,7 +449,7 @@ def test_session_cookie_attributes(make_server: MakeServer) -> None:
         value, *attributes = [part.strip() for part in cookie.split(";")]
         assert sorted(attributes) == ["HttpOnly", "Path=/", "SameSite=Strict"]
         name, _, token = value.partition("=")
-        assert name == f"wdva_gate_{server.port}"
+        assert name == f"{COOKIE_PREFIX}_{server.port}"
         assert re.fullmatch(r"[0-9a-f]{64}", token)  # 32 random bytes
         tokens.add(token)
     assert len(tokens) == 2
@@ -739,7 +751,7 @@ def test_every_endpoint_needs_pairing(
         assert answer.status == 401
         assert answer.error() == "pairing_required"
         assert_headers(answer)
-        browser.cookie = f"wdva_gate_{server.port}=" + "0" * 64  # a guess, for the second round
+        browser.cookie = f"{COOKIE_PREFIX}_{server.port}=" + "0" * 64  # a guess, the second round
     assert service.calls == []
 
 
@@ -767,7 +779,7 @@ def test_cookies_that_are_not_the_session_are_refused(
     assert service.calls == []
     # Among other cookies of the same host, the right one still counts.
     browser = Browser(server)
-    browser.cookie = f"theme=dark; {name}={token}; wdva_gate_1=abc"
+    browser.cookie = f"theme=dark; {name}={token}; {COOKIE_PREFIX}_1=abc"
     assert browser.call("GET", "/api/state").status == 200
 
 
@@ -784,12 +796,18 @@ def test_demo_mode_has_no_pairing(make_server: MakeServer, service: FakeService)
     assert server.pairing_code is None
     browser = Browser(server)
     session = browser.call("GET", "/api/session")
-    assert session.json() == {"paired": False, "pairing": "none", "demo": True, "version": VERSION}
+    assert session.json() == {
+        "paired": False,
+        "pairing": "none",
+        "demo": True,
+        "version": VERSION,
+        "name": PRODUCT,
+    }
     assert browser.call("GET", "/api/state").status == 401
     # A script or a style sheet does not carry the session; the page does.
     assert browser.call("GET", "/app.js").header("Set-Cookie") is None
     page = browser.call("GET", "/")
-    assert page.body == INDEX
+    assert page.body == INDEX_SERVED
     cookie = page.header("Set-Cookie")
     assert cookie is not None
     assert sorted(part.strip() for part in cookie.split(";")[1:]) == [
@@ -825,6 +843,7 @@ def test_without_pairing_outside_the_demo_only_the_first_page_load_gets_the_sess
         "pairing": "none",
         "demo": False,
         "version": VERSION,
+        "name": PRODUCT,
     }
     assert later.call("GET", "/api/state").status == 401
 
@@ -939,7 +958,7 @@ def test_no_response_permits_another_site_to_read_it(
     asking = {
         "Origin": "https://evil.example",
         "Access-Control-Request-Method": "POST",
-        "Access-Control-Request-Headers": "x-wdva-gate, content-type",
+        "Access-Control-Request-Headers": f"x-{SLUG}, content-type",
     }
     preflight = paired.call("OPTIONS", "/api/lock", headers=asking)
     assert preflight.status == 405
@@ -973,6 +992,55 @@ def test_other_methods_are_refused(method: str, paired: Browser, service: FakeSe
 # -- headers ---------------------------------------------------------------------------
 
 
+def test_the_page_is_served_with_the_product_name_and_nothing_else_is_changed(
+    tmp_path: Path, service: FakeService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A name that would break out of an attribute or start a tag if it were not escaped.
+    monkeypatch.setattr(brand, "PRODUCT", 'Fish & <Chips> "Desk"')
+    directory = tmp_path / "named"
+    directory.mkdir()
+    (directory / "index.html").write_text(
+        '<!doctype html><meta name="application-name" content="{{product}}">'
+        "<title>{{product}}</title><p>{{product}} needs JavaScript.</p>",
+        encoding="utf-8",
+    )
+    (directory / "app.js").write_bytes(b'const untouched = "{{product}}";')
+    server = AppServer(service, pairing=False, version=VERSION, static_dir=directory)
+    server.start()
+    try:
+        browser = Browser(server)
+        escaped = "Fish &amp; &lt;Chips&gt; &quot;Desk&quot;"
+        for target in ("/", "/index.html"):
+            page = browser.call("GET", target).body.decode("utf-8")
+            assert page == (
+                f'<!doctype html><meta name="application-name" content="{escaped}">'
+                f"<title>{escaped}</title><p>{escaped} needs JavaScript.</p>"
+            )
+        assert browser.call("GET", "/app.js").body == b'const untouched = "{{product}}";'
+        assert browser.call("GET", "/api/session").json()["name"] == 'Fish & <Chips> "Desk"'
+    finally:
+        server.stop()
+
+
+def test_the_shipped_page_shows_the_name_from_its_first_byte(service: FakeService) -> None:
+    server = AppServer(service, pairing=True, version=VERSION)
+    server.start()
+    try:
+        page = Browser(server).call("GET", "/").body.decode("utf-8")
+    finally:
+        server.stop()
+    assert "{{" not in page
+    assert "}}" not in page
+    assert f"<title>{PRODUCT}</title>" in page
+    assert f'<meta name="application-name" content="{PRODUCT}">' in page
+    assert f'<p class="boot-name">{PRODUCT}</p>' in page
+    # The scripts take the name from the page: none of them spells it out.
+    static = Path(httpd.__file__).resolve().parent / "static"
+    assert "{{product}}" in (static / "index.html").read_text(encoding="utf-8")
+    for script in static.glob("*.js"):
+        assert PRODUCT not in script.read_text(encoding="utf-8"), script.name
+
+
 def test_the_content_security_policy_is_the_strict_one() -> None:
     assert httpd.CONTENT_SECURITY_POLICY == CSP
 
@@ -980,8 +1048,8 @@ def test_the_content_security_policy_is_the_strict_one() -> None:
 @pytest.mark.parametrize(
     ("target", "content_type", "body"),
     [
-        ("/", "text/html; charset=utf-8", INDEX),
-        ("/index.html", "text/html; charset=utf-8", INDEX),
+        ("/", "text/html; charset=utf-8", INDEX_SERVED),
+        ("/index.html", "text/html; charset=utf-8", INDEX_SERVED),
         ("/app.js", "text/javascript; charset=utf-8", APP_JS),
         ("/app.js?v=3", "text/javascript; charset=utf-8", APP_JS),
         ("/style.css", "text/css; charset=utf-8", b"body { margin: 0 }"),
@@ -1025,7 +1093,7 @@ def test_error_responses_carry_the_headers_too(server: AppServer, paired: Browse
 
 def test_the_server_does_not_say_what_it_runs_on(server: AppServer) -> None:
     answer = Browser(server).call("GET", "/")
-    assert answer.header("Server") == "WDVA-Gate"
+    assert answer.header("Server") == PRODUCT.replace(" ", "-")
 
 
 # -- static files ----------------------------------------------------------------------

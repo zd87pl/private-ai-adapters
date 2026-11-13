@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025 Enclave
 //
-// The only module that talks to WDVA Gate. Every address it uses is written out
+// The only module that talks to the app. Every address it uses is written out
 // below, one function per endpoint.
+
+import { PRODUCT } from "./brand.js";
 
 /** An answer that is an error: the HTTP status, a short code and one sentence for a person. */
 export class ApiError extends Error {
@@ -27,12 +29,12 @@ export function configure({ unauthorized, reauth }) {
 }
 
 const FALLBACK = {
-  0: "WDVA Gate is not answering. Is it still running in its terminal?",
-  400: "WDVA Gate could not use that.",
-  403: "WDVA Gate refused that request.",
+  0: `${PRODUCT} is not answering. Is it still running in its terminal?`,
+  400: `${PRODUCT} could not use that.`,
+  403: `${PRODUCT} refused that request.`,
   404: "That is no longer there.",
   409: "That does not fit the current state of the vault.",
-  413: "That is larger than WDVA Gate accepts.",
+  413: `That is larger than ${PRODUCT} accepts.`,
   503: "The vault cannot be reached right now.",
 };
 
@@ -73,7 +75,7 @@ async function send(method, path, options) {
   const message =
     typeof error.message === "string" && error.message
       ? error.message
-      : FALLBACK[response.status] || "Something went wrong in WDVA Gate.";
+      : FALLBACK[response.status] || `Something went wrong in ${PRODUCT}.`;
   throw new ApiError(response.status, typeof error.code === "string" ? error.code : "error", message);
 }
 

@@ -25,7 +25,9 @@ What a call under a client name can get is decided here and nowhere else:
   the owner's approval, counted in distinct characters and never refilled.
   Beyond it, and in a collection held in ``approve`` mode, a passage is
   released only under an approval the owner gave for exactly that client,
-  passage and text. An approval is used once and expires.
+  passage and text. An approval is used once and expires. Until it is given,
+  whether the limits have room for the passage is asked with one figure for
+  all passages, so that a refusal does not tell how long the passage is.
 * The strings the owner listed are replaced in everything that leaves, and
   every piece of document text is checked once more before it is recorded.
 
@@ -45,7 +47,7 @@ import math
 import re
 import secrets
 import threading
-from collections import OrderedDict, deque
+from collections import Counter, OrderedDict, deque
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
@@ -56,7 +58,7 @@ from wdva._util import MAX_SAFE_INTEGER
 from wdva.gate import messages
 from wdva.gate.errors import ApprovalError, GateError, LedgerError, StoreFormatError
 from wdva.gate.index import CollectionIndex, Hit, merge_hits
-from wdva.gate.ledger import DocumentInfo, LedgerState, Record, format_time
+from wdva.gate.ledger import DocumentInfo, LedgerState, Record, format_time, record_time
 from wdva.gate.policy import (
     GATE_CALLS_PER_MINUTE,
     MAX_RESULT_CHARS,
@@ -103,6 +105,7 @@ from wdva.gate.types import Caller, Preview, Reply
 __all__ = [
     "DAY",
     "MAX_PENDING",
+    "MAX_PENDING_PER_CLIENT",
     "REASON_UNREADABLE",
     "RULE_APPROVAL",
     "RULE_READ",
@@ -128,7 +131,10 @@ UNREGISTERED = "(unregistered)"
 """The name under which refusals for names that are not served are recorded, whatever was sent."""
 
 MAX_PENDING = 200
-"""How many passages can wait for the owner's answer; beyond it the oldest is forgotten."""
+"""How many passages can wait for the owner's answer, over all clients together."""
+
+MAX_PENDING_PER_CLIENT = 50
+"""How many passages of one client can wait; beyond it that client's oldest is forgotten."""
 
 DAY = timedelta(hours=24)
 THIRTY_DAYS = timedelta(days=30)
@@ -465,6 +471,30 @@ def _clean_title(title: str) -> str:
     return line
 
 
+def _longest_read_result(chunk_chars: int) -> int:
+    """No read result in which nothing was replaced is longer than this.
+
+    Everything that depends on the passage, its document or the client is taken
+    at its longest: a body of ``chunk_chars`` characters in as many lines as
+    cleaned text can have (each line gets its prefix), the longest title,
+    collection and client name, and the largest numbers. A result is longer
+    only when listed strings shorter than their marker were replaced in it.
+    """
+    longest = messages.read_ok(
+        doc_id="d-" + "0" * 12,
+        passage=99_999,
+        passages=9_999_999,
+        collection="c" * _COLLECTION_CHARS,
+        body=("x\n\n" * chunk_chars)[:chunk_chars],
+        tag="0" * 6,
+        client="c" * _COLLECTION_CHARS,
+        client_seq=10**10 - 1,
+        left_before=10**9,
+        title="t" * MAX_TITLE_CHARS,
+    )
+    return len(longest.text)
+
+
 def _matches_in(matches: Sequence[Span], span: Span) -> int:
     """How many of ``matches`` share a character with ``span``."""
     return sum(1 for start, end in matches if start < span[1] and end > span[0])
@@ -567,6 +597,7 @@ class Gate:
 
         self._approvals: dict[tuple[str, str], _Approval] = {}
         self._pending: OrderedDict[tuple[str, str], _Waiting] = OrderedDict()
+        self._longest_read = _longest_read_result(store.chunk_chars)
         self._all_calls = _Bucket()
         self._buckets: dict[str, _Bucket] = {}
         self._refused_searches: dict[str, list[datetime]] = {}
@@ -1397,6 +1428,12 @@ class Gate:
         measured against the client's and the pool's limits; a passage that
         needs one must have its approval; the record with the exact text is
         appended; and only when that succeeded is the text handed back.
+
+        One exception to "the complete text is measured": for a passage that
+        needs an approval and has none, the limits are asked about one figure
+        that is the same for every passage (:func:`_longest_read_result`), so
+        that the choice between ``OVER_LIMIT`` and ``NEEDS_APPROVAL`` does not
+        depend on the passage. Nothing is released in that case either way.
         """
         name = call.client
         assert name is not None
@@ -1412,8 +1449,15 @@ class Gate:
 
         state = self._state()
         uses = self._uses(state, name, call.now)
+        # A passage that still waits for the owner is measured with one figure, the
+        # same for every passage, and not with its own length. The answer would
+        # otherwise turn from NEEDS_APPROVAL to OVER_LIMIT at a point that tells a
+        # caller, who can steer what is left, how long a passage is that it was
+        # never given. Once the owner approved it, its real length is measured.
+        waits = approval is not None and not self._approved(name, approval, call.now)
+        measured = self._longest_read if waits else chars
         for variant, used, limit in uses:
-            if used + chars > limit:
+            if used + measured > limit:
                 if call.tool == messages.TOOL_SEARCH:
                     # Counts as one search, or a caller with little left could
                     # learn at no cost whether a word occurs: a query with hits
@@ -1422,7 +1466,7 @@ class Gate:
                 return self._refuse(call, "OVER_LIMIT", variant, collections=collections)
 
         if approval is not None:
-            if not self._approved(name, approval, call.now):
+            if waits:
                 self._wait_for_owner(name, approval.ref, call.now)
                 return self._refuse(
                     call,
@@ -1491,8 +1535,16 @@ class Gate:
         else:
             waiting = _Waiting(waiting.first_at, now, waiting.count + 1)
         self._pending[key] = waiting
+        # Each client has its own share of the list, so that asking under one name
+        # cannot push the passages of another off it.
+        own = [entry for entry in self._pending if entry[0] == name]
+        if len(own) > MAX_PENDING_PER_CLIENT:
+            del self._pending[own[0]]
         while len(self._pending) > MAX_PENDING:
-            self._pending.popitem(last=False)
+            # Full all the same: a client that holds the most gives up its oldest.
+            held = Counter(client for client, _ in self._pending)
+            most = max(held.values())
+            del self._pending[next(entry for entry in self._pending if held[entry[0]] == most)]
 
     def _owner_passage(self, client: str, ref: str) -> _Passage:
         if not isinstance(client, str) or not self._is_served(client):
@@ -1520,8 +1572,11 @@ class Gate:
 
         Oldest request first. A passage leaves the list when the owner approves
         or dismisses it, when it is released, and when its client, grant or
-        document goes away. At most 200 are kept; the one asked for longest ago
-        is forgotten first. The list is not recorded and is lost at lock.
+        document goes away. At most 50 are kept for one client; of those the
+        one asked for longest ago is forgotten first, so no client can push
+        another's passages off the list. At most 200 are kept in all; when
+        that is reached, a client that holds the most gives up its oldest. The
+        list is not recorded and is lost at lock.
         """
         with self._owner_side():
             return [
@@ -1628,10 +1683,13 @@ class Gate:
         """Take a passage off the waiting list, and withdraw an unused approval for it.
 
         Nothing is recorded. The client may ask again; the passage then waits
-        again.
+        again. A client or ref that is not text, or that names nothing on the
+        list, changes nothing.
         """
         with self._owner_side():
-            parsed = _parse_ref(ref) if isinstance(ref, str) else None
+            if not isinstance(client, str) or not isinstance(ref, str):
+                return
+            parsed = _parse_ref(ref)
             key = (client, f"{parsed[0]}.{parsed[1]}" if parsed is not None else ref)
             self._pending.pop(key, None)
             self._approvals.pop(key, None)
@@ -1700,11 +1758,15 @@ class Gate:
 
         Raises :class:`~wdva.gate.store.DocumentRefusedError` for text that is
         empty after cleaning, cannot be cleaned, is too large or is already in
-        the store, and :class:`ValueError` for a title or name that cannot be
-        used. In all these cases no document was added.
+        the store, :class:`ValueError` for a title or name that cannot be
+        used, and :class:`TypeError` for text or a title that is not ``str``
+        and for a ``source`` that is not a mapping, before anything is
+        written. In all these cases no document was added.
         """
         if not isinstance(text, str) or not isinstance(title, str):
             raise TypeError("text and title must be str")
+        if source is not None and not isinstance(source, Mapping):
+            raise TypeError("source must be a mapping")
         if not is_name(collection):
             raise ValueError(
                 "a collection name is 1 to 32 characters of a-z, 0-9, _ and -, "
@@ -1785,7 +1847,12 @@ class Gate:
                 uses = self._uses(state, name, now)
                 last_call, claimed = recorded.last_seen, recorded.last_claimed
                 session = self._last_calls.get(name)
-                if session is not None and (last_call is None or session[0] >= last_call):
+                # A record time is rounded up, so the call is put on the same scale
+                # before the two are compared: a record must not look newer than a
+                # call that came after it.
+                if session is not None and (
+                    last_call is None or record_time(session[0]) >= last_call
+                ):
                     last_call, claimed = session[0], dict(session[1])
                 said = claimed or {}
                 clients[name] = ClientUsage(

@@ -24,7 +24,7 @@ from typing import Any
 import pytest
 
 from wdva import __version__
-from wdva.gate import messages
+from wdva.gate import brand, messages
 from wdva.gate.errors import GateError
 from wdva.gate.types import Caller, Reply
 
@@ -33,9 +33,14 @@ pytestmark = [
     pytest.mark.mcp,
 ]
 
+# The product's name comes from one place; the tests take it from there too.
+PRODUCT, SLUG = brand.PRODUCT, brand.SLUG
+STATUS, SEARCH, READ = messages.AGENT_TOOL_NAMES
+EXPORT = brand.tool_name("export")  # a name in the same form that is not a tool
+
 CLIENT = "claude-desktop"
 MARKER = "zx81-marker-text-of-a-document"
-NAMES = ("wdva_status", "wdva_search", "wdva_read")
+NAMES = (STATUS, SEARCH, READ)
 PROTOCOL = {"auto": "2026-07-28", "legacy": "2025-11-25"}
 READ_ONLY = {
     "readOnlyHint": True,
@@ -47,18 +52,18 @@ READ_ONLY = {
 # The complete tool list as mcp 2.3.0 with pydantic 2.14.3 puts it on the wire.
 SNAPSHOT: list[dict[str, Any]] = [
     {
-        "name": "wdva_status",
+        "name": STATUS,
         "title": "Document vault status",
         "description": (
             "Show whether the owner's document vault is unlocked, which collections this client "
             "may use and how, and how many characters may still be released to it now. Returns "
             "no document text. Call it first, or when another tool answers LOCKED or NOT_ALLOWED."
         ),
-        "inputSchema": {"properties": {}, "title": "wdva_statusArguments", "type": "object"},
+        "inputSchema": {"properties": {}, "title": f"{STATUS}Arguments", "type": "object"},
         "annotations": READ_ONLY,
     },
     {
-        "name": "wdva_search",
+        "name": SEARCH,
         "title": "Search the document vault",
         "description": (
             "Keyword search over the documents the owner keeps in an encrypted vault on this "
@@ -67,7 +72,7 @@ SNAPSHOT: list[dict[str, Any]] = [
             "in one query; numbers are searchable only in collections the client may read "
             "without approval. Returns up to `limit` refs, best match first, each with a short "
             "quoted snippet where the owner's rules allow it. It never returns whole documents. "
-            "Every search counts against the release limits. Pass a ref to wdva_read to get the "
+            f"Every search counts against the release limits. Pass a ref to {READ} to get the "
             "passage."
         ),
         "inputSchema": {
@@ -81,7 +86,7 @@ SNAPSHOT: list[dict[str, Any]] = [
                 "collection": {
                     "default": "",
                     "description": (
-                        "Limit the search to one collection name from wdva_status. "
+                        f"Limit the search to one collection name from {STATUS}. "
                         "Empty: every collection this client may use."
                     ),
                     "maxLength": 32,
@@ -96,13 +101,13 @@ SNAPSHOT: list[dict[str, Any]] = [
                 },
             },
             "required": ["query"],
-            "title": "wdva_searchArguments",
+            "title": f"{SEARCH}Arguments",
             "type": "object",
         },
         "annotations": READ_ONLY,
     },
     {
-        "name": "wdva_read",
+        "name": READ,
         "title": "Read one passage",
         "description": (
             "Return one passage (at most about 800 characters) of a document in the owner's "
@@ -116,7 +121,7 @@ SNAPSHOT: list[dict[str, Any]] = [
             "properties": {
                 "ref": {
                     "description": (
-                        "A ref exactly as returned by wdva_search, for example d-3f9a2c41b07e.7."
+                        f"A ref exactly as returned by {SEARCH}, for example d-3f9a2c41b07e.7."
                     ),
                     "maxLength": 64,
                     "title": "Ref",
@@ -124,7 +129,7 @@ SNAPSHOT: list[dict[str, Any]] = [
                 }
             },
             "required": ["ref"],
-            "title": "wdva_readArguments",
+            "title": f"{READ}Arguments",
             "type": "object",
         },
         "annotations": READ_ONLY,
@@ -225,12 +230,12 @@ def only_text(result: Any) -> str:
 async def test_tool_surface_is_pinned(backend: FakeBackend, mode: str) -> None:
     async with connect(backend, mode) as client:
         assert client.protocol_version == PROTOCOL[mode]
-        assert (client.server_info.name, client.server_info.version) == ("wdva-gate", __version__)
+        assert (client.server_info.name, client.server_info.version) == (SLUG, __version__)
         instructions = client.instructions
         tools = wire((await client.list_tools()).tools)
 
     assert instructions == messages.SERVER_INSTRUCTIONS
-    assert instructions.startswith("wdva-gate gives read-only, limited, recorded access")
+    assert instructions.startswith(f"{SLUG} gives read-only, limited, recorded access")
     assert len(instructions) <= 512
     assert tuple(tool["name"] for tool in tools) == NAMES
     assert [tool["title"] for tool in tools] == [
@@ -302,7 +307,7 @@ async def test_no_resources_prompts_or_output_schemas(backend: FakeBackend, mode
         assert (await client.list_prompts()).prompts == []
         for tool in (await client.list_tools()).tools:
             assert tool.output_schema is None
-        unknown = await client.call_tool("wdva_export", {"ref": "d-3f9a2c41b07e.7"})
+        unknown = await client.call_tool(EXPORT, {"ref": "d-3f9a2c41b07e.7"})
     assert unknown.is_error
     assert backend.calls == []
 
@@ -315,12 +320,12 @@ async def test_calls_reach_the_backend_under_the_configured_name(
     backend: FakeBackend, mode: str
 ) -> None:
     async with connect(backend, mode) as client:
-        status = await client.call_tool("wdva_status", {})
+        status = await client.call_tool(STATUS, {})
         search = await client.call_tool(
-            "wdva_search", {"query": "rent deposit", "collection": "home", "limit": 3}
+            SEARCH, {"query": "rent deposit", "collection": "home", "limit": 3}
         )
-        defaults = await client.call_tool("wdva_search", {"query": "rent"})
-        read = await client.call_tool("wdva_read", {"ref": "d-3f9a2c41b07e.7"})
+        defaults = await client.call_tool(SEARCH, {"query": "rent"})
+        read = await client.call_tool(READ, {"ref": "d-3f9a2c41b07e.7"})
 
     who = said(mode)
     assert backend.calls == [
@@ -341,12 +346,12 @@ async def test_results_are_one_text_block(backend: FakeBackend, mode: str) -> No
     refusal = Reply("NEEDS_APPROVAL", messages.needs_approval("d-3f9a2c41b07e.7", CLIENT), False)
     async with connect(backend, mode) as client:
         results = [
-            await client.call_tool("wdva_status", {}),
-            await client.call_tool("wdva_search", {"query": "rent"}),
-            await client.call_tool("wdva_read", {"ref": "d-3f9a2c41b07e.7"}),
+            await client.call_tool(STATUS, {}),
+            await client.call_tool(SEARCH, {"query": "rent"}),
+            await client.call_tool(READ, {"ref": "d-3f9a2c41b07e.7"}),
         ]
         backend.answer = refusal
-        results.append(await client.call_tool("wdva_read", {"ref": "d-3f9a2c41b07e.7"}))
+        results.append(await client.call_tool(READ, {"ref": "d-3f9a2c41b07e.7"}))
 
     for result in results:
         dumped = result.model_dump(by_alias=True, mode="json", exclude_none=True)
@@ -359,24 +364,24 @@ async def test_results_are_one_text_block(backend: FakeBackend, mode: str) -> No
 
 
 SLOPPY: list[tuple[str, dict[str, Any], tuple[Any, ...]]] = [
-    ("wdva_search", {"query": None}, (None, "", 5)),
-    ("wdva_search", {"query": "rent", "limit": None}, ("rent", "", None)),
-    ("wdva_search", {"query": "rent", "collection": None}, ("rent", None, 5)),
-    ("wdva_search", {"query": "rent", "limit": "5"}, ("rent", "", "5")),
-    ("wdva_search", {"query": "rent", "limit": 5.5}, ("rent", "", 5.5)),
-    ("wdva_search", {"query": "rent", "limit": 9999}, ("rent", "", 9999)),
-    ("wdva_search", {"query": "rent", "limit": True}, ("rent", "", True)),
-    ("wdva_search", {"query": "x" * 600}, ("x" * 600, "", 5)),
-    ("wdva_search", {"query": "x" * 20_000}, ("x" * 20_000, "", 5)),
-    ("wdva_search", {"query": "rent", "collection": "c" * 65}, ("rent", "c" * 65, 5)),
-    ("wdva_search", {"query": ["rent", "deposit"]}, (["rent", "deposit"], "", 5)),
-    ("wdva_search", {"query": {"words": "rent"}}, ({"words": "rent"}, "", 5)),
-    ("wdva_search", {"query": 123, "collection": 4, "limit": [5]}, (123, 4, [5])),
-    ("wdva_read", {"ref": '  "REF=D-3F9A2C41B07E.7" '}, ('  "REF=D-3F9A2C41B07E.7" ',)),
-    ("wdva_read", {"ref": 7}, (7,)),
-    ("wdva_read", {"ref": None}, (None,)),
-    ("wdva_read", {"ref": ["d-3f9a2c41b07e.7"]}, (["d-3f9a2c41b07e.7"],)),
-    ("wdva_read", {"ref": "r" * 5000}, ("r" * 5000,)),
+    (SEARCH, {"query": None}, (None, "", 5)),
+    (SEARCH, {"query": "rent", "limit": None}, ("rent", "", None)),
+    (SEARCH, {"query": "rent", "collection": None}, ("rent", None, 5)),
+    (SEARCH, {"query": "rent", "limit": "5"}, ("rent", "", "5")),
+    (SEARCH, {"query": "rent", "limit": 5.5}, ("rent", "", 5.5)),
+    (SEARCH, {"query": "rent", "limit": 9999}, ("rent", "", 9999)),
+    (SEARCH, {"query": "rent", "limit": True}, ("rent", "", True)),
+    (SEARCH, {"query": "x" * 600}, ("x" * 600, "", 5)),
+    (SEARCH, {"query": "x" * 20_000}, ("x" * 20_000, "", 5)),
+    (SEARCH, {"query": "rent", "collection": "c" * 65}, ("rent", "c" * 65, 5)),
+    (SEARCH, {"query": ["rent", "deposit"]}, (["rent", "deposit"], "", 5)),
+    (SEARCH, {"query": {"words": "rent"}}, ({"words": "rent"}, "", 5)),
+    (SEARCH, {"query": 123, "collection": 4, "limit": [5]}, (123, 4, [5])),
+    (READ, {"ref": '  "REF=D-3F9A2C41B07E.7" '}, ('  "REF=D-3F9A2C41B07E.7" ',)),
+    (READ, {"ref": 7}, (7,)),
+    (READ, {"ref": None}, (None,)),
+    (READ, {"ref": ["d-3f9a2c41b07e.7"]}, (["d-3f9a2c41b07e.7"],)),
+    (READ, {"ref": "r" * 5000}, ("r" * 5000,)),
 ]
 
 
@@ -406,9 +411,9 @@ async def test_extra_arguments_change_nothing(backend: FakeBackend, mode: str) -
         "ctx": {"client": "owner"},
     }
     async with connect(backend, mode) as client:
-        await client.call_tool("wdva_status", extras)
-        await client.call_tool("wdva_search", {"query": "rent", **extras})
-        await client.call_tool("wdva_read", {"ref": "d-3f9a2c41b07e.7", "purpose": "x", **extras})
+        await client.call_tool(STATUS, extras)
+        await client.call_tool(SEARCH, {"query": "rent", **extras})
+        await client.call_tool(READ, {"ref": "d-3f9a2c41b07e.7", "purpose": "x", **extras})
 
     who = said(mode)
     assert backend.calls == [
@@ -423,8 +428,8 @@ async def test_a_missing_required_argument_never_reaches_the_backend(
     backend: FakeBackend, mode: str
 ) -> None:
     async with connect(backend, mode) as client:
-        no_query = await client.call_tool("wdva_search", {"collection": "home"})
-        no_ref = await client.call_tool("wdva_read", {})
+        no_query = await client.call_tool(SEARCH, {"collection": "home"})
+        no_ref = await client.call_tool(READ, {})
     # The SDK answers these itself, in its own words. Nothing of the vault is in them.
     assert no_query.is_error
     assert no_ref.is_error
@@ -434,9 +439,9 @@ async def test_a_missing_required_argument_never_reaches_the_backend(
 @pytest.mark.anyio
 async def test_self_declared_name_changes_nothing(backend: FakeBackend, mode: str) -> None:
     async with connect(backend, mode, name="owner", version="v" * 200) as client:
-        await client.call_tool("wdva_status", {})
+        await client.call_tool(STATUS, {})
     async with connect(backend, mode, name="lm-studio" + "x" * 200) as client:
-        await client.call_tool("wdva_read", {"ref": "d-3f9a2c41b07e.7"})
+        await client.call_tool(READ, {"ref": "d-3f9a2c41b07e.7"})
 
     (_, first), (_, second, _) = backend.calls
     # The name the calls are made under is the configured one, whatever the program says.
@@ -454,9 +459,9 @@ async def test_backend_crash_gives_fixed_result_and_no_exception_text(
     with caplog.at_level(logging.DEBUG):
         async with connect(backend, mode) as client:
             results = [
-                await client.call_tool("wdva_status", {}),
-                await client.call_tool("wdva_search", {"query": "rent"}),
-                await client.call_tool("wdva_read", {"ref": "d-3f9a2c41b07e.7"}),
+                await client.call_tool(STATUS, {}),
+                await client.call_tool(SEARCH, {"query": "rent"}),
+                await client.call_tool(READ, {"ref": "d-3f9a2c41b07e.7"}),
             ]
 
     assert len(backend.calls) == 3
@@ -485,7 +490,7 @@ async def test_a_backend_answer_without_text_gives_the_fixed_result(
 ) -> None:
     backend.answer = answer
     async with connect(backend, "auto") as client:
-        result = await client.call_tool("wdva_read", {"ref": "d-3f9a2c41b07e.7"})
+        result = await client.call_tool(READ, {"ref": "d-3f9a2c41b07e.7"})
     assert not result.is_error
     assert only_text(result) == messages.unavailable()
 
@@ -541,7 +546,7 @@ def test_the_real_command_relays_to_a_listening_gate(short_store_dir: Path) -> N
             "status",
             Caller(
                 client=CLIENT,
-                claimed_name="wdva-gate-probe",
+                claimed_name=f"{SLUG}-probe",
                 claimed_version=__version__,
                 protocol=PROTOCOL["auto"],
                 transport="stdio",
@@ -581,7 +586,7 @@ def test_probe_reports_a_command_that_is_no_server() -> None:
     with pytest.raises(GateError, match="did not start"):
         probe_stdio([sys.executable, "-c", "raise SystemExit(3)"], timeout=30)
     with pytest.raises(GateError, match="did not start"):
-        probe_stdio(["/nonexistent/wdva-gate-program"], timeout=30)
+        probe_stdio([f"/nonexistent/{SLUG}-program"], timeout=30)
     with pytest.raises(ValueError, match="argv"):
         probe_stdio([])
 
@@ -670,14 +675,14 @@ def test_standard_output_carries_only_the_protocol(
         try:
             server = initialize(shim, version)
             listed = shim.send("tools/list")
-            read = shim.send("tools/call", {"name": "wdva_read", "arguments": {"ref": "d-1.1"}})
+            read = shim.send("tools/call", {"name": READ, "arguments": {"ref": "d-1.1"}})
             backend.answer = None
             backend.error = RuntimeError(f"failed with {MARKER}")
-            failed = shim.send("tools/call", {"name": "wdva_read", "arguments": {"ref": "d-1.1"}})
+            failed = shim.send("tools/call", {"name": READ, "arguments": {"ref": "d-1.1"}})
         finally:
             rest, errors, status = shim.close()
 
-    assert server["serverInfo"]["name"] == "wdva-gate"
+    assert server["serverInfo"]["name"] == SLUG
     assert server["instructions"] == messages.SERVER_INSTRUCTIONS
     assert tuple(tool["name"] for tool in listed["result"]["tools"]) == NAMES
     assert read["result"]["content"] == [{"type": "text", "text": f"OK: passage.\n| {MARKER}"}]
@@ -717,7 +722,7 @@ def test_the_command_ignores_code_in_the_working_directory(
     try:
         initialize(shim, "2025-06-18")
         listed = shim.send("tools/list")
-        status = shim.send("tools/call", {"name": "wdva_status", "arguments": {}})
+        status = shim.send("tools/call", {"name": STATUS, "arguments": {}})
     finally:
         rest, errors, exit_status = shim.close()
 

@@ -79,6 +79,7 @@ __all__ = [
     "head_without_key",
     "parse_time",
     "record_name",
+    "record_time",
     "utc_now",
 ]
 
@@ -132,6 +133,7 @@ _DOC_ID = re.compile(r"d-[0-9a-f]{12}")
 _NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
 _RESERVED = ("v", "seq", "prev", "time", "kind")
 _MAX_SEQ = 10**10 - 1
+_SECOND = timedelta(seconds=1)
 _UNSUPPORTED_FLUSH = frozenset({errno.EINVAL, errno.ENOTSUP, errno.ENOSYS, errno.EBADF})
 _STALE = (
     "the record files no longer match what this session wrote and verified; "
@@ -149,11 +151,37 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def format_time(when: datetime) -> str:
-    """A time as records carry it: UTC, whole seconds, ``2026-11-12T17:03:22Z``."""
+def record_time(when: datetime) -> datetime:
+    """``when`` as a record carries it: in UTC, rounded **up** to a whole second.
+
+    This is the one place where a time loses its fractions, and it never moves
+    a time back: a record is dated at or after the moment it describes, by
+    less than a second. The limits depend on that direction. They compare
+    record times with a clock that keeps its fractions, so a release that was
+    dated earlier than it happened would leave its window that much too soon.
+    Rounded up, it counts for the whole window and at most a second longer.
+    Rounding keeps the order of two times, and a whole second stays as it is.
+
+    Raises :class:`ValueError` for a time without a time zone and for one that
+    cannot be rounded up because it lies in the last second a date can express.
+    """
     if when.tzinfo is None or when.utcoffset() is None:
         raise ValueError("a record time needs a time zone")
-    return when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        utc = when.astimezone(timezone.utc)
+        if utc.microsecond:
+            utc = utc.replace(microsecond=0) + _SECOND
+    except OverflowError:
+        raise ValueError("a record time must be a date that can be written down") from None
+    return utc
+
+
+def format_time(when: datetime) -> str:
+    """A time as records carry it: UTC, whole seconds, ``2026-11-12T17:03:22Z``.
+
+    Fractions of a second are rounded up, see :func:`record_time`.
+    """
+    return record_time(when).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def parse_time(text: str) -> datetime:
@@ -200,6 +228,7 @@ class Record:
 
     ``data`` is the complete JSON object as it is sealed in the file, ``v``,
     ``seq``, ``prev``, ``time`` and ``kind`` included. Treat it as read-only.
+    ``time`` is the moment the record was made, rounded up to a whole second.
     ``sha256`` is the hash of the record's file, which the next record carries
     as its ``prev``.
     """
@@ -245,6 +274,11 @@ class Window:
     Answers how much falls inside a period that ends now. A release counts
     while its age is less than the period, and a release dated later than now
     counts in every period, so setting the clock back frees nothing.
+
+    The times are record times: the moment of the release rounded up to a
+    whole second (:func:`record_time`). Ask with the clock as it is, fractions
+    included. A release then counts for the whole period and for less than a
+    second more; no period ends early.
     """
 
     __slots__ = ("_chars", "_ordered", "_times", "_totals")
@@ -1008,7 +1042,9 @@ class Ledger:
         ``fields`` are the fields of the record's kind; ``v``, ``seq``,
         ``prev``, ``time`` and ``kind`` are filled in here, and so are
         ``policy_seq`` and ``documents`` of an ``unlock`` or ``lock`` record
-        that leaves them out. ``time`` defaults to the ledger's clock.
+        that leaves them out. ``time`` defaults to the ledger's clock; the
+        record carries it rounded up to a whole second (:func:`record_time`),
+        and that is the ``time`` of the record returned.
 
         The order: the whole chain is verified if it was not yet (a damaged
         record means nothing is appended); the record is checked against the

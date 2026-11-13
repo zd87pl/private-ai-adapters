@@ -16,6 +16,8 @@ from pathlib import Path
 import pytest
 
 import wdva.gate.app
+from wdva.gate import brand
+from wdva.gate.app import demo
 
 STATIC = Path(wdva.gate.app.__file__).resolve().parent / "static"
 
@@ -309,7 +311,7 @@ def test_scripts_import_only_each_other_and_all_are_used() -> None:
             r"""^(?:import|export)\b[^;"'`]*?\bfrom\s*["']([^"']+)["']\s*;""", code, re.M
         )
         specifiers += re.findall(r"""^import\s*["']([^"']+)["']""", code, re.M)
-        assert specifiers or name in ("dom.js", "format.js", "api.js"), f"{name} imports nothing"
+        assert specifiers or name in ("dom.js", "format.js", "brand.js"), f"{name} imports nothing"
         for specifier in specifiers:
             assert re.fullmatch(r"\./[a-z0-9-]+\.js", specifier), f"{name} imports {specifier!r}"
             waiting.append(specifier[2:])
@@ -525,6 +527,109 @@ def test_a_release_cannot_be_pressed_through() -> None:
     assert second[0] == "Release once"
     assert "kind:" not in first[1]
     assert "kind:" not in second[1]
+
+
+# -- the name, the demo's passphrase, and what the page cannot know -----------------
+
+
+def test_the_name_is_written_in_no_file_of_the_interface() -> None:
+    # The server puts the name into the page; brand.js reads it there; everything
+    # else imports it from brand.js. So no file may spell it out, in any form.
+    forms = [brand.PRODUCT, brand.SLUG, f"{brand.TOOL_PREFIX}_", brand.SLUG.replace("-", "_")]
+    for path in sorted(STATIC.iterdir()):
+        text = read(path)
+        for form in forms:
+            assert form not in text, f"{path.name} spells out the name: {form!r}"
+    page = read(STATIC / "index.html")
+    assert "<title>{{product}}</title>" in page
+    assert '<meta name="application-name" content="{{product}}">' in page
+    assert '<p class="boot-name">{{product}}</p>' in page
+    assert re.search(r"<noscript>\s*<p[^>]*>\{\{product\}\} needs JavaScript", page)
+    source = without_comments(scripts()["brand.js"])
+    assert 'meta[name="application-name"]' in source
+    assert re.search(r"export const PRODUCT\b", source)
+    assert "import" not in source, "the one module every other may import imports nothing"
+    # Whoever shows the name got it from there.
+    for name, script in scripts().items():
+        code = without_comments(script)
+        if name != "brand.js" and re.search(r"\bPRODUCT\b", code):
+            assert 'import { PRODUCT } from "./brand.js";' in code, name
+
+
+def test_the_demo_passphrase_is_shown_only_as_the_app_sent_it() -> None:
+    everything = "\n".join(scripts().values())
+    assert demo.DEMO_PASSPHRASE not in everything, "a script holds the demo's passphrase itself"
+    parts = without_comments(scripts()["parts.js"])
+    start = parts.index("export function demoPassphraseNote(passphrase, fill) {")
+    note = parts[start : parts.index("\n}\n", start)]
+    # Nothing is shown unless the app sent a passphrase, which it does for the demo alone.
+    assert 'if (typeof passphrase !== "string" || !passphrase) return null;' in note
+    assert "This is the demo." in note
+    assert "The passphrase of a real vault is never shown." in note
+    assert 'button("Fill it in"' in note
+    uses = {
+        name: re.findall(r"demoPassphraseNote\(([^,]+),", without_comments(script))
+        for name, script in scripts().items()
+        if name != "parts.js"
+    }
+    assert {name: found for name, found in uses.items() if found} == {
+        "gateway.js": ["state.demo_passphrase"],
+        "sheets.js": ["demoPassphrase"],
+    }
+    main = without_comments(scripts()["main.js"])
+    assert "requestReauth(ctx.state ? ctx.state.demo_passphrase : null)" in main
+    # It reaches the page through the state and no other way.
+    for name, script in scripts().items():
+        for use in re.findall(r"[\w.]*demo_passphrase", without_comments(script)):
+            assert use in ("state.demo_passphrase", "ctx.state.demo_passphrase"), (name, use)
+
+
+def test_the_page_says_only_what_it_knows_about_the_files_the_owner_chose() -> None:
+    shown = "\n".join(shown_texts().values())
+    for claim in (
+        r"originals? kept",
+        r"original stays",
+        r"originals? (?:is|are) (?:safe|deleted|removed|gone)",
+        r"you can (?:now )?delete (?:the|your) (?:file|original)",
+    ):
+        assert re.search(claim, shown, re.I) is None, f"the page claims: {claim}"
+    manage = without_comments(scripts()["manage.js"])
+    assert "The file you chose is still where it was, not encrypted." in manage
+    assert "The files you chose are still where they were, not encrypted." in manage
+    assert manage.count("Removing or moving") == 2  # one sentence for one file, one for several
+    # Said once per list of added files, not once per file.
+    assert manage.count("leftOutsideText(sealedCount(state))") == 1
+    assert 'fact("Copies of the files you added"' in manage
+
+
+def test_a_question_is_not_shown_as_a_release() -> None:
+    parts = without_comments(scripts()["parts.js"])
+    start = parts.index("export function statusChip(item) {")
+    chip = parts[start : parts.index("\n}\n", start)]
+    assert 'if (item.kind === "question") return chip("Question", "outline"' in chip
+    released = chip[chip.index('item.kind === "release"') : chip.index('item.kind === "question"')]
+    assert '"Released"' in released
+    assert "question" not in released
+    views = without_comments(scripts()["views.js"])
+    assert '{ value: "question", label: "Questions" }' in views
+    assert 'item.kind === "question" ? note("plain", QUESTION_TEXT) : null' in views
+    assert "No document text was released." in views
+    # The figures for what was released do not take the questions in.
+    assert 'stat(num(today.releases), today.releases === 1 ? "release" : "releases")' in views
+    assert "today.questions > 0" in views
+
+
+def test_a_new_vault_is_told_what_to_do_next_in_order() -> None:
+    views = without_comments(scripts()["views.js"])
+    start = views.index("function startCard(ctx) {")
+    card = views[start : views.index("\n}\n", start)]
+    titles = re.findall(r'title: "([^"]+)"', card)
+    assert titles == ["Add documents", "Add an app", "Give the app a collection", "Connect the app"]
+    assert "if (!data || ctx.state.demo) return null;" in card, "the demo starts with it all done"
+    assert "const next = steps.findIndex((step) => !step.done);" in card
+    assert "if (next < 0) return null;" in card
+    # Only the next step offers its action, so the order is the order they are done in.
+    assert card.count('index === next ? el("a"') == 1
 
 
 # -- what the interface says ------------------------------------------------------

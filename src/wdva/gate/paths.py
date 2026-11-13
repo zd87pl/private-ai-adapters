@@ -15,6 +15,7 @@ import os
 import sys
 from pathlib import Path
 
+from wdva.gate import brand
 from wdva.gate.errors import GateError
 
 __all__ = [
@@ -35,7 +36,8 @@ __all__ = [
 ENV_STORE = "WDVA_GATE_STORE"
 """The environment variable that names the store when no ``--store`` is given."""
 
-STORE_DIR_NAME = "wdva-gate"
+STORE_DIR_NAME = brand.SLUG
+"""The name of the per-user store directory."""
 
 SOCKET_PATH_LIMIT = 100
 """The longest socket path, in bytes, that every supported system accepts."""
@@ -61,9 +63,9 @@ def _absolute(path: str | os.PathLike[str]) -> Path:
 def default_store() -> Path:
     """The per-user store directory.
 
-    On macOS ``~/Library/Application Support/wdva-gate``. Elsewhere
-    ``$XDG_DATA_HOME/wdva-gate`` when that variable holds an absolute path, and
-    ``~/.local/share/wdva-gate`` otherwise.
+    A directory named :data:`STORE_DIR_NAME`: on macOS in
+    ``~/Library/Application Support``, elsewhere in ``$XDG_DATA_HOME`` when that
+    variable holds an absolute path, and in ``~/.local/share`` otherwise.
     """
     home = Path.home()
     if sys.platform == "darwin":

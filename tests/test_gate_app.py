@@ -21,7 +21,7 @@ from urllib.parse import quote
 import pytest
 
 from wdva._version import __version__
-from wdva.gate import messages
+from wdva.gate import brand, messages
 from wdva.gate.app import demo, main
 from wdva.gate.app.api import ServiceError
 from wdva.gate.app.demo import DemoAgent, make_demo_store
@@ -33,6 +33,9 @@ from wdva.gate.policy import Policy
 from wdva.gate.types import Caller
 
 from . import gate_support as gs
+
+# The product's name comes from one place; the tests take it from there too.
+PRODUCT, SLUG = brand.PRODUCT, brand.SLUG
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32", reason="the gate does not run on Windows yet"
@@ -172,7 +175,7 @@ def test_the_whole_app_over_http_and_the_socket(app: App) -> None:
 
     # An agent application calls, through the program it starts and the vault's socket.
     agent = RemoteGate(store, "claude-desktop")
-    assert agent.ping()["app"] == "WDVA Gate"
+    assert agent.ping()["app"] == PRODUCT
     status_reply = agent.status(CLAUDE)
     assert status_reply.code == "OK"
     assert "home (search with snippets" in status_reply.text
@@ -209,9 +212,12 @@ def test_the_whole_app_over_http_and_the_socket(app: App) -> None:
         "residential lease agreement landlord",
     )
     released = browser.ok("GET", "/api/activity?kind=release&app=claude-desktop")["items"]
-    assert len(released) == 4
+    assert [item["tool"] for item in released] == ["search", "read", "search"]
+    # What the app asked about itself is listed apart: it released no text.
+    (question,) = browser.ok("GET", "/api/activity?kind=question")["items"]
+    assert (question["tool"], question["characters"]) == ("status", 0)
     today = browser.ok("GET", "/api/state")["today"]
-    assert today["releases"] == 3
+    assert (today["releases"], today["questions"]) == (3, 1)
     assert today["characters"] == sum(i["characters"] for i in released)
     usage = browser.ok("GET", "/api/apps")["apps"][0]["usage"]
     assert usage["chars_day"] == today["characters"]
@@ -333,7 +339,7 @@ def test_calls_over_the_socket_while_the_vault_is_locked_and_unlocked(app: App) 
 @pytest.fixture
 def demo_service(short_store_dir: Path) -> Iterator[GateService]:
     passphrase = make_demo_store(short_store_dir, scrypt_n=gs.FAST_SCRYPT)
-    service = GateService(short_store_dir, demo=True)
+    service = GateService(short_store_dir, demo=True, demo_passphrase=passphrase)
     service.unlock(passphrase=passphrase)
     yield service
     service.close()
@@ -398,14 +404,17 @@ def test_the_demo_store(demo_service: GateService, short_store_dir: Path) -> Non
     policy: Policy = session.gate.policy()
     assert not [name for name in policy.clients if policy.effective_grant(name, "medical")]
 
-    # Every passphrase is drawn anew and opens only its own store.
+    # The demo's passphrase is fixed and shown, so that nobody is locked out of a demo.
     other = short_store_dir.parent / "other"
-    second = make_demo_store(other, scrypt_n=gs.FAST_SCRYPT)
-    assert len(second) >= 24
-    demo_service.lock()
+    assert make_demo_store(other, scrypt_n=gs.FAST_SCRYPT) == demo.DEMO_PASSPHRASE
+    assert len(demo.DEMO_PASSPHRASE) >= 12
+    assert state["demo_passphrase"] == demo.DEMO_PASSPHRASE
+    locked = demo_service.lock()
+    assert (locked["locked"], locked["demo_passphrase"]) == (True, demo.DEMO_PASSPHRASE)
     with pytest.raises(ServiceError) as caught:
-        demo_service.unlock(passphrase=second)
+        demo_service.unlock(passphrase="not-the-demo-passphrase")
     assert caught.value.code == "wrong_passphrase"
+    assert demo_service.unlock(passphrase=locked["demo_passphrase"])["locked"] is False
 
 
 def play(agent: DemoAgent, limit: int = 40) -> None:
@@ -584,6 +593,47 @@ def test_the_demo_agent_runs_as_a_thread(demo_service: GateService) -> None:
     assert not agent.is_alive()
 
 
+def test_the_demo_agent_waits_while_the_vault_is_locked(
+    demo_service: GateService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Told whether the vault is unlocked, the agent does not play its story to a locked
+    # vault: it makes no call until the owner has unlocked again, then goes on.
+    monkeypatch.setattr(demo, "_LOCKED_WAIT", 0.005)
+    demo_service.lock()
+    agent = DemoAgent(
+        demo_service.backend,
+        pause=(0.005, 0.01),
+        idle_seconds=0.03,
+        retry_seconds=0.01,
+        ready=lambda: demo_service.unlocked,
+    )
+    agent.start()
+    try:
+        time.sleep(0.3)
+        assert agent.calls == []
+        assert agent.scripted
+        assert agent.is_alive()
+        demo_service.unlock(passphrase=demo.DEMO_PASSPHRASE)
+        deadline = time.monotonic() + 60
+        while agent.scripted and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert not agent.scripted
+        assert "LOCKED" not in {call.code for call in agent.calls}
+        # The whole story was played: the passage that waits is there for the owner.
+        while not demo_service.approvals()["waiting"] and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert len(demo_service.approvals()["waiting"]) == 1
+        # Locked again, it falls silent again.
+        demo_service.lock()
+        time.sleep(0.1)
+        asked = len(agent.calls)
+        time.sleep(0.3)
+        assert len(agent.calls) == asked
+    finally:
+        agent.stop()
+    assert not agent.is_alive()
+
+
 # -- the command -----------------------------------------------------------------------------
 
 
@@ -624,12 +674,17 @@ def finish(process: subprocess.Popen[str], sent: int | None = None) -> tuple[int
 def test_the_command_runs_the_demo_and_removes_its_store() -> None:
     process = start_command("--demo", "--no-browser", "--port", "0")
     try:
-        lines = first_lines(process, 4)
-        assert lines[0] == f"WDVA Gate {__version__}"
+        lines = first_lines(process, 5)
+        assert lines[0] == f"{PRODUCT} {__version__}"
         assert lines[1] == "store: a temporary demo store with invented documents"
         opened = OPEN_LINE.fullmatch(lines[2])
         assert opened is not None, lines
-        assert lines[3] == "Ctrl-C locks the vault and quits."
+        # The demo's passphrase is printed, because nobody could know it otherwise.
+        assert lines[3] == (
+            f"demo passphrase: {demo.DEMO_PASSPHRASE}   "
+            "(the page shows it too; the passphrase of a real vault is never shown)"
+        )
+        assert lines[4] == "Ctrl-C locks the vault and quits."
 
         # No pairing in the demo: the page itself gives the session.
         browser = Browser(int(opened.group(1)))
@@ -647,8 +702,16 @@ def test_the_command_runs_the_demo_and_removes_its_store() -> None:
             "pairing": "none",
             "demo": True,
             "version": __version__,
+            "name": PRODUCT,
         }
         assert len(browser.ok("GET", "/api/apps")["apps"]) == 3
+        # The page is told the passphrase too, so "Lock now" is not the end of a demo.
+        assert state["demo_passphrase"] == demo.DEMO_PASSPHRASE
+        locked = browser.ok("POST", "/api/lock", {})
+        assert (locked["locked"], locked["demo_passphrase"]) == (True, demo.DEMO_PASSPHRASE)
+        again = browser.ok("POST", "/api/unlock", {"passphrase": locked["demo_passphrase"]})
+        assert again["locked"] is False
+        browser.ok("POST", "/api/reauth", {"passphrase": demo.DEMO_PASSPHRASE})
     except BaseException:
         process.kill()
         raise
@@ -663,7 +726,7 @@ def test_the_command_prints_the_pairing_code_and_ctrl_c_locks_the_vault(
     process = start_command("--no-browser", "--store", str(short_store_dir), "--lock-after", "1")
     try:
         lines = first_lines(process, 5)
-        assert lines[0] == f"WDVA Gate {__version__}"
+        assert lines[0] == f"{PRODUCT} {__version__}"
         assert lines[1] == f"store: {short_store_dir}"
         opened = OPEN_LINE.fullmatch(lines[2])
         paired = PAIRING_LINE.fullmatch(lines[3])
@@ -676,8 +739,16 @@ def test_the_command_prints_the_pairing_code_and_ctrl_c_locks_the_vault(
         assert (status, browser.cookie) == (200, None)  # the page alone gives no session
         assert browser.error("GET", "/api/state") == (401, "pairing_required")
         browser.ok("POST", "/api/session/pair", {"code": paired.group(1).lower()})
+        before = browser.ok("GET", "/api/state")
         state = browser.ok("POST", "/api/store/create", {"passphrase": gs.PASSPHRASE})
         assert state["locked"] is False
+        # A real vault's passphrase is never sent back and never printed.
+        locked = browser.ok("POST", "/api/lock", {})
+        for answer in (before, state, locked, browser.ok("GET", "/api/session")):
+            assert "demo_passphrase" not in answer
+            assert "passphrase" not in json.dumps(answer)
+        assert not [line for line in lines if "passphrase" in line]
+        state = browser.ok("POST", "/api/unlock", {"passphrase": gs.PASSPHRASE})
         # One hour, as the command line said.
         assert state["locks_at"][11:13] == f"{(int(state['unlocked_at'][11:13]) + 1) % 24:02d}"
     except BaseException:
@@ -685,6 +756,7 @@ def test_the_command_prints_the_pairing_code_and_ctrl_c_locks_the_vault(
         raise
     code, out, err = finish(process, signal.SIGINT)
     assert (code, out, err) == (0, "", "")
+    assert gs.PASSPHRASE not in "".join(lines)
     # The vault was locked on the way out, and the record says how.
     assert not (short_store_dir / "run" / "gate.sock").exists()
     store = gs.reopen(short_store_dir)

@@ -33,6 +33,7 @@ from wdva.gate.ledger import (
     head_without_key,
     parse_time,
     record_name,
+    record_time,
 )
 from wdva.gate.store import Store
 
@@ -1107,6 +1108,43 @@ def test_windows_count_by_age(store: Store) -> None:
     assert len(window) == 3
 
 
+@pytest.mark.parametrize("microseconds", [1, 250_000, 999_999])
+def test_a_release_counts_for_its_whole_window_whatever_fraction_the_clock_had(
+    path: Path, gate_clock: Any, microseconds: int
+) -> None:
+    # A clock with fractions: the record keeps whole seconds, the question does not.
+    made = at(10) + timedelta(microseconds=microseconds)
+    tick = timedelta(microseconds=1)
+    second = timedelta(seconds=1)
+    with support.make_store(path, clock=gate_clock) as store:
+        record = store.ledger.append(
+            "release",
+            release_fields("claude-desktop", 1, "x" * 100, tool=gate_ledger.SEARCH_TOOL),
+            time=made,
+        )
+        # Dated at or after the moment it was made, by less than a second.
+        assert made <= record.time < made + second
+        assert record.time.microsecond == 0
+
+        def check(state: LedgerState) -> None:
+            client = state.client("claude-desktop")
+            for window in (client.releases, state.pool("hosted")):
+                for period in (DAY, MONTH):
+                    # Until the release is as old as the period it counts in full ...
+                    assert window.used(made, period) == 100
+                    assert window.used(made + period - tick, period) == 100
+                    assert window.count(made + period - tick, period) == 1
+                    # ... and no more than a second later it counts no longer.
+                    assert window.used(made + period + second, period) == 0
+                    assert window.count(made + period + second, period) == 0
+            assert client.searches.count(made + DAY - tick, DAY) == 1
+            assert client.searches.count(made + DAY + second, DAY) == 0
+
+        check(store.ledger.replay())
+    with support.reopen(path) as opened:  # and the same when it is read from the files
+        check(opened.ledger.replay())
+
+
 def test_window_agrees_with_a_plain_sum() -> None:
     rng = random.Random(20261112)  # noqa: S311 - a repeatable sweep, not a secret
     for ordered in (True, False):
@@ -1250,14 +1288,34 @@ def test_state_after_appends_equals_a_fresh_replay(
 # ---------------------------------------------------------------------------
 
 
-def test_record_times_are_utc_seconds(store: Store) -> None:
-    moment = datetime(2026, 3, 4, 5, 6, 7, 999999, tzinfo=timezone.utc)
-    assert format_time(moment) == "2026-03-04T05:06:07Z"
-    assert parse_time("2026-03-04T05:06:07Z") == moment.replace(microsecond=0)
+def test_record_times_are_utc_seconds_rounded_up(store: Store) -> None:
+    whole = datetime(2026, 3, 4, 5, 6, 7, tzinfo=timezone.utc)
+    second = timedelta(seconds=1)
+    assert format_time(whole) == "2026-03-04T05:06:07Z"
+    assert parse_time("2026-03-04T05:06:07Z") == whole
+    assert record_time(whole) == whole  # a whole second stays where it is
+    # Fractions are rounded up, never down: a record is not dated before its moment.
+    for microseconds in (1, 5, 500_000, 999_999):
+        moment = whole + timedelta(microseconds=microseconds)
+        assert record_time(moment) == whole + second
+        assert format_time(moment) == "2026-03-04T05:06:08Z"
+        assert moment <= parse_time(format_time(moment)) < moment + second
+    assert format_time(whole.replace(hour=23, minute=59, second=59, microsecond=1)) == (
+        "2026-03-05T00:00:00Z"
+    )
+    # Rounding keeps the order of two times, and rounding twice changes nothing.
+    earlier, later = whole + timedelta(microseconds=1), whole + timedelta(microseconds=2)
+    assert record_time(earlier) <= record_time(later)
+    assert record_time(record_time(later)) == record_time(later)
     eastern = timezone(timedelta(hours=-5))
     assert format_time(datetime(2026, 3, 4, 0, 6, 7, tzinfo=eastern)) == "2026-03-04T05:06:07Z"
-    with pytest.raises(ValueError, match="time zone"):
-        format_time(datetime(2026, 3, 4, 5, 6, 7))
+    assert record_time(datetime(2026, 3, 4, 0, 6, 7, 5, tzinfo=eastern)) == whole + second
+    assert record_time(datetime(2026, 3, 4, 0, 6, 7, tzinfo=eastern)).tzinfo is timezone.utc
+    for function in (format_time, record_time):
+        with pytest.raises(ValueError, match="time zone"):
+            function(datetime(2026, 3, 4, 5, 6, 7))
+        with pytest.raises(ValueError, match="written down"):  # nothing to round up to
+            function(datetime.max.replace(tzinfo=timezone.utc))
     for text in (
         "2026-03-04 05:06:07Z",
         "2026-03-04T05:06:07",
@@ -1276,7 +1334,16 @@ def test_record_times_are_utc_seconds(store: Store) -> None:
         {"client": "claude-desktop"},
         time=datetime(2026, 3, 4, 0, 6, 7, 5, tzinfo=eastern),
     )
-    assert record.time == moment.replace(microsecond=0)
-    assert record.data["time"] == "2026-03-04T05:06:07Z"
+    assert record.time == whole + second
+    assert record.data["time"] == "2026-03-04T05:06:08Z"
     assert store.ledger.replay().statuses["claude-desktop"] == record.time
+    assert store.ledger.read(record.seq).time == record.time
+    # A time that cannot be written is a record that is not written, said as a LedgerError.
+    with pytest.raises(LedgerError, match="was not written"):
+        store.ledger.append(
+            "status",
+            {"client": "claude-desktop"},
+            time=datetime.max.replace(tzinfo=timezone.utc),
+        )
+    assert store.ledger.head() == record.head
     assert gate_ledger.utc_now().tzinfo is timezone.utc
