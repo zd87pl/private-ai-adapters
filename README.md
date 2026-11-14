@@ -134,12 +134,12 @@ local model can search the vault and read single passages inside limits you set,
 exact text of everything that left. It is not a wall: text that was released to a hosted AI app
 is with that app's provider, and nothing can recall it.
 
-![The Basic page of an unlocked vault: the headline "Nothing is waiting for you", the rows under "What left the vault", and under "Documents" and "Apps" one app that is set to "Ask me each time"](docs/images/gate-basic.png)
+![Home of an unlocked vault, as it looked when it was one page called Basic: the headline "Nothing is waiting for you", the rows under "What left the vault", and under "Documents" and "Apps" one app that is set to "Ask me each time"](docs/images/gate-basic.png)
 
-You use it in your browser, on a page that has two views of the same vault. **Basic** is one page
-with what you use every day: what waits for your approval, what left the vault, your documents
-and your apps. **Pro** is six pages with every setting. A new vault opens in Basic, after a first
-run in four steps, "Passphrase", "App", "Documents" and "First question": you choose a
+You use it in your browser. The page opens on **Home**: what waits for your approval, what left
+the vault, and your apps. **Documents**, **Activity** and **Settings** are beside it in a
+sidebar, and under Settings are six pages with every setting. A new vault opens on Home, after a
+first run in four steps, "Passphrase", "App", "Documents" and "First question": you choose a
 passphrase, say which AI app you use, add a document, and ask that app a first question.
 
 Try the demo. It runs on invented documents and plays an AI app against them, and a guide on its

@@ -13,14 +13,35 @@ export const TEXT = Object.freeze({
   "common.lang.pl": "Polski",
   "common.chip.demo": "Demo",
   "common.button.cancel": "Cancel",
+  "common.button.copy": "Copy",
+  "common.button.copied": "Copied",
   "common.button.remove": "Remove",
+  "common.button.more": "Show more",
+  "common.status.loading": "Loading…",
   "common.status.justnow": "just now",
+  "common.error.copy": "Copying is not allowed here; select the text and copy it yourself.",
   "common.error.unknown": "Something went wrong.",
   "common.error.cancelled": "Nothing was changed.",
   "common.error.busy": "The vault is open in another program; lock it there first.",
   "common.error.unavailable": "The vault cannot answer right now.",
+
+  // The frame of the open vault: the four entries, and the lock
+  "nav.label": "Sections",
+  "nav.home": "Home",
+  "nav.documents": "Documents",
+  "nav.activity": "Activity",
+  "nav.settings": "Settings",
+  "nav.count.waiting": {
+    one: "{n} waiting",
+    other: "{n} waiting",
+  },
+  "nav.status.until": "Unlocked until {time}",
+  "nav.status.open": "Unlocked",
+  "nav.status.unknown": "State unknown",
+  "nav.button.lock": "Lock now",
   "nav.result.locked": "The vault is locked.",
   "nav.tab.locked": "{product} – locked",
+  "pro.button.home": "← Home",
 
   // Pairing, and a page without a session
   "pair.title": "Pair this browser",
@@ -56,6 +77,10 @@ export const TEXT = Object.freeze({
   "create.button.busy": "Creating the vault…",
   "create.status.where": "It will be created at {path}",
 
+  // Home
+  "home.left.status.none": "Nothing has left yet.",
+  "home.button.how": "How it works and what it cannot do",
+
   // The approval card
   "card.title": "{app} asks for a passage of “{title}”",
   "card.chip.hosted": "Would be sent to {destination}",
@@ -87,8 +112,17 @@ export const TEXT = Object.freeze({
   "card.result.no": "Not released. If {app} asks again, the passage comes back here.",
   "card.result.changed": "The text changed since it was shown, so nothing was released. Read it again.",
 
-  // The zone that takes files, and its lines
+  // Documents: the page, the zone that takes files and its lines
+  "docs.title": "Documents",
+  "docs.status.count": {
+    one: "{n} document",
+    other: "{n} documents",
+  },
+  "docs.status.none": "No documents yet.",
   "docs.say.1": "A sealed copy goes into the vault, and the file you add stays where it was, not encrypted.",
+  "docs.say.2": "Text that {app} receives from your documents is sent to {destination} and cannot be recalled.",
+  "docs.say.2.general": "Text that an app receives from your documents is sent to the company behind the app and cannot be recalled.",
+  "docs.say.2.local": "{product} cannot check that {app} is local, and if it uses a cloud model, text it receives leaves this computer.",
   "docs.button.add": "Add documents",
   "docs.label.drop": "Drop files here",
   "docs.label.dropnow": "Drop to add",
@@ -103,6 +137,14 @@ export const TEXT = Object.freeze({
   "docs.result.nobody": "No app can ask for it yet.",
   "docs.error.type": "Not added: only PDF and text files can be read. Save a Word file as PDF and add that.",
   "docs.error.pdf": "Not added: this installation cannot read PDFs.",
+  "docs.label.install": "The command that adds PDF reading",
+  "docs.error.scan": "Not added: this PDF holds pictures of pages, not text.",
+  "docs.error.password": "Not added: this PDF is protected with a password.",
+  "docs.error.encoding": "Not added: this is not a text file in UTF-8.",
+  "docs.error.notext": "Not added: the file holds no text.",
+  "docs.error.unreadable": "Not added: this PDF cannot be read.",
+  "docs.error.toomuch": "Not added: this PDF holds more text than can be taken in.",
+  "docs.error.slow": "Not added: reading this PDF took too long and was stopped.",
   "docs.error.large": "Not added: larger than {size}.",
   "docs.error.empty": "Not added: the file is empty.",
   "docs.error.duplicate": "Not added: this document is already in the vault.",
@@ -114,12 +156,65 @@ export const TEXT = Object.freeze({
   },
   "docs.result.mixed": "{added} added, {failed} not added.",
   "docs.result.noneadded": "No document was added.",
+  "docs.status.row": {
+    one: "{n} passage · added {date}",
+    other: "{n} passages · added {date}",
+  },
+  "docs.label.remove": "Remove {title}",
+  "docs.status.sample": "One of them is the invented sample document.",
+  "docs.button.sample.remove": "Remove it",
+
+  // The sheet that asks which group files go to
+  "group.title": "Add to which group?",
+  "group.status.files": {
+    one: "{n} file: {names}",
+    other: "{n} files: {names}",
+  },
+  "group.status.more": "and {n} more",
+  "group.status.nobody": "No app can ask for what is in it.",
+  "group.button.add": "Add",
 
   // The sheet that asks before a document is removed
   "remove.title": "Remove “{title}”?",
   "remove.say.1": "Apps can no longer search or read it, and what was released earlier stays under Activity.",
   "remove.say.2": "Its files are deleted, not shredded, and backups keep what they have.",
   "remove.result.done": "Removed “{title}”.",
+
+  // Activity: the page and its rows
+  "activity.title": "Activity",
+  "activity.label.filter": "What to show",
+  "activity.label.left": "Given to apps",
+  "activity.label.stopped": "Stopped",
+  "activity.say.1": "Press a row to see the exact text that left.",
+  "activity.status.none.stopped": "Nothing was stopped.",
+  "activity.status.end": "That is everything.",
+  "activity.button.full": "Full record (in English)",
+  "row.read": "{app} read passage {passage} of “{title}”",
+  "row.read.plain": "{app} read a passage",
+  "row.search": {
+    one: "{app} searched your documents: {n} result",
+    other: "{app} searched your documents: {n} results",
+  },
+  "row.search.none": "{app} searched your documents: nothing found",
+  "row.search.plain": "{app} searched your documents",
+  "row.chip.approved": "After your yes",
+  "row.status.chars": {
+    one: "{n} character",
+    other: "{n} characters",
+  },
+  "row.label.open": "Open the details",
+  "row.stop.client-day": "{app} was stopped by its limit for 24 hours",
+  "row.stop.client-30-days": "{app} was stopped by its limit for 30 days",
+  "row.stop.shared": "{app} was stopped by a limit that apps of its kind share",
+  "row.stop.searches": "{app} was stopped by its limit of searches in 24 hours",
+  "row.stop.calls": "{app} made too many calls in a minute and has to wait",
+  "row.stop.NEEDS_APPROVAL": "{app} asked for a passage that waits for you",
+  "row.stop.NOT_FOUND": "{app} asked for something that is not there for it",
+  "row.stop.BAD_REQUEST": "A request of {app} could not be read",
+  "row.stop.UNAVAILABLE": "The vault could not answer {app} at that moment",
+  "row.stop.unanswered": "A call under a name that is not answered here got nothing",
+  "row.stop.other": "{app} was refused",
+  "row.status.times": "×{n}",
 
   // The details of an entry
   "panel.label.close": "Close the details",
@@ -128,8 +223,30 @@ export const TEXT = Object.freeze({
   "panel.say.2": "{product} cannot take it back.",
   "panel.say.1.local": "This text is with the app now, and stays on this computer only if the app really is local.",
   "panel.label.query": "What it searched for",
+  "panel.status.nothing": "Nothing was released.",
+  "panel.status.count": {
+    one: "This entry stands for {n} call.",
+    other: "This entry stands for {n} calls that were answered the same way.",
+  },
   "panel.button.record": "Record details",
   "panel.label.entry": "Entry #{seq}",
+
+  // Settings
+  "settings.title": "Settings",
+  "settings.label.start": "Open on",
+  "settings.label.start.home": "Home",
+  "settings.label.start.all": "All settings",
+  "settings.all.title": "All settings",
+  "settings.say.1": "These six pages have every setting, and they are in English for now.",
+  "settings.label.overview": "Overview",
+  "settings.label.activity": "Activity, entry by entry",
+  "settings.label.approvals": "Approvals",
+  "settings.label.documents": "Documents and groups",
+  "settings.label.apps": "Apps and limits",
+  "settings.label.vault": "Vault: limits, words to replace, the record",
+  "settings.say.2": "To open {product} again after you quit it, run this in a terminal:",
+  "settings.status.version": "Version {version}",
+  "settings.status.vault": "Vault: {path}",
 
   // The sheet that asks for the passphrase again, and the demo's note
   "reauth.title": "Enter your passphrase again",
@@ -159,13 +276,31 @@ export const TEXT = Object.freeze({
   "locked.label.size": "Size",
   "locked.label.last": "Last entry",
 
-  // The app does not answer
+  // The app does not answer: the screen, and the bar over an open page
   "offline.title": "{product} is not answering",
   "offline.say.1": "Start {product} again in a terminal, then open the address it prints.",
   "offline.say.2": "When {product} stops, the vault is locked.",
   "offline.button.try": "Try now",
+  "bar.say.1": "{product} is not answering, so what you see may be out of date.",
+  "bar.say.2": "To start {product} again, run this in a terminal:",
+  "bar.label.command": "The command that starts it again",
+  "bar.status.load": "This page could not be brought up to date; trying again.",
 
-  // What the product cannot do
+  // How it works and what it cannot do
+  "how.title": "How it works and what it cannot do",
+  "how.works.title": "How it works",
+  "how.works.1": "{product} keeps a sealed copy of each document you add, in a vault that only your passphrase opens.",
+  "how.works.2": "An AI app on this computer can search the vault and ask for one passage at a time.",
+  "how.works.3": "A search tells the app which passages hold its words, not what they say.",
+  "how.works.4": "Each passage waits until you press “Release once”; you see its exact text first.",
+  "how.works.5": "After a release the app gets the passage when it asks again; tell it “try again” if it does not ask by itself.",
+  "how.works.6": "Everything that left is in the record, with its exact text; the page Activity shows it.",
+  "how.works.7": "Limits bound how much an app can get in a day and in 30 days; they are in Settings.",
+  "how.files.title": "Your files",
+  "how.files.1": "The file you add stays where it was, not encrypted; an AI app that can read that folder reads it there without asking {product}.",
+  "how.files.2": "{product} cannot remove or move that file for you, and it cannot hand a file back out of the vault.",
+  "how.files.3": "Kept beside the vault, not sealed: your language, the start page, whether the first steps are done.",
+  "how.cannot.title": "What {product} cannot do",
   "how.cannot.1": "Take text back. What an app received is with that app and, for an app that sends text to a provider, with that provider.",
   "how.cannot.2": "Tell who is calling. App names are labels: any program running as you can call under a name that is answered.",
   "how.cannot.3": "Notice instructions hidden in a document. Limits bound what can be lost; one released passage is enough to leak that passage.",
@@ -174,5 +309,9 @@ export const TEXT = Object.freeze({
   "how.cannot.6": "Protect your passphrase from other programs running as you, or bring back a lost one.",
   "how.cannot.7": "Prove anything with its record. It is a log of what was released; whoever can delete files can roll it back.",
   "how.cannot.8": "Shred. Removing a document deletes files, and backups keep what they have.",
+  "how.locked.title": "A locked vault",
+  "how.locked.1": "While locked, apps get one answer: the vault is locked.",
+  "how.locked.2": "The number and sizes of the sealed files are visible without the key, and what is in them is not.",
   "how.version": "{product} {version} · a preview: it has not yet been tried against the AI apps it lists, and it does not run on Windows.",
+  "how.button.back": "← Home",
 });

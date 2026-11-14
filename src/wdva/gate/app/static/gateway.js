@@ -10,13 +10,28 @@
 // language. The three steps keep their own English texts.
 
 import { api } from "./api.js";
-import { ASK_START, FIRST_GROUP, basicBars, copyButton, copyLine, launchBlock, setupDone, setupFacts, waitingSaid } from "./basic.js";
+import { ASK_START, FIRST_GROUP, launchBlock, setupDone, setupFacts, waitingSaid } from "./basic.js";
 import { PRODUCT } from "./brand.js";
 import { el, icon } from "./dom.js";
 import { at, bytes, count, num, parseTime, when } from "./format.js";
 import { SAMPLE, dropZone, isSample, loadingBlock, sessionFiles, whoLine } from "./manage.js";
-import { UNANSWERED, activityRow, button, chip, demoPassphraseNote, errorText, field, languageSwitch, note, pathText, toast } from "./parts.js";
-import { GENERAL_SENTENCE, appFormProblem, basicGrantSentence, connectSub, loadConnect, otherAppFields } from "./sheets.js";
+import {
+  UNANSWERED,
+  activityRow,
+  button,
+  chip,
+  copyButton,
+  copyLine,
+  demoPassphraseNote,
+  errorText,
+  field,
+  languageSwitch,
+  note,
+  pathText,
+  problemBar,
+  toast,
+} from "./parts.js";
+import { appFormProblem, basicGrantSentence, connectSub, generalSentence, loadConnect, otherAppFields } from "./sheets.js";
 import { chosenLanguage, t } from "./texts.js";
 import { approvalCards } from "./views.js";
 
@@ -213,8 +228,8 @@ async function unlock(ctx) {
     form.passphrase = "";
     form.busy = false;
     form.waited = 0;
-    // Unlocked here, a vault whose view is Basic opens on the Basic page, whatever the address named.
-    if (state.interface && state.interface.view === "basic") ctx.navigate("basic");
+    // Unlocked here, a vault that opens on Home does so, whatever the address named.
+    if (state.interface && state.interface.view === "basic") ctx.navigate("home");
     ctx.applyState(state);
     await ctx.refresh();
   } catch (error) {
@@ -319,9 +334,9 @@ async function createVault(ctx) {
     form.again = "";
     form.busy = false;
     form.shown = false;
-    // A new vault whose view is Basic goes on to the step that adds an app. One that was
-    // started with the view Pro opens on Overview, where "Getting started" takes over.
-    ctx.navigate(state.interface && state.interface.view === "basic" ? "setup/app" : "overview");
+    // A new vault that opens on Home goes on to the step that adds an app. One that was
+    // started to open on all settings opens on Overview, where "Getting started" takes over.
+    ctx.navigate(state.interface && state.interface.view === "basic" ? "setup/app" : "pro/overview");
     ctx.applyState(state);
     await ctx.refresh();
   } catch (error) {
@@ -575,7 +590,7 @@ function chooseApp(ctx, entry) {
  * sentence of the chosen app, the press that gives that app access can count.
  */
 function firstSentence(form, described) {
-  let text = GENERAL_SENTENCE;
+  let text = generalSentence();
   if (described) {
     text = basicGrantSentence(described);
     form.sentenceShown = true;
@@ -644,7 +659,7 @@ function appStep(ctx) {
       "section",
       { class: "gate-card", key: "step-3-pro" },
       stepOnly("Apps are added in Pro for this vault: it has several groups of documents, or an app that runs on this computer."),
-      el("p", null, el("a", { class: "link", href: "#/apps" }, "Open Apps in Pro")),
+      el("p", null, el("a", { class: "link", href: "#/pro/apps" }, "Open Apps in Pro")),
     );
   }
   const known = data.known;
@@ -659,7 +674,7 @@ function appStep(ctx) {
   if (form.choice !== null && !form.hosted) described = { name: form.name, hosted: false, destination: "" };
   else if (ready) described = { name: form.name, hosted: true, destination: form.destination.trim() };
   const missing = (ctx.state.warnings || []).find((warning) => warning.code === "no_sdk" || warning.code === "python_too_old");
-  const leave = () => ctx.navigate(guided && documentsHeld(ctx) === 0 ? "setup/documents" : "basic");
+  const leave = () => ctx.navigate(guided && documentsHeld(ctx) === 0 ? "setup/documents" : "home");
   return el(
     "form",
     {
@@ -715,7 +730,7 @@ function appStep(ctx) {
           "p",
           { class: "setup-aside", id: "first-other", key: "first-other" },
           "Another app is added in Pro, where you say where its text goes. ",
-          el("a", { class: "link", href: "#/apps" }, "Open Apps in Pro"),
+          el("a", { class: "link", href: "#/pro/apps" }, "Open Apps in Pro"),
         )
       : null,
     el(
@@ -823,8 +838,8 @@ function documentsStep(ctx) {
     return el(
       "section",
       { class: "gate-card", key: "step-2-several" },
-      stepOnly("This vault has several groups of documents. Add documents on the Basic page or in Pro."),
-      el("div", { class: "gate-actions" }, button("Open my vault", { kind: "primary", onclick: () => ctx.navigate("basic") })),
+      stepOnly("This vault has several groups of documents. Add documents on the page Documents."),
+      el("div", { class: "gate-actions" }, button("Open my vault", { kind: "primary", onclick: () => ctx.navigate("home") })),
     );
   }
   const group = groups.length ? groups[0].name : FIRST_GROUP;
@@ -838,7 +853,7 @@ function documentsStep(ctx) {
   const refused = total === 0 && settled && chosen.every((item) => item.status === "error");
   const sample = steps.sample && steps.sample.group === group && held.some(isSample) ? steps.sample : null;
   const next = () => {
-    if (!apps.apps.length) ctx.navigate("basic");
+    if (!apps.apps.length) ctx.navigate("home");
     else ctx.navigate(apps.apps.some((app) => app.name === steps.added) ? `setup/connect?app=${encodeURIComponent(steps.added)}` : "setup/connect");
   };
   return el(
@@ -866,7 +881,7 @@ function documentsStep(ctx) {
           )
         : el("p", { class: "gate-lead" }, apps.apps.length ? "No app can ask for it yet." : "No app can ask for it until you add one."),
     ),
-    senders.length ? amber("docs-sentence", senders.length === 1 ? basicGrantSentence(senders[0]) : GENERAL_SENTENCE) : null,
+    senders.length ? amber("docs-sentence", senders.length === 1 ? basicGrantSentence(senders[0]) : generalSentence()) : null,
     // The filled button of the step: "Choose files" while the vault holds no document.
     dropZone(ctx, group, { large: true, who: true, filled: total === 0 && !refused }),
     refused
@@ -1404,9 +1419,9 @@ function connectStep(ctx, problem) {
   const documents = ctx.data.documents;
   const held = documents ? [].concat(...documents.collections.map((group) => group.documents)) : [];
   const sampleOnly = held.length === 1 && isSample(held[0]);
-  const leave = async (then) => {
+  const leave = async (then, page = "home") => {
     await setupDone(ctx);
-    ctx.navigate("basic");
+    ctx.navigate(page);
     if (then) then();
   };
   const endButtons = (seq) =>
@@ -1417,10 +1432,11 @@ function connectStep(ctx, problem) {
         ? button("Add a document of your own", {
             kind: filled ? "primary" : "default",
             id: "ask-own",
+            // Documents are added on their own page: it opens with the focus on its button.
             onclick: () =>
               leave(() => {
                 ctx.ui.focusId = `files-${documents.collections[0].name}`;
-              }),
+              }, "documents"),
           })
         : null,
       button("Open my vault", {
@@ -1567,7 +1583,7 @@ function connectStep(ctx, problem) {
         ]
       : null,
     !called || blocked
-      ? el("div", { class: "gate-actions", key: "actions" }, button("Finish later", { kind: "quiet", id: "ask-later", onclick: () => ctx.navigate("basic") }))
+      ? el("div", { class: "gate-actions", key: "actions" }, button("Finish later", { kind: "quiet", id: "ask-later", onclick: () => ctx.navigate("home") }))
       : outcome && !granted.length
         ? null
         : // A passage waits, or an approval is not used yet: the way out stays, and it is not the filled button.
@@ -1593,7 +1609,7 @@ export function setupScreen(ctx, problem = "") {
     step: true,
     wide: step !== "connect",
     wider: step === "connect",
-    bar: basicBars(ctx, problem),
+    bar: problemBar(ctx, problem),
     foot: [
       "You can stop at any point. What you have done stays. ",
       el(
@@ -1601,7 +1617,7 @@ export function setupScreen(ctx, problem = "") {
         {
           class: "link",
           id: "setup-pro",
-          href: "#/overview",
+          href: "#/pro/overview",
           onclick: (event) => {
             event.preventDefault();
             ctx.setUpInPro();

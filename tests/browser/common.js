@@ -459,13 +459,39 @@ async function decideApproval(page, key, action) {
   }, 45000);
 }
 
-/** What tells the two views apart: the Basic page has a bar at its top, Pro a sidebar. */
-const FRAME = { basic: 'header.topbar[data-key="topbar"]', pro: 'aside.sidebar' };
+/**
+ * What tells the two frames of an open vault apart. The simple frame (Home, Documents,
+ * Activity, Settings, "How it works") has four entries, which are a sidebar in a wide window
+ * and a bar at the bottom of a narrow one; the six pages with every setting have a sidebar of
+ * their own.
+ */
+const FRAME = { simple: 'nav.side-nav', pro: 'aside.sidebar' };
 
-/** Press "Basic" or "Pro" in the view control of the page that is open, and wait for that view. */
-async function switchView(page, view) {
-  await page.locator('label.segment', { has: page.locator(`input[name="view"][value="${view}"]`) }).click();
-  await page.locator(FRAME[view]).waitFor({ state: 'visible', timeout: WAIT });
+/** Press one of the four entries of the simple frame ("home", "documents", "activity", "settings") and wait for its page. */
+async function openPage(page, name) {
+  await page.locator(`${FRAME.simple} a[href="#/${name}"]`).click();
+  await page.locator(`.simple .page-body[data-key="view-${name}"]`).waitFor({ state: 'attached', timeout: WAIT });
+}
+
+/** From a simple page, open one of the six pages with every setting: "Settings", then its row. Two presses. */
+async function openAllSettings(page, name = 'overview') {
+  await openPage(page, 'settings');
+  await page.locator(`a.row-link[href="#/pro/${name}"]`).click();
+  await page.locator(FRAME.pro).waitFor({ state: 'visible', timeout: WAIT });
+  await page.locator(`.page-body[data-key="view-pro/${name}"]`).waitFor({ state: 'attached', timeout: WAIT });
+}
+
+/** From one of the six pages, press "← Home" at the head of their sidebar and wait for the simple frame. */
+async function backHome(page) {
+  await page.locator('#pro-home').click();
+  await page.locator(FRAME.simple).waitFor({ state: 'visible', timeout: WAIT });
+}
+
+/** On the page Settings, choose under "Open on" where the app opens: "basic" is Home, "pro" the six pages. */
+async function openOn(page, view) {
+  const choice = page.locator(`input[name="start"][value="${view}"]`);
+  await page.locator('label.segment', { has: choice }).click();
+  await eventually(() => choice.isChecked(), WAIT, `"Open on" does not show the choice "${view}"`);
 }
 
 /** GET one address of the app's API with the session of `page`. Returns the parsed answer. */
@@ -508,17 +534,22 @@ async function textTable(page, base, code) {
   return holder.TEXT;
 }
 
-/** Every text a person can read inside the element `selector` names: its text nodes, trimmed, without the empty ones. */
-function textsIn(page, selector) {
-  return page.locator(selector).first().evaluate((root) => {
+/**
+ * Every text a person can read inside the element `selector` names: its text nodes, trimmed,
+ * without the empty ones. With `skip`, what stands inside an element that selector names is left
+ * out: a command, a path, a moment, which are data and no text of the page.
+ */
+function textsIn(page, selector, skip = null) {
+  return page.locator(selector).first().evaluate((root, left) => {
     const found = [];
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (left && node.parentElement && node.parentElement.closest(left)) continue;
       const text = node.data.replace(/\s+/g, ' ').trim();
       if (text) found.push(text);
     }
     return found;
-  });
+  }, skip);
 }
 
 /**
@@ -748,6 +779,7 @@ module.exports = {
   WAIT,
   agentCall,
   apiGet,
+  backHome,
   check,
   chooseLanguage,
   closePage,
@@ -762,7 +794,10 @@ module.exports = {
   newPage,
   notOfTable,
   note,
+  openAllSettings,
   openBrowser,
+  openOn,
+  openPage,
   pageReachedApp,
   pressCopy,
   pressCounter,
@@ -777,7 +812,6 @@ module.exports = {
   started,
   step,
   stopApp,
-  switchView,
   textTable,
   textsIn,
   withdraw,

@@ -22,8 +22,10 @@ that a parser that hangs, grows without bound or crashes ends without taking
 the app, and the key in its memory, with it. A flaw in the parser that runs
 code still runs that code under the owner's account.
 
-Every failure is a :class:`ValueError` whose message is one sentence that can be
-shown to the owner as it is.
+Every failure is an :class:`UploadRefused`, a :class:`ValueError` whose message is
+one sentence that can be shown to the owner as it is. It also carries one word
+for the reason (:data:`REFUSALS`), so that a page can say the same in its own
+language.
 """
 
 from __future__ import annotations
@@ -44,7 +46,9 @@ __all__ = [
     "CHILD_TIMEOUT_SECONDS",
     "MAX_CHILD_OUTPUT_BYTES",
     "MAX_UPLOAD_BYTES",
+    "REFUSALS",
     "SUPPORTED_SUFFIXES",
+    "UploadRefused",
     "child_argv",
     "pdf_available",
     "run_child",
@@ -80,12 +84,41 @@ _PDF_NO_TEXT = "the PDF holds no text that can be read; scanned pages are not co
 _PDF_TOO_MUCH = "the PDF holds more text than can be taken in"
 _PDF_TOO_SLOW = "reading the PDF took too long and was stopped"
 
-# What the child may give as a reason. Its own words are never passed on.
-_REASONS = {
+REFUSALS = {
+    "unsupported": _UNSUPPORTED,
+    "empty": _EMPTY,
+    "no_text": _NO_TEXT,
+    "too_large": _TOO_LARGE,
+    "not_utf8": _NOT_UTF8,
     "no_pdf_support": _NO_PDF_SUPPORT,
-    "encrypted": _PDF_ENCRYPTED,
-    "unreadable": _PDF_UNREADABLE,
+    "pdf_unreadable": _PDF_UNREADABLE,
+    "pdf_encrypted": _PDF_ENCRYPTED,
+    "pdf_no_text": _PDF_NO_TEXT,
+    "pdf_too_much": _PDF_TOO_MUCH,
+    "pdf_too_slow": _PDF_TOO_SLOW,
 }
+"""Why a file is not taken: the word of each reason, and its sentence for a person."""
+
+# What the child may give as a reason, and the word it stands for here. The child's
+# own words are never passed on.
+_REASONS = {
+    "no_pdf_support": "no_pdf_support",
+    "encrypted": "pdf_encrypted",
+    "unreadable": "pdf_unreadable",
+}
+
+
+class UploadRefused(ValueError):
+    """A file that cannot be taken: one of the words of :data:`REFUSALS`, and its sentence.
+
+    The message is the sentence, as before there was a word: whoever catches a
+    :class:`ValueError` and shows its text shows what it always showed.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(REFUSALS[reason])
+        self.reason = reason
+
 
 _pdf_check_lock = threading.Lock()
 _pdf_checked: bool | None = None
@@ -101,31 +134,31 @@ def text_from_upload(name: str, data: bytes) -> str:
 
     The name is used for its suffix only; nothing is read from or written to
     disk. The text is returned as it was extracted: cleaning it up is the
-    caller's business. Raises :class:`ValueError` with one sentence for a
-    person when the type is not supported, the file is empty or too large, a
-    text file is not UTF-8, or a PDF cannot be read, holds no text, takes too
-    long, or PDF support is not installed.
+    caller's business. Raises :class:`UploadRefused`, with a word for the
+    reason and one sentence for a person, when the type is not supported, the
+    file is empty or too large, a text file is not UTF-8, or a PDF cannot be
+    read, holds no text, takes too long, or PDF support is not installed.
     """
     suffix = PurePosixPath(name.replace("\\", "/")).suffix.lower()
     if suffix not in SUPPORTED_SUFFIXES:
-        raise ValueError(_UNSUPPORTED)
+        raise UploadRefused("unsupported")
     if not data:
-        raise ValueError(_EMPTY)
+        raise UploadRefused("empty")
     if len(data) > MAX_UPLOAD_BYTES:
-        raise ValueError(_TOO_LARGE)
+        raise UploadRefused("too_large")
     if suffix != ".pdf":
         try:
             text = data.decode("utf-8-sig")  # a byte-order mark is dropped
         except UnicodeDecodeError:
-            raise ValueError(_NOT_UTF8) from None
+            raise UploadRefused("not_utf8") from None
         if not text.strip():
-            raise ValueError(_NO_TEXT)
+            raise UploadRefused("no_text")
         return text
     if not pdf_available():
-        raise ValueError(_NO_PDF_SUPPORT)
+        raise UploadRefused("no_pdf_support")
     text = _text_from_reply(run_child(data))
     if not text.strip():
-        raise ValueError(_PDF_NO_TEXT)
+        raise UploadRefused("pdf_no_text")
     return text
 
 
@@ -175,7 +208,7 @@ def _child_environment() -> dict[str, str]:
 def run_child(data: bytes) -> bytes:
     """Start the child, hand it ``data`` and return what it printed.
 
-    Raises :class:`ValueError` when the child cannot be started, takes longer
+    Raises :class:`UploadRefused` when the child cannot be started, takes longer
     than :data:`CHILD_TIMEOUT_SECONDS`, prints more than
     :data:`MAX_CHILD_OUTPUT_BYTES` or ends with an error. In each of these
     cases the child is ended before this returns. What the child prints is
@@ -192,7 +225,7 @@ def run_child(data: bytes) -> bytes:
             env=_child_environment(),
         )
     except OSError:
-        raise ValueError(_PDF_UNREADABLE) from None
+        raise UploadRefused("pdf_unreadable") from None
     stdin, stdout = child.stdin, child.stdout
     assert stdin is not None
     assert stdout is not None
@@ -232,11 +265,11 @@ def run_child(data: bytes) -> bytes:
         if complete:
             stdout.close()
     if too_much.is_set():
-        raise ValueError(_PDF_TOO_MUCH)
+        raise UploadRefused("pdf_too_much")
     if timed_out:
-        raise ValueError(_PDF_TOO_SLOW)
+        raise UploadRefused("pdf_too_slow")
     if child.returncode != 0 or not complete:
-        raise ValueError(_PDF_UNREADABLE)
+        raise UploadRefused("pdf_unreadable")
     return bytes(printed)
 
 
@@ -245,15 +278,15 @@ def _text_from_reply(reply: bytes) -> str:
     try:
         answer = strict_json_loads(reply)
     except ValueError:
-        raise ValueError(_PDF_UNREADABLE) from None
+        raise UploadRefused("pdf_unreadable") from None
     if not isinstance(answer, dict):
-        raise ValueError(_PDF_UNREADABLE)
+        raise UploadRefused("pdf_unreadable")
     text = answer.get("text")
     if answer.get("ok") is True and isinstance(text, str):
         return _without_stray_surrogates(text)
     reason = answer.get("reason")
-    raise ValueError(
-        _REASONS.get(reason, _PDF_UNREADABLE) if isinstance(reason, str) else _PDF_UNREADABLE
+    raise UploadRefused(
+        _REASONS.get(reason, "pdf_unreadable") if isinstance(reason, str) else "pdf_unreadable"
     )
 
 

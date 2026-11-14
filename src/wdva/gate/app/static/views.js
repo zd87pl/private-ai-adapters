@@ -4,13 +4,16 @@
 // The screens the owner reads: Overview, Activity with its detail panel, and
 // Approvals. The approval card and the simple parts of the detail panel are the
 // same on every page and take their texts from the text table; what only the six
-// pages show keeps its own English texts.
+// pages show keeps its own English texts. On a page that is not one of the six, the
+// panel says everything in the language of the page, and the record's own figures
+// stand behind one button.
 
 import { api } from "./api.js";
 import { PRODUCT } from "./brand.js";
 import { el, icon } from "./dom.js";
 import { ago, at, clock, count, list, num, sentence, untilShort, when, whenFull } from "./format.js";
 import { loadingBlock, servingStrip } from "./manage.js";
+import { rowSentence } from "./pages.js";
 import {
   UNANSWERED,
   activityRow,
@@ -106,28 +109,28 @@ function startCard(ctx) {
       done: documents > 0,
       title: "Add documents",
       text: "Drop text files or PDFs into a collection. A sealed copy of each goes into the vault.",
-      href: "#/documents",
+      href: "#/pro/documents",
       action: "Add documents",
     },
     {
       done: apps.length > 0,
       title: "Add an app",
       text: "Say which assistant may ask, for example Claude Desktop, and where the text it receives goes.",
-      href: "#/apps",
+      href: "#/pro/apps",
       action: "Add an app",
     },
     {
       done: apps.some((app) => Object.keys(app.grants || {}).length > 0),
       title: "Give the app a collection",
       text: "Under Apps, choose “Can read” or “Ask me each time” for a collection. Until you do, the app is told there is nothing for it.",
-      href: "#/apps",
+      href: "#/pro/apps",
       action: "Open Apps",
     },
     {
       done: apps.some((app) => app.last_seen),
       title: "Connect the app",
       text: "Under Apps, press Connect, copy the configuration into the app’s own settings and restart the app. Its first call then shows up under Activity.",
-      href: "#/apps",
+      href: "#/pro/apps",
       action: "Open Apps",
     },
   ];
@@ -227,7 +230,7 @@ function sentCard(ctx) {
   else if (!data.apps.length) {
     content = emptyState({
       text: "No app has been added yet, so nothing can leave the vault.",
-      action: el("a", { class: "btn btn-default btn-small", href: "#/apps" }, el("span", { class: "btn-label" }, "Add an app")),
+      action: el("a", { class: "btn btn-default btn-small", href: "#/pro/apps" }, el("span", { class: "btn-label" }, "Add an app")),
     });
   } else {
     content = el(
@@ -264,7 +267,7 @@ function sentCard(ctx) {
 
 /** The address of one waiting request on the Approvals screen. */
 function approvalLink(item) {
-  return `#/approvals?app=${encodeURIComponent(item.app)}&ref=${encodeURIComponent(item.ref)}`;
+  return `#/pro/approvals?app=${encodeURIComponent(item.app)}&ref=${encodeURIComponent(item.ref)}`;
 }
 
 function waitingCard(ctx) {
@@ -299,7 +302,7 @@ function waitingCard(ctx) {
           ),
         ),
       ),
-      waiting.length > 2 ? el("a", { class: "link more-link", href: "#/approvals" }, `and ${num(waiting.length - 2)} more`) : null,
+      waiting.length > 2 ? el("a", { class: "link more-link", href: "#/pro/approvals" }, `and ${num(waiting.length - 2)} more`) : null,
     ],
     { key: "waiting", class: "card-amber", label: "Waiting for you" },
   );
@@ -396,7 +399,7 @@ function latestCard(ctx) {
   return card("Latest activity", content, {
     key: "latest",
     class: "card-flush",
-    action: el("a", { class: "link", href: "#/activity" }, "All activity"),
+    action: el("a", { class: "link", href: "#/pro/activity" }, "All activity"),
   });
 }
 
@@ -483,7 +486,7 @@ export function activityView(ctx) {
             glyph: "activity",
             title: "Nothing has happened yet",
             text: "Every search and every passage an app asks for appears here, with what was released and what was refused. Your own changes are listed too.",
-            action: el("a", { class: "btn btn-default btn-small", href: "#/apps" }, el("span", { class: "btn-label" }, "Open Apps")),
+            action: el("a", { class: "btn btn-default btn-small", href: "#/pro/apps" }, el("span", { class: "btn-label" }, "Open Apps")),
           }),
     );
   } else {
@@ -608,15 +611,95 @@ function recordBlocks(item) {
   ];
 }
 
+/** Whether the page that is shown is one of the six pages with every setting. */
+function onProPage(ctx) {
+  return String(ctx.route).startsWith("pro/");
+}
+
+/** The button that unfolds the record's own figures of an entry, and those figures while it is unfolded. */
+function recordFold(ctx, panel, item) {
+  const open = ctx.ui.panelMore === true;
+  return [
+    el(
+      "div",
+      { class: "panel-more", key: "more" },
+      button(t("panel.button.record"), {
+        kind: "quiet",
+        small: true,
+        id: "panel-more",
+        expanded: open ? "true" : "false",
+        onclick: () => {
+          ctx.ui.panelMore = !open;
+          ctx.render();
+        },
+      }),
+    ),
+    open ? el("p", { class: "panel-kicker", key: "number" }, t("panel.label.entry", { seq: String(panel.seq) })) : null,
+    open ? recordBlocks(item) : null,
+  ];
+}
+
+/** What the app searched for, and the exact text that left with where it is now: the same on every page. */
+function leftBlocks(item, figure) {
+  const hosted = item.hosted === true;
+  return [
+    item.query
+      ? el("section", { class: "panel-section" }, el("h3", { class: "mini-title" }, t("panel.label.query")), el("pre", { class: "code code-wrap", tabindex: 0 }, el("code", null, item.query)))
+      : null,
+    item.text
+      ? el(
+          "section",
+          { class: "panel-section" },
+          el("h3", { class: "mini-title" }, el("span", null, t("panel.label.text")), el("span", { class: "mini-aside" }, figure)),
+          el("pre", { class: "code code-wrap released", tabindex: 0, "aria-label": t("panel.label.text") }, el("code", null, item.text)),
+          // Where the text is now, and that it cannot be taken back: two sentences, each an element of its own.
+          hosted ? el("p", { class: "gone" }, icon("out"), el("span", null, el("span", null, t("panel.say.1", { destination: item.destination })), " ", el("span", null, t("panel.say.2")))) : null,
+          item.hosted === false ? el("p", { class: "gone" }, icon("mac"), el("span", null, t("panel.say.1.local"))) : null,
+        )
+      : null,
+  ];
+}
+
+/**
+ * The details of an entry on a page that is not one of the six: the row's sentence as
+ * the title, where the text went, the exact text and its two sentences, what was
+ * searched for. Everything is said in the language of the page. The record's own
+ * figures, which keep the app's English labels, stand behind "Record details".
+ */
+function simplePanelBody(ctx, panel, item) {
+  const refusal = item.kind === "refusal";
+  return [
+    el(
+      "div",
+      { class: "panel-top" },
+      item.approved ? chip(t("row.chip.approved"), "quiet", "check") : el("span", null),
+      el("time", { class: "panel-time", datetime: item.time }, whenFull(item.time)),
+    ),
+    el("h2", { class: "panel-title", id: "panel-title" }, rowSentence(item, passagesOf(ctx, item))),
+    // Where the text went is a name, and the sentences under the text say the rest.
+    item.app && item.app !== UNANSWERED && ((item.hosted === true && item.destination) || item.claimed)
+      ? el(
+          "div",
+          { class: "panel-who" },
+          item.hosted === true && item.destination ? chip(item.destination, "plain", "out", null, "chip-dest") : null,
+          item.claimed ? el("span", { class: "muted" }, t("card.status.claimed", { claimed: item.claimed })) : null,
+        )
+      : null,
+    refusal ? el("p", { class: "panel-nothing", key: "nothing" }, t("panel.status.nothing")) : null,
+    refusal && item.count > 1 ? el("p", { class: "muted", key: "count" }, t("panel.status.count", { n: item.count })) : null,
+    leftBlocks(item, t("row.status.chars", { n: item.characters })),
+    recordFold(ctx, panel, item),
+  ];
+}
+
 function panelBody(ctx, panel) {
   const item = panel.detail;
   if (panel.error) return note("red", panel.error);
   if (!item) return loadingBlock();
-  const hosted = item.hosted === true;
   const refusal = item.kind === "refusal";
-  // On the Basic page the record's own figures stand behind one button.
-  const folded = ctx.route === "basic";
-  const open = folded && ctx.ui.panelMore === true;
+  // On every page that is not one of the six, the record's own figures stand behind one button.
+  const folded = !onProPage(ctx);
+  if (folded) return simplePanelBody(ctx, panel, item);
   return [
     el(
       "div",
@@ -635,7 +718,7 @@ function panelBody(ctx, panel) {
       : null,
     refusal ? note(item.code === "NEEDS_APPROVAL" ? "amber" : "plain", (item.code === "OVER_LIMIT" && VARIANT_TEXT[item.variant]) || REFUSAL_TEXT[item.code] || "Nothing was released.") : null,
     item.kind === "question" ? note("plain", QUESTION_TEXT) : null,
-    refusal && item.code === "NEEDS_APPROVAL" ? el("a", { class: "btn btn-default btn-small panel-link", href: "#/approvals" }, el("span", { class: "btn-label" }, "Open Approvals")) : null,
+    refusal && item.code === "NEEDS_APPROVAL" ? el("a", { class: "btn btn-default btn-small panel-link", href: "#/pro/approvals" }, el("span", { class: "btn-label" }, "Open Approvals")) : null,
     refusal && item.count > 1
       ? el(
           "p",
@@ -643,38 +726,8 @@ function panelBody(ctx, panel) {
           `This entry stands for ${num(item.count)} calls that were answered the same way${item.last_time ? `, the last one ${ago(item.last_time, ctx.now)}` : ""}.`,
         )
       : null,
-    item.query
-      ? el("section", { class: "panel-section" }, el("h3", { class: "mini-title" }, t("panel.label.query")), el("pre", { class: "code code-wrap", tabindex: 0 }, el("code", null, item.query)))
-      : null,
-    item.text
-      ? el(
-          "section",
-          { class: "panel-section" },
-          el("h3", { class: "mini-title" }, el("span", null, t("panel.label.text")), el("span", { class: "mini-aside" }, count(item.characters, "character", "characters"))),
-          el("pre", { class: "code code-wrap released", tabindex: 0, "aria-label": t("panel.label.text") }, el("code", null, item.text)),
-          // Where the text is now, and that it cannot be taken back: two sentences, each an element of its own.
-          hosted ? el("p", { class: "gone" }, icon("out"), el("span", null, el("span", null, t("panel.say.1", { destination: item.destination })), " ", el("span", null, t("panel.say.2")))) : null,
-          item.hosted === false ? el("p", { class: "gone" }, icon("mac"), el("span", null, t("panel.say.1.local"))) : null,
-        )
-      : null,
-    folded
-      ? el(
-          "div",
-          { class: "panel-more", key: "more" },
-          button(t("panel.button.record"), {
-            kind: "quiet",
-            small: true,
-            id: "panel-more",
-            expanded: open ? "true" : "false",
-            onclick: () => {
-              ctx.ui.panelMore = !open;
-              ctx.render();
-            },
-          }),
-        )
-      : null,
-    open ? el("p", { class: "panel-kicker", key: "number" }, t("panel.label.entry", { seq: String(panel.seq) })) : null,
-    !folded || open ? recordBlocks(item) : null,
+    leftBlocks(item, count(item.characters, "character", "characters")),
+    recordBlocks(item),
   ];
 }
 
@@ -688,8 +741,8 @@ export function detailPanel(ctx) {
     el(
       "header",
       { class: "panel-head" },
-      // The number of the entry belongs to the record's own figures: on the Basic page it is with them.
-      el("span", { class: "panel-kicker" }, ctx.route === "basic" ? null : t("panel.label.entry", { seq: String(panel.seq) })),
+      // The number of the entry belongs to the record's own figures: only the six pages show it at the head.
+      el("span", { class: "panel-kicker" }, onProPage(ctx) ? t("panel.label.entry", { seq: String(panel.seq) }) : null),
       iconButton("x", t("panel.label.close"), { onclick: () => ctx.closePanel() }),
     ),
     el("div", { class: "panel-scroll", key: `p-${panel.seq}` }, panelBody(ctx, panel)),
@@ -974,9 +1027,8 @@ export function approvalCards(ctx, { limit = null, around = "" } = {}) {
 export function approvalsView(ctx) {
   const data = ctx.data.approvals;
   if (!data) return { title: "Approvals", body: loadingBlock() };
-  // During a visit from Basic a bar stands above the page; when it goes, the cards move up.
-  const visiting = Boolean(ctx.state.interface && ctx.state.interface.view === "basic");
-  const drawn = approvalCards(ctx, { around: visiting ? "visit" : "" });
+  // What can come or go above the cards of this page is the bar that says what is wrong.
+  const drawn = approvalCards(ctx, { around: ctx.offline ? "offline" : "" });
   const body = [];
   if (!drawn.cards.length) {
     body.push(

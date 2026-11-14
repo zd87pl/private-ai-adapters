@@ -42,13 +42,19 @@ class ServiceError(Exception):
     The server sends ``{"error": {"code": code, "message": message}}`` with the
     given status. The message is shown to the owner as it is, so it must not
     contain a passphrase or text from a document.
+
+    ``reason`` is one more word for the page, where one code stands for several
+    things the page says differently: why an uploaded file was not taken. The
+    server sends it as a third member, ``"reason"``, and only when it is a word
+    of lower-case letters, digits and underscores.
     """
 
-    def __init__(self, status: int, code: str, message: str) -> None:
+    def __init__(self, status: int, code: str, message: str, reason: str | None = None) -> None:
         super().__init__(message)
         self.status = status
         self.code = code
         self.message = message
+        self.reason = reason
 
 
 class Service(Protocol):

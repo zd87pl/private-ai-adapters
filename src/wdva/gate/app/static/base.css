@@ -64,6 +64,10 @@
 
   --radius-card: 12px;
   --radius-control: 7px;
+
+  /* The simple pages: how wide their one column is at most, and their sidebar. */
+  --column: 640px;
+  --side: 208px;
 }
 
 @media (prefers-color-scheme: dark) {

@@ -1,0 +1,576 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2025 Enclave */
+
+/* The simple frame and its pages: a narrow sidebar with four entries, one quiet column
+   in the middle of the window, and much room around it. At 720 px and narrower the
+   sidebar is laid out as a bar at the top and a bar at the bottom of the window.
+   This file loads nothing. */
+
+/* -- the frame ------------------------------------------------------------------- */
+
+.simple {
+  --panel-width: 440px;
+  --gutter: 32px;
+  display: grid;
+  grid-template-columns: var(--side) minmax(0, 1fr);
+  min-height: 100vh;
+  background: var(--surface);
+}
+
+.side {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  height: 100vh;
+  padding: 18px 12px 16px;
+  border-right: 1px solid var(--line-soft);
+  background: var(--bg);
+}
+
+.side-brand {
+  padding: 2px 10px 0;
+}
+
+.side-nav {
+  display: grid;
+  gap: 2px;
+}
+
+.side-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: 8px;
+  color: var(--text);
+  font-size: var(--fs-m);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.side-item .icon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  color: var(--text-2);
+}
+
+.side-item:hover {
+  background: var(--fill-hover);
+}
+
+.side-item.is-current {
+  background: var(--fill-quiet);
+}
+
+.side-item.is-current .icon {
+  color: var(--text);
+}
+
+.side-label {
+  flex: 1;
+  min-width: 0;
+}
+
+/* How many passages wait for the owner, beside the entry of Home, at every width of the sidebar. */
+.side-item .nav-count {
+  position: static;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  font-size: var(--fs-xs);
+  line-height: 18px;
+}
+
+.side-foot {
+  display: grid;
+  gap: 10px;
+  margin-top: auto;
+  padding: 0 6px;
+}
+
+.side-foot .lang {
+  margin-left: -4px;
+}
+
+/* Until when the vault is unlocked; while the app does not answer, that this is not known. */
+.side-lock {
+  color: var(--text-2);
+  font-size: var(--fs-s);
+  font-variant-numeric: tabular-nums;
+}
+
+.side-lock.is-unknown {
+  color: var(--red);
+  font-weight: 500;
+}
+
+/* -- the column ------------------------------------------------------------------ */
+
+.column {
+  min-width: 0;
+  padding: 0 var(--gutter) 96px;
+  outline: none;
+}
+
+/* The bar that says what is wrong, while there is one, and the title of the page: both
+   stay in view, and the bar stands above the title. */
+.column-top {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flow-root;
+  max-width: var(--column);
+  margin: 0 auto;
+  background: var(--surface);
+}
+
+.column-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 16px;
+  padding: 44px 0 14px;
+}
+
+.offline-bar + .column-head {
+  padding-top: 18px;
+}
+
+.column-title {
+  font-size: 1.5rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  outline: none;
+}
+
+.column-aside {
+  color: var(--text-2);
+  font-size: var(--fs-m);
+  font-variant-numeric: tabular-nums;
+}
+
+.column .page-body {
+  gap: 28px;
+  max-width: var(--column);
+  margin-top: 8px;
+}
+
+/* Home has no title of its own in this block: its headline is the first thing of its column. */
+.column-top:empty + .page-body {
+  margin-top: 44px;
+}
+
+/* -- what every plain page is made of ---------------------------------------------- */
+
+/* The sentences of a page: what it explains, in at most two of them. */
+.says {
+  display: grid;
+  gap: 6px;
+  max-width: 60ch;
+  color: var(--text-2);
+  font-size: var(--fs-m);
+  line-height: 1.55;
+}
+
+/* A heading inside a page. */
+.block-title {
+  font-size: var(--fs-l);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+/* A quiet list: one line of text per row, a hairline between rows, no frame around them. */
+.rows {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rows > li + li {
+  border-top: 1px solid var(--line-soft);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 4px 16px;
+  min-width: 0;
+  min-height: 52px;
+  padding: 9px 0;
+  color: var(--text);
+  font-size: var(--fs-m);
+}
+
+.row-what {
+  flex: 1 1 280px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* What stands after a row's sentence, or under it where the row is narrow. */
+.row-sub {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  color: var(--text-2);
+  font-size: var(--fs-s);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A row that can be pressed: it opens the details of its entry, or leads to a page. */
+.row-open,
+.row-link {
+  width: calc(100% + 20px);
+  margin: 0 -10px;
+  padding: 11px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  font: inherit;
+  font-size: var(--fs-m);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.row-open:hover,
+.row-link:hover {
+  background: var(--fill-hover);
+}
+
+.row-open {
+  flex-wrap: wrap;
+}
+
+.row-open.is-selected {
+  background: var(--fill-selected);
+}
+
+.row-link .row-what {
+  flex: 1 1 auto;
+}
+
+.row-times {
+  font-weight: 600;
+}
+
+.rows-none,
+.rows-end {
+  color: var(--text-2);
+  font-size: var(--fs-m);
+}
+
+.rows-foot {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+}
+
+/* A link at the end of a page: to the full record, to the page that says how it works. */
+.page-more {
+  font-size: var(--fs-m);
+}
+
+/* -- Documents ------------------------------------------------------------------- */
+
+.doc-row .row-text {
+  display: grid;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.doc-row .row-what {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.doc-row .doc-name {
+  display: block;
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* With several groups: the group a document is in, a small grey word after its title. */
+.row-group {
+  flex: none;
+  color: var(--text-3);
+  font-size: var(--fs-s);
+}
+
+.doc-row .icon-btn {
+  flex: none;
+}
+
+/* The invented sample: what it is, and the button that removes it, on one line where both fit. */
+.doc-sample {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  color: var(--text-2);
+  font-size: var(--fs-m);
+}
+
+.column .drop {
+  padding: 16px;
+  border-radius: 12px;
+}
+
+/* -- Activity -------------------------------------------------------------------- */
+
+.rows-head {
+  display: flex;
+}
+
+.act-rows .row-what {
+  line-height: 1.4;
+}
+
+/* -- Settings -------------------------------------------------------------------- */
+
+/* One setting: its name, and the two choices beside it. */
+.setting {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 24px;
+  min-height: 36px;
+}
+
+.setting-label {
+  font-size: var(--fs-m);
+  font-weight: 600;
+}
+
+.setting-block {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.row-link .icon {
+  flex: none;
+  color: var(--text-2);
+}
+
+.row-link .row-go {
+  width: 14px;
+  height: 14px;
+  color: var(--text-3);
+}
+
+/* The two grey lines at the foot: the version, and where the vault is. */
+.page-facts {
+  display: grid;
+  gap: 2px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--text-3);
+  font-size: var(--fs-s);
+  overflow-wrap: anywhere;
+}
+
+/* -- How it works and what it cannot do --------------------------------------------- */
+
+.how {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.how p,
+.how .cannot {
+  max-width: 62ch;
+  color: var(--text);
+  font-size: var(--fs-m);
+  line-height: 1.6;
+}
+
+.column .cannot {
+  columns: 1;
+}
+
+.column .version {
+  text-align: left;
+}
+
+/* -- 720 px and narrower: a bar at the top, the column, a bar at the bottom ------------ */
+
+@media (max-width: 720px) {
+  .simple {
+    --gutter: 16px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  /* The parts of the sidebar are laid out by the frame itself. */
+  .side {
+    display: contents;
+  }
+
+  /* The top bar: the mark and the name; the two languages as letters; "Lock now" as a button with its icon. */
+  .side-brand,
+  .side-foot {
+    min-height: 52px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .side-brand {
+    grid-area: 1 / 1;
+    padding: 0 0 0 var(--gutter);
+  }
+
+  .side-foot {
+    grid-area: 1 / 2;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    padding: 0 var(--gutter) 0 8px;
+  }
+
+  .side-foot .lang {
+    margin: 0;
+  }
+
+  .side-foot .lang-word {
+    display: none;
+  }
+
+  .side-foot .lang-code {
+    display: inline;
+  }
+
+  /* Said to a screen reader, not shown: the button beside it carries the lock. */
+  .side-lock,
+  .side-foot .lock-now .btn-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  .side-foot .lock-now {
+    width: 36px;
+    padding: 0;
+  }
+
+  /* The bottom bar: the four entries, each an icon over its word. It stays in view. */
+  .side-nav {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 15;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0;
+    padding: 4px 8px;
+    border-top: 1px solid var(--line);
+    background: var(--surface);
+  }
+
+  .side-item {
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    min-height: 48px;
+    padding: 4px 2px;
+    font-size: var(--fs-xs);
+    text-align: center;
+  }
+
+  .side-item .icon {
+    width: 20px;
+    height: 20px;
+  }
+
+  .side-item:hover {
+    background: none;
+  }
+
+  .side-item.is-current {
+    background: none;
+    color: var(--accent);
+  }
+
+  .side-item.is-current .icon {
+    color: var(--accent);
+  }
+
+  .side-label {
+    flex: none;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .side-item .nav-count {
+    position: absolute;
+    top: 2px;
+    right: auto;
+    left: calc(50% + 6px);
+    min-width: 15px;
+    height: 15px;
+    padding: 0 4px;
+    font-size: 0.625rem;
+    line-height: 15px;
+  }
+
+  .column {
+    grid-area: 2 / 1 / 3 / 3;
+    /* Room for the bar at the bottom of the window. */
+    padding-bottom: 104px;
+  }
+
+  .column-head {
+    padding-top: 22px;
+  }
+
+  .column-top:empty + .page-body {
+    margin-top: 22px;
+  }
+
+  /* The details of an entry cover the page. */
+  .simple .panel {
+    width: 100vw;
+  }
+
+  /* Messages stand above the bar at the bottom, not over it. */
+  body:has(.side-nav) .toasts {
+    bottom: 72px;
+  }
+
+  /* A row is two lines: what happened; then how much and when. */
+  .row-open .row-what {
+    flex-basis: 100%;
+  }
+
+  /* A setting's two choices stand under its name, as wide as the column. */
+  .setting .segmented {
+    width: 100%;
+  }
+
+  .setting .segment {
+    flex: 1;
+  }
+}

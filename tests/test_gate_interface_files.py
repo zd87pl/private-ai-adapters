@@ -96,11 +96,6 @@ REQUIRED_SENTENCES = [
     "strings. Add each one you want replaced.",
     "Add a word or number that must never leave",
     "unverified",
-    # Where the documents are not told apart by collection: the Basic page and the first run.
-    "Text that ${app.name} receives from your documents is sent to ${app.destination} "
-    "and cannot be recalled.",
-    "Text that an app receives from your documents is sent to the company behind the app "
-    "and cannot be recalled.",
     "After you release a passage, the app gets it when it asks again. If it does not ask by "
     "itself, tell it: \u201ctry again\u201d.",
     "A name is a label: ${PRODUCT} cannot check which program is really asking.",
@@ -594,7 +589,7 @@ def test_a_release_cannot_be_pressed_through() -> None:
     assert "releaseArmedAt: Number.POSITIVE_INFINITY," in main
     # Opening a page with cards counts as the cards appearing anew.
     route = function_body(main, "function onRoute() {")
-    for opened in ('if (name === "approvals") {', 'if (name === "basic" || name === "setup") {'):
+    for opened in ('if (name === "pro/approvals") {', 'if (name === "home" || name === "setup") {'):
         after = route[route.index(opened) :]
         assert "ctx.ui.approvalSignature = null;" in after[: after.index("\n  }\n")], opened
     wait = re.search(r"const ARM_MS = (\d+);", views)
@@ -620,10 +615,12 @@ def test_a_release_cannot_be_pressed_through() -> None:
         assert "api.release(" not in code, f"{name} releases a passage itself"
         assert "api.dismiss(" not in code, f"{name} decides about a passage itself"
         assert "approval-actions" not in code, f"{name} draws the buttons of a card itself"
-    # The Basic page and the step "First question" show cards, and get them from that module.
+    # Home and the step "First question" show cards, and get them from that module.
     for name in ("basic.js", "gateway.js"):
         code = without_comments(scripts()[name])
         assert re.search(r'import \{[^}]*\bapprovalCards\b[^}]*\} from "\./views\.js";', code), name
+    # The plain pages show none.
+    assert "approvalCards" not in without_comments(scripts()["pages.js"])
 
 
 def test_approval_cards_are_drawn_by_one_function() -> None:
@@ -731,10 +728,23 @@ def test_the_page_says_only_what_it_knows_about_the_files_the_owner_chose() -> N
     # encrypted). It is said once per list of added files, not once per file.
     manage = without_comments(scripts()["manage.js"])
     zone = function_body(manage, "export function dropZone(ctx, collection, options = {}) {")
-    said = 'sealedCount(state) ? el("li", { class: "upload-outside", key: "outside" }, '
+    # The zone says it under the files, unless the page it stands on says it itself.
+    said = (
+        "sealedCount(state) && !options.said ? "
+        'el("li", { class: "upload-outside", key: "outside" }, '
+    )
     assert said + 'note("amber", t("docs.say.1"))) : null,' in zone
     assert manage.count('t("docs.say.1")') == 1
     assert 'fact("Copies of the files you added"' in manage
+    # The page Documents says it at its head, whether a file was added or not, and is the one
+    # place that tells the zone so.
+    pages = without_comments(scripts()["pages.js"])
+    page = function_body(pages, "export function documentsPage(ctx) {")
+    assert 'el("p", { id: "docs-say-1" }, t("docs.say.1"))' in page
+    assert "const zone = { who: true, said: true, filled: !waits };" in page
+    for name, source in scripts().items():
+        if name not in ("pages.js", "manage.js"):
+            assert "said: true" not in without_comments(source), name
 
 
 def test_a_question_is_not_shown_as_a_release() -> None:
@@ -826,14 +836,33 @@ def test_the_bar_that_says_what_is_wrong_stands_above_the_title_and_covers_nothi
     placing = {"position", "top", "left", "right", "bottom", "inset", "z-index"}
     assert properties & placing == set(), "the bar is taken out of the page's flow"
     assert "display" in properties
+    assert "offline-bar {" not in without_comments(read(STATIC / "home.css"))
+    # One function draws it, for both frames and for a step of setting up: the app is gone, or
+    # a list could not be loaded.
+    parts = without_comments(scripts()["parts.js"])
+    bar = function_body(parts, "export function problemBar(ctx, problem) {")
+    assert bar.count('class: "offline-bar", role: "alert"') == 2
+    for name, source in scripts().items():
+        wanted = 2 if name == "parts.js" else 0
+        assert without_comments(source).count('class: "offline-bar"') == wanted, name
     # It is the first thing in the block that holds the title, and that block is what stays
-    # in view, so the bar is seen wherever the page has been scrolled to.
+    # in view, so the bar is seen wherever the page has been scrolled to. So in the frame of
+    # the six pages and in the simple frame.
     main = without_comments(scripts()["main.js"])
     top = main[main.index('{ class: "page-top", key: "top" }') :]
-    assert 0 < top.index('class: "offline-bar"') < top.index('class: "page-head"')
-    assert main.count('class: "offline-bar"') == 2  # the app is gone; a list could not be loaded
+    assert 0 < top.index("problemBar(ctx, loadProblem()),") < top.index('class: "page-head"')
+    top = main[main.index('{ class: "column-top", key: "top" }') :]
+    assert 0 < top.index("problemBar(ctx, problem),") < top.index('class: "column-head"')
+    assert main.count("problemBar(") == 2
     assert ["position: sticky" in rule for rule in css_rules("app.css", ".page-top")] == [True]
     assert all("position" not in rule for rule in css_rules("app.css", ".page-head"))
+    assert ["position: sticky" in rule for rule in css_rules("home.css", ".column-top")] == [True]
+    assert all("position" not in rule for rule in css_rules("home.css", ".column-head"))
+    # The command that starts the app again is shown only for a vault that this command would
+    # open again, and the bar promises nothing about the page itself.
+    assert "const command = ctx.state && ctx.state.demo ? null : launch.command;" in bar
+    assert 'copyLine(ctx, "bar-launch-copy", command, t("bar.label.command"))' in bar
+    assert sentences_of(bar) == []
 
 
 def test_the_sidebar_claims_no_state_of_the_vault_while_the_app_does_not_answer() -> None:
@@ -849,6 +878,38 @@ def test_the_sidebar_claims_no_state_of_the_vault_while_the_app_does_not_answer(
     # Neither does a tooltip: both are chosen by the same question, the names of the sections apart.
     titles = re.findall(r"\btitle: ([^\n,]+)", sidebar)
     assert sorted(titles) == ["label", "unknown", "unknown"]
+
+
+def test_the_simple_frame_claims_no_state_of_the_vault_while_the_app_does_not_answer() -> None:
+    # The same rule for the sidebar of the simple frame, which at 720 px and narrower is also
+    # its top bar: one line says until when the vault is unlocked, and while the app does not
+    # answer it says that this is not known.
+    main = without_comments(scripts()["main.js"])
+    side = function_body(main, "function simpleSidebar() {")
+    assert "const unknown = ctx.offline;" in side
+    assert 'let lock = t("nav.status.open");' in side
+    assert 'if (unknown) lock = t("nav.status.unknown");' in side
+    assert side.index('if (unknown) lock = t("nav.status.unknown");') < side.index(
+        "else if (state.locks_at)"
+    )
+    assert 'lock = t("nav.status.until", { time: clock(state.locks_at, ctx.now) });' in side
+    assert (
+        'el("p", { class: ["side-lock", unknown && "is-unknown"], id: "side-lock" }, lock),' in side
+    )
+    # The line is the one place of this frame that names the lock, and no tooltip does.
+    assert side.count("nav.status.") == 3
+    assert "title:" not in side
+    # The bar that says what is wrong is drawn by the frame, in the block that stays in view.
+    shell = function_body(main, "function simpleShell() {")
+    assert "simpleSidebar()," in shell
+    assert shell.index("problemBar(ctx, problem),") < shell.index('class: "column-head"')
+    # At 720 px and narrower the same parts are a bar at the top and one at the bottom, which
+    # stays in view: the line is then said to a screen reader and the button carries the lock.
+    narrow = without_comments(read(STATIC / "home.css")).split("@media (max-width: 720px) {")
+    assert len(narrow) == 2, "the simple frame has one breakpoint"
+    assert re.search(r"\.side-nav \{[^}]*position: fixed;[^}]*bottom: 0;", narrow[1], re.S)
+    assert re.search(r"\.side \{\s*display: contents;", narrow[1])
+    assert '"aria-label": t("nav.button.lock")' in side
 
 
 def test_messages_that_are_showing_are_lifted_above_a_sheet_that_opens() -> None:
@@ -891,16 +952,20 @@ def test_a_new_vault_is_told_what_to_do_next_in_order() -> None:
 
 def test_basic_changes_only_what_it_can_express() -> None:
     # Limits, the settings of the vault, which kinds of apps are answered, pausing, the words
-    # to replace and removing a collection are Pro's. Basic says them and has no call for them.
-    basic = without_comments(scripts()["basic.js"])
-    for call in (
-        "api.setAppLimits(",
-        "api.setSettings(",
-        "api.setServing(",
-        "api.addReplacedString(",
-        "api.removeCollection(",
-    ):
-        assert call not in basic, f"the Basic page calls {call}"
+    # to replace and removing a collection are Pro's. Home says them and has no call for them,
+    # and neither have the plain pages.
+    for name in ("basic.js", "pages.js"):
+        code = without_comments(scripts()[name])
+        for call in (
+            "api.setAppLimits(",
+            "api.setSettings(",
+            "api.setServing(",
+            "api.addReplacedString(",
+            "api.removeCollection(",
+        ):
+            assert call not in code, f"{name} calls {call}"
+    # The plain pages give no app access at all.
+    assert "setGrant" not in without_comments(scripts()["pages.js"])
 
 
 def test_basic_attributes_to_stored_names() -> None:
@@ -909,6 +974,16 @@ def test_basic_attributes_to_stored_names() -> None:
     basic = without_comments(scripts()["basic.js"])
     assert re.search(r"\.label\b", basic) is None, "the Basic page reads the label of something"
     assert re.search(r"\.known\b", basic) is None, "the Basic page reads the list of programs"
+    # So on the plain pages: a row of Activity, a document's line and the sentence that says
+    # where text goes name an app by `name`. (Quoted texts are left out: keys hold ".label".)
+    pages = re.sub(r'"[^"\n]*"', '""', without_comments(scripts()["pages.js"]))
+    assert re.search(r"\.label\b", pages) is None, "a plain page reads the label of something"
+    assert re.search(r"\.known\b", pages) is None, "a plain page reads the list of programs"
+    sentence = function_body(
+        without_comments(scripts()["sheets.js"]), "export function basicGrantSentence(app) {"
+    )
+    assert 't("docs.say.2", { app: app.name, destination: app.destination })' in sentence
+    assert 't("docs.say.2.local", { app: app.name })' in sentence
 
 
 def test_basic_says_what_pro_set_from_answers_of_the_app() -> None:
@@ -922,9 +997,9 @@ def test_basic_says_what_pro_set_from_answers_of_the_app() -> None:
     assert numbers <= {2000, 86400000}, "a figure of the vault is written into the Basic page"
     # A control for an app's access stands only where one value describes the whole vault, and
     # an app is added on the page only where that will stay so.
-    assert 'groups.length > 1 ? proLink("Change in Pro", "#/apps"' in basic
+    assert 'groups.length > 1 ? proLink("Change in Pro", "#/pro/apps"' in basic
     assert "const expressible = groups.length <= 1 && !apps.some((app) => !app.hosted);" in basic
-    assert 'proLink("Add an app (in Pro)", "#/apps", { id: "basic-add-app" })' in basic
+    assert 'proLink("Add an app (in Pro)", "#/pro/apps", { id: "basic-add-app" })' in basic
     # A link into Pro is an address and nothing else.
     link = function_body(basic, "function proLink(text, href, props = {}) {")
     assert "onclick" not in link
@@ -983,7 +1058,7 @@ def test_the_sentence_is_drawn_before_access_is_given() -> None:
     )
     # It is the sentence of the app only once the app is chosen and described; until then the
     # one that holds for every app stands there, and the press cannot count.
-    assert "let text = GENERAL_SENTENCE;" in drawn
+    assert "let text = generalSentence();" in drawn
     assert drawn.index("if (described) {") < drawn.index("form.sentenceShown = true;")
     assert gateway.count("addFirstApp(") == 2  # where it is defined, and when the form is sent
     assert "if (ready && !form.busy) addFirstApp(ctx);" in step
@@ -991,10 +1066,10 @@ def test_the_sentence_is_drawn_before_access_is_given() -> None:
 
 def test_basic_changes_access_only_where_the_vault_has_one_group() -> None:
     basic = without_comments(scripts()["basic.js"])
-    # What the Basic page asks the app to change, in full. Removing goes through today's sheets
-    # of Pro, adding a file through the one function that adds files. The third call changes
-    # nothing of the vault: it says that setting up is over, a word kept beside the vault. The
-    # fourth changes nothing of the owner's at all: in a demo it has the played app ask once more
+    # What Home asks the app to change, in full. Removing an app goes through today's sheet of
+    # Pro. The third call changes nothing of the vault: it says that setting up is over, a word
+    # kept beside the vault. The fourth changes nothing of the owner's at all: in a demo it has
+    # the played app ask once more
     # (see test_the_demo_guide_makes_the_played_app_ask_again_only_on_a_press).
     assert set(re.findall(r"\bapi\.(\w+)\(", basic)) == {
         "setCollection",
@@ -1004,12 +1079,16 @@ def test_basic_changes_access_only_where_the_vault_has_one_group() -> None:
     }
     assert re.findall(r"api\.setInterface\(([^)]*)\)", basic) == ['{ setup: "done" }']
     assert 'from "./api.js"' in basic
-    for call in (
-        "removeDocument(ctx, document)",
-        "removeDocument(ctx, sample)",
-        "removeApp(ctx, app)",
-    ):
-        assert call in basic, call
+    assert "removeApp(ctx, app)" in basic
+    # Documents are added and removed on their own page, which calls the app for nothing
+    # itself: a file goes through the one function that adds files, a removal through today's
+    # sheet, which asks first.
+    pages = without_comments(scripts()["pages.js"])
+    assert re.findall(r"\bapi\.(\w+)\(", pages) == []
+    assert 'from "./api.js"' not in pages
+    for call in ("removeDocument(ctx, document)", "removeDocument(ctx, sample.document)"):
+        assert call in pages, call
+    assert "removeDocument(" not in basic
     manage = without_comments(scripts()["manage.js"])
     for head in (
         "export async function removeDocument(ctx, document) {",
@@ -1025,7 +1104,7 @@ def test_basic_changes_access_only_where_the_vault_has_one_group() -> None:
     )
     assert basic.count("changeButton(") == 2
     assert (
-        'groups.length > 1 ? proLink("Change in Pro", "#/apps", '
+        'groups.length > 1 ? proLink("Change in Pro", "#/pro/apps", '
         '{ key: `change-${app.name}`, class: "link basic-app-change" }) '
         ": changeButton(ctx, app, settings),"
     ) in basic
@@ -1077,36 +1156,44 @@ def test_basic_changes_access_only_where_the_vault_has_one_group() -> None:
 
 
 def test_adding_to_one_of_several_groups_chooses_no_group_for_the_owner() -> None:
-    basic = without_comments(scripts()["basic.js"])
-    section = function_body(basic, "function documentsSection(ctx) {")
+    pages = without_comments(scripts()["pages.js"])
+    page = function_body(pages, "export function documentsPage(ctx) {")
     # One zone, and with several groups it only holds the files: the sheet asks where they go.
-    assert section.count("dropZone(") == 2
+    assert page.count("dropZone(") == 2
     assert (
-        'dropZone(ctx, "basic", { who: true, lists: groups.map((group) => group.name), '
-        "take: (files) => addToWhichGroup(ctx, files) })"
-    ) in section
-    assert "dropZone(ctx, groups.length ? groups[0].name : FIRST_GROUP, { who: true })," in section
-    assert basic.count("dropZone(") == 2
-    assert 'const FIRST_GROUP = "documents";' in basic
-    sheet = function_body(basic, "async function addToWhichGroup(ctx, files) {")
+        'dropZone(ctx, "chosen", Object.assign(zone, { lists: groups.map((group) => group.name), '
+        "take: (files) => addToWhichGroup(ctx, files) }))"
+    ) in page
+    assert ": dropZone(ctx, groups.length ? groups[0].name : FIRST_GROUP, zone)," in page
+    assert pages.count("dropZone(") == 2
+    assert 'const FIRST_GROUP = "documents";' in pages
+    sheet = function_body(pages, "async function addToWhichGroup(ctx, files) {")
     assert "const form = { group: null };" in sheet
     assert "checked: form.group === group," in sheet
-    assert 'name: "basic-group",' in sheet
-    assert 'button("Cancel", { onclick: () => self.close(null), autofocus: true }),' in sheet
-    add = sheet[sheet.index('button("Add", {') :]
+    assert 'name: "docs-group",' in sheet
+    # ("Cancel", "Add": the keys common.button.cancel and group.button.add.)
+    assert (
+        'button(t("common.button.cancel"), { onclick: () => self.close(null), autofocus: true }),'
+    ) in sheet
+    add = sheet[sheet.index('button(t("group.button.add"), {') :]
     assert "disabled: form.group === null," in add[:200]
     assert "if (form.group !== null) self.close(form.group);" in add[:300]
     # Files are sent only after "Add", and to the group that was chosen. "Cancel" sends nothing.
-    assert basic.count("uploadFiles(") == 1
+    assert pages.count("uploadFiles(") == 1
     closed = sheet[sheet.index("const group = await sheet.closed;") :]
     assert 'if (typeof group === "string") await uploadFiles(ctx, group, files);' in closed
     assert sheet.count("self.close(") == 2  # "Cancel", with nothing; "Add", with the group
-    # Once a group is chosen that an app which sends text to a provider can use, the sentence
-    # is there.
+    # Once a group is chosen that an app can use, the sentence that says where text goes is
+    # there: the second sentence of the page, for the apps of that group.
     assert (
-        "senders.length === 1 ? grantSentence(senders[0], form.group) : GENERAL_SENTENCE" in sheet
-    )
-    assert '"No app can ask for what is in it."' in sheet
+        "const sentence = form.group === null ? null : whereTextGoes(readersOf(apps, form.group));"
+    ) in sheet
+    goes = function_body(pages, "function whereTextGoes(readers) {")
+    assert "if (!readers.length) return null;" in goes
+    assert "readers.length === 1 ? basicGrantSentence(readers[0]) : generalSentence();" in goes
+    # Each group says who can ask for what is in it: names, or that nobody can.
+    assert 'names.length ? list(names) : t("group.status.nobody")' in sheet
+    assert "readersOf(apps, group).map((app) => app.name);" in sheet
     # The zone hands the files over in place of sending them, and keeps no file for later.
     manage = without_comments(scripts()["manage.js"])
     zone = function_body(manage, "export function dropZone(ctx, collection, options = {}) {")
@@ -1137,16 +1224,10 @@ def test_after_a_sealed_file_the_page_says_which_apps_can_ask_for_it() -> None:
     assert ".map((app) => app.name);" in line
     assert '["approve", "read"].includes(app.grants[collection])' in line
     assert ".label" not in line
-    # Where a page says what each app may do with a group (the sheet of the Basic page), the
-    # names come with those words. An app that has the access and is not answered right now is
-    # listed with that said.
-    who = function_body(manage, "export function whoMayAsk(apps, collection, readWords) {")
-    assert "return `${app.name} (${access}${idle})`;" in who
-    assert 'app.grants[collection] === "approve" || app.grants[collection] === "read"' in who
-    assert '"; paused"' in who
-    assert '"; not answered in this session"' in who
-    assert ".label" not in who
-    # The pages of Pro are as they were: their zones say nothing more.
+    # The page Documents and a step of setting up ask for the line; the pages of Pro are as
+    # they were: their zones say nothing more.
+    pages = without_comments(scripts()["pages.js"])
+    assert "const zone = { who: true, said: true, filled: !waits };" in pages
     assert "dropZone(ctx, name)," in manage
     assert 'dropZone(ctx, "documents", { large: true }),' in manage
     assert manage.count("who:") == 0
@@ -1193,20 +1274,26 @@ def test_pro_reads_what_belongs_to_a_group_by_that_group_alone() -> None:
 def test_basic_reads_what_belongs_to_a_group_by_that_group_alone() -> None:
     # A group may be named by a word that every object of the page answers to ("constructor").
     # Read carelessly, such a name gives something that is neither an access nor a list of files,
-    # and the page that draws from it shows nothing at all.
-    basic = without_comments(scripts()["basic.js"])
-    read = function_body(basic, "function grantOf(app, group) {")
-    assert "Object.prototype.hasOwnProperty.call(grants, group)" in read
-    assert 'return mode === "approve" || mode === "read" ? mode : "none";' in read
-    assert re.search(r"\.grants\[", basic) is None, "an access is read without that check"
+    # and the page that draws from it shows nothing at all. So on Home and on the page Documents.
+    for name in ("basic.js", "pages.js"):
+        code = without_comments(scripts()[name])
+        read = function_body(code, "function grantOf(app, group) {")
+        assert "Object.prototype.hasOwnProperty.call(grants, group)" in read, name
+        assert 'return mode === "approve" || mode === "read" ? mode : "none";' in read, name
+        assert re.search(r"\.grants\[", code) is None, f"{name} reads an access without that check"
     manage = without_comments(scripts()["manage.js"])
     state = function_body(manage, "function uploadState(ctx, collection) {")
     assert "if (!Object.prototype.hasOwnProperty.call(ctx.ui.uploads, collection))" in state
     assert manage.count("ctx.ui.uploads[") == 2  # both inside that function
     assert state.count("ctx.ui.uploads[") == 2
-    # Who may ask for a file is told by comparing with the two words, never by "is there something".
-    who = function_body(manage, "export function whoMayAsk(apps, collection, readWords) {")
-    assert who.count("app.grants[collection] ===") == 3
+    # Who can ask for what is in a group is told by comparing with the two words, never by "is
+    # there something": on the page Documents through the one function that reads an access.
+    pages = without_comments(scripts()["pages.js"])
+    readers = function_body(pages, "function readersOf(apps, group) {")
+    assert readers.count('grantOf(app, group) !== "none"') == 1
+    assert readers.count('grantOf(app, name) !== "none"') == 1
+    line = function_body(manage, "export function whoLine(ctx, collection) {")
+    assert '["approve", "read"].includes(app.grants[collection])' in line
 
 
 def test_what_the_product_cannot_do_is_one_list_in_both_views() -> None:
@@ -1222,13 +1309,19 @@ def test_what_the_product_cannot_do_is_one_list_in_both_views() -> None:
     assert "cannotList()," in function_body(manage, "export function vaultView(ctx) {")
     line = function_body(manage, "export function versionLine(state) {")
     assert 'return t("how.version", { version: state.version });' in line
+    # The page "How it works and what it cannot do" shows the same eight under their heading,
+    # and the line about the version; Home's foot and Settings lead there.
+    pages = without_comments(scripts()["pages.js"])
+    how = function_body(pages, "export function howPage(ctx) {")
+    assert 'part.lines ? part.lines.map((key) => el("p", { key }, t(key))) : cannotList(),' in how
+    assert "versionLine(ctx.state)" in how
+    assert '{ title: "how.cannot.title", lines: null },' in pages
+    assert 'href: "#/how" }, t("how.title")' in function_body(
+        pages, "export function settingsPage(ctx) {"
+    )
     basic = without_comments(scripts()["basic.js"])
-    sheet = function_body(basic, "function openCannot(ctx) {")
-    assert "const title = `What ${PRODUCT} cannot do`;" in sheet
-    assert "cannotList()," in sheet
-    assert "versionLine(ctx.state)" in sheet
-    assert 'button("Close", { onclick: () => self.close(), autofocus: true })' in sheet
-    assert 'class: "link", id: "basic-cannot", onclick: () => openCannot(ctx)' in basic
+    assert 'id: "home-how", href: "#/how" }, t("home.button.how")' in basic
+    assert "openCannot" not in basic
     # Neither the statements nor the line about the version are written a second time: the
     # scripts name each key once, and each table holds each text once.
     pages = {name: code for name, code in scripts().items() if not name.startswith("text-")}
@@ -1236,8 +1329,8 @@ def test_what_the_product_cannot_do_is_one_list_in_both_views() -> None:
     assert everything.count('"how.version"') == 1
     assert everything.count('"how.cannot.1"') == 1
     assert everything.count("CANNOT.map(") == 1
-    assert everything.count("cannotList(") == 3  # its definition, the Vault page, the sheet
-    assert everything.count("versionLine(") == 3  # its definition, the Vault page, the sheet
+    assert everything.count("cannotList(") == 3  # its definition, the Vault page, the page How
+    assert everything.count("versionLine(") == 3  # its definition, the Vault page, the page How
     for name in ("text-en.js", "text-pl.js"):
         table = scripts()[name]
         assert table.count('"how.version"') == 1, name
@@ -1273,19 +1366,21 @@ def test_the_sample_letter_is_recognised_by_its_title_and_its_length() -> None:
     assert (
         "return document.title === SAMPLE.title && document.characters === SAMPLE.text.length;"
     ) in recognised
-    # The Basic page says that it is there, and offers to remove it through today's sheet.
-    basic = without_comments(scripts()["basic.js"])
-    section = function_body(basic, "function documentsSection(ctx) {")
-    assert "group.documents.find(isSample)" in section
-    assert '"1 of them is the invented sample letter."' in section
+    # The page Documents says that it is there, and offers to remove it through today's sheet.
+    # ("One of them is the invented sample document.", "Remove it": docs.status.sample and
+    # docs.button.sample.remove.)
+    pages = without_comments(scripts()["pages.js"])
+    page = function_body(pages, "export function documentsPage(ctx) {")
+    assert "const sample = held.find((entry) => isSample(entry.document));" in page
+    assert 'el("span", null, t("docs.status.sample")),' in page
     assert (
-        'button("Remove it", { small: true, id: "sample-remove", '
-        "onclick: () => removeDocument(ctx, sample) })"
-    ) in section
+        'button(t("docs.button.sample.remove"), { small: true, id: "sample-remove", '
+        "onclick: () => removeDocument(ctx, sample.document) })"
+    ) in page
 
 
 def test_first_run_and_basic_name_no_protocol() -> None:
-    for name in ("gateway.js", "basic.js"):
+    for name in ("gateway.js", "basic.js", "pages.js"):
         for text in quoted_texts(scripts()[name]):
             for word in ("MCP", "Model Context Protocol", "://"):
                 assert word not in text, f"{name} shows {word!r}: {text[:80]!r}"
@@ -1326,30 +1421,34 @@ def test_nothing_but_the_drop_zone_takes_a_drop() -> None:
     assert "ondrop:" in zone
 
 
-def test_the_view_has_two_labels_and_no_toast() -> None:
-    main = without_comments(scripts()["main.js"])
-    options = re.search(r"const VIEW_OPTIONS = \[(.*?)\];", main, re.S)
-    assert options is not None
-    assert re.findall(r'\{ value: "(\w+)", label: "([^"]+)"', options.group(1)) == [
-        ("basic", "Basic"),
-        ("pro", "Pro"),
+def test_the_start_page_is_kept_without_a_word() -> None:
+    # On which page the app opens is chosen on the page Settings, under "Open on": "Home" or
+    # "All settings" (settings.label.start.home, settings.label.start.all). The app keeps the
+    # choice as the word it always kept, "basic" or "pro".
+    pages = without_comments(scripts()["pages.js"])
+    settings = function_body(pages, "export function settingsPage(ctx) {")
+    choice = settings[settings.index('name: "start",') :]
+    choice = choice[: choice.index("}),")]
+    assert re.findall(r'\{ value: "(\w+)", label: t\("([^"]+)"\) \}', choice) == [
+        ("basic", "settings.label.start.home"),
+        ("pro", "settings.label.start.all"),
     ]
-    # Neither view is called by a word that ranks it.
+    assert 'legend: t("settings.label.start"),' in choice
+    assert 'value: kept.view === "basic" ? "basic" : "pro",' in choice
+    assert "onchange: (view) => ctx.keepView(view)," in choice
+    # It comes last on the page, under the six pages and the two links: most people never change it.
+    assert settings.index('"settings.all.title"') < settings.index('name: "start",')
+    english = scripts()["text-en.js"]
+    assert '"settings.label.start": "Open on",' in english
+    assert '"settings.label.start.home": "Home",' in english
+    assert '"settings.label.start.all": "All settings",' in english
+    # Neither is called by a word that ranks it, in a script or in a table.
     shown = "\n".join("\n".join(quoted_texts(source)) for source in scripts().values()).lower()
-    for word in ("advanced", "upgrade", "simple view", "expert", "premium"):
+    for word in ("advanced", "upgrade", "simple view", "expert", "premium", "zaawansowan"):
         assert word not in shown, f"a script says {word!r}"
-    # One control is built from the two, for both views, with the view on screen selected.
-    choice = function_body(main, "function viewChoice(shown) {")
-    assert (
-        'segmented({ name: "view", legend: "View", value: shown, options: VIEW_OPTIONS, '
-        "onchange: chooseView })"
-    ) in choice
-    assert main.count("viewChoice(") == 3  # its definition, the sidebar of Pro, the bar of Basic
-    assert 'viewChoice("pro")' in function_body(main, "function viewSwitch() {")
-    assert "viewSwitch()," in function_body(main, "function sidebar() {")
-    assert 'viewChoice("basic")' in function_body(main, "function basicShell() {")
-    # Keeping the view says nothing when it worked: the screen is the answer. The one other
-    # word this script has the app keep is the language, and that says nothing either.
+    # Keeping it says nothing when it worked: the screen is the answer. The one other word this
+    # script has the app keep is the language, and that says nothing either.
+    main = without_comments(scripts()["main.js"])
     assert main.count("api.setInterface(") == 2
     language = function_body(main, "async function keepLanguage() {")
     asked, refused = language.split("} catch (error) {")
@@ -1361,34 +1460,102 @@ def test_the_view_has_two_labels_and_no_toast() -> None:
     assert "applyState(await api.setInterface({ view }));" in kept
     assert "toast" not in kept
     assert "toastError(error);" in failed
-    for head in (
-        "async function chooseView(view) {",
-        "async function stayInPro() {",
-        "async function setUpInPro() {",
-    ):
-        assert "toast" not in function_body(main, head), head
-    # A visit to Pro, when the view that is kept is Basic already, keeps nothing.
-    choose = function_body(main, "async function chooseView(view) {")
-    assert "const known = Boolean(kept && kept.stored && kept.view === view);" in choose
-    assert "if (!known && !(await keepView(view))) return;" in choose
+    assert "toast" not in function_body(main, "async function setUpInPro() {")
+    assert "  keepView," in main[main.index("const ctx = {") : main.index("let queued = false;")]
+    # The switch "View", the bar of a visit to Pro and "Stay in Pro" are gone, with their words.
+    for gone in ("VIEW_OPTIONS", "viewChoice", "viewSwitch", "visitBar", "stayInPro", "chooseView"):
+        assert gone not in main, gone
+    for name, source in scripts().items():
+        said = "\n".join(quoted_texts(source))
+        for words in (
+            "Stay in Pro",
+            "Back to Basic",
+            "Your view stays Basic",
+            "Switch to Basic view",
+        ):
+            assert words not in said, f"{name} says {words!r}"
+    # The six pages get one entry above their six: the way back to Home.
+    sidebar = function_body(main, "function sidebar() {")
+    home = 'id: "pro-home", href: "#/home", key: "home" }'
+    assert sidebar.index(home) < sidebar.index("PRO_NAV.map(")
+    assert 't("pro.button.home")' in sidebar
 
 
 def test_the_six_pages_are_pro_whatever_view_is_kept() -> None:
     main = without_comments(scripts()["main.js"])
     route = function_body(main, "function routeFromHash() {")
-    named = route.index("if (Object.prototype.hasOwnProperty.call(VIEWS, name)) return name;")
-    basic = route.index('if (name === "basic") return "basic";')
-    assert named < basic < route.index("return defaultRoute();")
-    # Only an address that names no page is decided by the view that is kept.
+    # The addresses, in the order they are tried: the simple pages; the six pages under "pro";
+    # the addresses from before; a step of setting up; and only then what the app keeps.
+    simple = route.index(
+        'if (name === "home" || Object.prototype.hasOwnProperty.call(PAGES, name)) return name;'
+    )
+    pro = route.index(
+        'if (name === "pro") return Object.prototype.hasOwnProperty.call(VIEWS, step) ? '
+        '`pro/${step}` : "pro/overview";'
+    )
+    basic = route.index('if (name === "basic") return "home";')
+    old = route.index("if (OLD_ADDRESSES.includes(name)) return `pro/${name}`;")
+    assert simple < pro < basic < old < route.index("return defaultRoute();")
+    pages = re.search(r"const PAGES = \{(.*?)\};", main, re.S)
+    assert pages is not None
+    assert re.findall(r"^\s+(\w+): \w+,$", pages.group(1), re.M) == [
+        "documents",
+        "activity",
+        "settings",
+        "how",
+    ]
+    six = re.search(r"const VIEWS = \{(.*?)\};", main, re.S)
+    assert six is not None
+    assert re.findall(r"^\s+(\w+): \w+,$", six.group(1), re.M) == [
+        "overview",
+        "activity",
+        "approvals",
+        "documents",
+        "apps",
+        "vault",
+    ]
+    # "#/documents" and "#/activity" are the simple pages now: of the addresses from before,
+    # only the four that name no simple page lead to one of the six.
+    assert 'const OLD_ADDRESSES = ["overview", "approvals", "apps", "vault"];' in main
+    # An address from before becomes the address its page has now; one that names no page is
+    # left as it is.
+    settle = function_body(main, "function settleAddress() {")
+    assert 'if (name !== "basic" && !OLD_ADDRESSES.includes(name)) return;' in settle
+    assert 'window.history.replaceState(null, "", `#/${ctx.route}${query}`);' in settle
+    # Only an address that names no page is decided by what the app keeps.
     fallback = function_body(main, "function defaultRoute() {")
-    assert 'return kept && kept.view === "basic" ? "basic" : "overview";' in fallback
+    assert 'return kept && kept.view === "basic" ? "home" : "pro/overview";' in fallback
     screen = function_body(main, "function screen() {")
-    assert screen.index("return lockedScreen(ctx);") < screen.index('if (ctx.route === "basic")')
-    assert 'if (ctx.route === "basic") return basicShell();' in screen
-    # What the Basic page lists is asked for by kind, never picked from the newest entries.
+    assert screen.index("return lockedScreen(ctx);") < screen.index(
+        'if (ctx.route.startsWith("pro/")) return shell();'
+    )
+    assert screen.rstrip().endswith("return simpleShell();")
+    # Every link a script holds names a page by the address it has now.
+    for name, source in scripts().items():
+        for address in re.findall(r'"#/([a-z/]*)', without_comments(source)):
+            first = address.split("/")[0]
+            assert first in ("home", "documents", "activity", "settings", "how", "pro", "setup"), (
+                f"{name} links to #/{address}"
+            )
+    for name in ("views.js", "manage.js", "sheets.js"):
+        # The six pages link to each other, never to a simple page of the same word.
+        for address in re.findall(r'"#/([a-z/]*)', without_comments(scripts()[name])):
+            assert address.startswith("pro/"), f"{name} links to #/{address}"
+    # What Home lists is asked for by kind, never picked from the newest entries; so are the
+    # two lists of the page Activity.
     assert 'left: () => api.activity({ limit: LEFT_FIRST, kind: "release" }),' in main
     assert 'api.activity({ limit: STOPS_PAGE, kind: "refusal" })' in main
-    assert 'basic: ["apps", "approvals", "settings", "documents", "left", "stops"],' in main
+    assert "page: await api.activity({ limit: ROWS_PAGE, kind: tab })" in main
+    assert "const ROWS_PAGE = 20;" in main
+    assert 'home: ["apps", "approvals", "settings", "documents", "left", "stops"],' in main
+    # What each plain page loads.
+    for needs in (
+        'documents: ["documents", "apps"],',
+        'activity: ["apps", "rows"],',
+        "settings: [],",
+        "how: [],",
+    ):
+        assert needs in main, needs
 
 
 def test_the_tab_shows_that_a_passage_waits() -> None:
@@ -1407,27 +1574,6 @@ def test_the_tab_shows_that_a_passage_waits() -> None:
     # The icon with the dot is the icon, and a dot.
     plain = read(STATIC / "favicon.svg").strip().removesuffix("</svg>")
     assert read(STATIC / "favicon-waiting.svg").startswith(plain)
-
-
-def test_the_top_bar_of_basic_claims_no_state_of_the_vault_while_the_app_does_not_answer() -> None:
-    main = without_comments(scripts()["main.js"])
-    bar = function_body(main, "function topbar() {")
-    assert "const unknown = ctx.offline;" in bar
-    assert 'if (unknown) lock = "State unknown";' in bar
-    assert bar.index('if (unknown) lock = "State unknown";') < bar.index("else if (state.locks_at)")
-    assert 'class: ["lock-state", unknown && "is-unknown"]' in bar
-    # The bar that says what is wrong is drawn by the Basic page itself, in the block that stays
-    # in view, and with the command only for a vault that this command would open again.
-    basic = without_comments(scripts()["basic.js"])
-    bars = function_body(basic, "export function basicBars(ctx, problem) {")
-    assert bars.count('class: "offline-bar", role: "alert"') == 2
-    assert "const command = ctx.state.demo ? null : launch.command;" in bars
-    assert 'copyLine(ctx, "bar-launch-copy", command,' in bars
-    assert basic.count('class: "offline-bar"') == 2
-    shell = function_body(main, "function basicShell() {")
-    assert 'el("div", { class: "basic-top", key: "top" }, topbar(), bar ?' in shell
-    assert ["position: sticky" in rule for rule in css_rules("app.css", ".basic-top")] == [True]
-    assert ["position: sticky" in rule for rule in css_rules("app.css", ".viewbar")] == [True]
 
 
 def test_the_locked_screen_says_in_both_views_what_is_visible_without_the_key() -> None:
@@ -1483,22 +1629,35 @@ def test_the_vault_page_says_where_the_view_is_kept() -> None:
     # The page keeps a third word there from the moment the owner chooses a language.
     kept = page.index(
         'fact("Kept beside the vault, not sealed", '
-        '"Which view you use, whether setup was finished, and your language once you chose one")'
+        '"Your language, the page it opens on, and whether the first steps are done")'
     )
     assert record < kept < page.index('{ key: "location" }')
 
 
-def test_the_details_fold_the_record_on_the_basic_page() -> None:
+def test_the_details_fold_the_record_on_every_page_that_is_not_one_of_the_six() -> None:
     views = without_comments(scripts()["views.js"])
     body = function_body(views, "function panelBody(ctx, panel) {")
-    assert 'const folded = ctx.route === "basic";' in body
-    assert "const open = folded && ctx.ui.panelMore === true;" in body
-    button = body[body.index('button(t("panel.button.record"), {') :]
+    assert "const folded = !onProPage(ctx);" in body
+    assert 'return String(ctx.route).startsWith("pro/");' in function_body(
+        views, "function onProPage(ctx) {"
+    )
+    # Folded, the panel is drawn by the function that says everything in the language of the
+    # page; the six pages show the record's own figures at once, as before.
+    assert "if (folded) return simplePanelBody(ctx, panel, item);" in body
+    assert "recordBlocks(item)," in body[body.index("if (folded)") :]
+    simple = function_body(views, "function simplePanelBody(ctx, panel, item) {")
+    fold = function_body(views, "function recordFold(ctx, panel, item) {")
+    assert "const open = ctx.ui.panelMore === true;" in fold
+    button = fold[fold.index('button(t("panel.button.record"), {') :]
     assert 'id: "panel-more",' in button[:200]
     assert 'expanded: open ? "true" : "false",' in button[:200]
-    assert "!folded || open ? recordBlocks(item) : null," in body
-    # What left, where it went and that it cannot be taken back are never behind the button.
-    fold = body.index("folded\n")
+    assert "open ? recordBlocks(item) : null," in fold
+    assert fold.count("recordBlocks(item)") == 1
+    assert "recordBlocks(" not in simple
+    # What left, where it went and that it cannot be taken back are never behind the button:
+    # they are drawn before it, by one function for every page.
+    assert simple.index("leftBlocks(item, ") < simple.index("recordFold(ctx, panel, item),")
+    left = function_body(views, "function leftBlocks(item, figure) {")
     # (Their texts are keys of the tables: "The exact text that left", "This text is with ...
     # now.", "... cannot take it back.", "Says it is ..., unverified".)
     for shown in (
@@ -1506,9 +1665,20 @@ def test_the_details_fold_the_record_on_the_basic_page() -> None:
         't("panel.say.1", { destination: item.destination })',
         't("panel.say.2")',
         't("panel.say.1.local")',
-        't("card.status.claimed", { claimed: item.claimed })',
     ):
-        assert 0 < body.index(shown) < fold, shown
+        assert shown in left, shown
+    claimed = 't("card.status.claimed", { claimed: item.claimed })'
+    assert 0 < simple.index(claimed) < simple.index("recordFold(")
+    assert claimed in body
+    # On a simple page the title is the row's sentence, and nothing of the panel but the
+    # record's own figures is English: no chip, no note and no sentence of the six pages.
+    assert "rowSentence(item, passagesOf(ctx, item))" in simple
+    for english in ("statusChip(", "deed(", "REFUSAL_TEXT", "VARIANT_TEXT", "QUESTION_TEXT"):
+        assert english not in simple, english
+    assert sentences_of(simple) == []
+    assert sentences_of(left) == []
+    assert 't("panel.status.nothing")' in simple
+    assert 't("panel.status.count", { n: item.count })' in simple
     blocks = function_body(views, "function recordBlocks(item) {")
     assert '"Entry"' in blocks
     assert '"Chain"' in blocks
@@ -1535,7 +1705,7 @@ def test_the_first_run_lives_in_the_address_and_the_vault_not_in_the_page() -> N
     screen = function_body(main, "function screen() {")
     step = 'if (ctx.route === "setup") return setupScreen(ctx, loadProblem());'
     assert screen.index("return lockedScreen(ctx);") < screen.index(step)
-    assert screen.index(step) < screen.index('if (ctx.route === "basic")')
+    assert screen.index(step) < screen.index('if (ctx.route.startsWith("pro/"))')
     # What a step loads, and what the step "First question" loads besides: the calls of its app,
     # asked for by the app's name.
     assert 'setup: ["apps", "approvals", "settings", "documents", "stops"],' in main
@@ -1553,11 +1723,12 @@ def test_the_first_run_lives_in_the_address_and_the_vault_not_in_the_page() -> N
     opening = function_body(gateway, "export function openStep(ctx) {")
     assert "ctx.ui.setup = freshFirstRun().setup;" in opening
     assert 'ctx.ui.focusId = "setup-title";' in opening
-    # After "Create the vault" the address names the step that adds an app, or Overview in Pro.
+    # After "Create my vault" the address names the step that adds an app, or Overview of the
+    # six pages.
     created = function_body(gateway, "async function createVault(ctx) {")
     assert (
         'ctx.navigate(state.interface && state.interface.view === "basic" ? '
-        '"setup/app" : "overview");'
+        '"setup/app" : "pro/overview");'
     ) in created
     assert created.index("ctx.navigate(") < created.index("ctx.applyState(state);")
     # Four parts, and pairing is not one of them. A part carries a check only when it is true of
@@ -1577,11 +1748,12 @@ def test_the_first_run_lives_in_the_address_and_the_vault_not_in_the_page() -> N
     frame = function_body(gateway, 'export function setupScreen(ctx, problem = "") {')
     assert '"You can stop at any point. What you have done stays. ",' in frame
     assert '"Set everything up yourself in Pro",' in frame
-    assert "bar: basicBars(ctx, problem)," in frame
-    # The foot link keeps Pro as the view, through the one function that keeps a view.
+    assert "bar: problemBar(ctx, problem)," in frame
+    # The foot link has the app open on the six pages, through the one function that keeps
+    # that choice.
     pro = function_body(main, "async function setUpInPro() {")
     assert 'if (!known && !(await keepView("pro"))) return;' in pro
-    assert 'navigate("overview");' in pro
+    assert 'navigate("pro/overview");' in pro
 
 
 def test_the_app_step_ticks_nothing_and_gives_ask_me_each_time() -> None:
@@ -1649,7 +1821,7 @@ def test_the_sample_letter_says_that_it_is_invented_and_is_sent_apart() -> None:
     )
     assert (
         'senders.length ? amber("docs-sentence", senders.length === 1 ? '
-        "basicGrantSentence(senders[0]) : GENERAL_SENTENCE) : null,"
+        "basicGrantSentence(senders[0]) : generalSentence()) : null,"
     ) in step
 
 
@@ -1740,7 +1912,7 @@ def test_the_first_question_says_a_name_and_never_who_asked() -> None:
     assert "const filled = anyWaiting === 0;" in step
     # The way out while nothing has come stores nothing.
     later = step[step.index('button("Finish later", {') :]
-    assert 'onclick: () => ctx.navigate("basic")' in later[:200]
+    assert 'onclick: () => ctx.navigate("home")' in later[:200]
 
 
 def test_setting_up_ends_by_itself_only_where_the_app_keeps_that_word() -> None:
@@ -1941,9 +2113,10 @@ def test_the_lower_parts_are_folded_only_while_the_demo_guide_is_open() -> None:
     fold = function_body(basic, "function foldOf(ctx, name) {")
     assert fold.splitlines()[1].strip() == "if (!guideOpen(ctx)) return null;"
     assert "id: `fold-${name}`," in fold
-    assert basic.count("foldOf(") == 4  # where it is defined, and in the three parts
+    # (Documents, the third part that folded, has a page of its own now.)
+    assert basic.count("foldOf(") == 3  # where it is defined, and in the two parts
+    assert "documentsSection" not in basic
     for head, name in (
-        ("function documentsSection(ctx) {", "documents"),
         ("function appsSection(ctx, stops) {", "apps"),
         ("function alsoSection(ctx) {", "also"),
     ):
@@ -1962,6 +2135,144 @@ def test_the_lower_parts_are_folded_only_while_the_demo_guide_is_open() -> None:
         assert '"details"' not in without_comments(source), name
     # "What left the vault" is not among them: it holds the rows and the stops the guide speaks of.
     assert "foldOf(" not in function_body(basic, "function leftSection(ctx, stops) {")
+
+
+# -- the simple frame and its plain pages -------------------------------------------
+
+
+def test_the_simple_scripts_hold_no_sentence() -> None:
+    # The plain pages take every text from the tables: their script holds no quoted text that
+    # a person would read as words, and no label either. What it quotes are keys, classes,
+    # addresses, ids and names of the code. (gateway.js joins this test when its three steps
+    # of setting up, which keep their English until Home replaces them, are gone.)
+    pages = without_comments(scripts()["pages.js"])
+    assert sentences_of(pages) == []
+    for text in quoted_texts(pages):
+        assert re.match(r"[A-Z][a-z]+( [a-z]+)*$", text.strip()) is None, text
+    assert re.search(r'import \{[^}]*\bt\b[^}]*\} from "\./texts\.js";', pages)
+    assert 'from "./brand.js"' not in pages, "the product's name is a place of the tables"
+    # The frame of these pages holds none either: see ON_THE_TABLE for its two functions.
+    main = without_comments(scripts()["main.js"])
+    nav = re.search(r"const NAV = \[(.*?)\n\];", main, re.S)
+    assert nav is not None
+    assert re.findall(r'\["(\w+)", "([\w.]+)", "(\w+)"\],', nav.group(1)) == [
+        ("home", "nav.home", "home"),
+        ("documents", "nav.documents", "documents"),
+        ("activity", "nav.activity", "activity"),
+        ("settings", "nav.settings", "gear"),
+    ]
+    # Each glyph the frames and the pages name is one of the set.
+    dom = without_comments(scripts()["dom.js"])
+    for glyph in ("home", "gear", "plug", "documents", "activity", "right", "lock"):
+        assert re.search(rf"^  {glyph}: \{{", dom, re.M), glyph
+
+
+def test_a_row_of_activity_is_made_from_fields_of_the_entry() -> None:
+    # The app's own sentence of an entry is English. A row of the simple pages, and the title
+    # of its details, is worded from the entry's fields in the language of the page.
+    pages = without_comments(scripts()["pages.js"])
+    assert "summary" not in pages
+    sentence = function_body(pages, "export function rowSentence(item, passages = null) {")
+    assert 'if (item.kind === "refusal") return t(stopKey(item), { app });' in sentence
+    for key in ("row.search.plain", "row.search", "row.search.none", "row.read", "row.read.plain"):
+        assert f't("{key}"' in sentence, key
+    # How many results a search had is a field of the entry; without it the row says no number.
+    assert (
+        'if (typeof item.results !== "number") return t("row.search.plain", { app });' in sentence
+    )
+    # A stop is worded by the limit that stopped the call, else by the code of the answer,
+    # else as "refused"; the two limits that apps of a kind share have one text; a call under
+    # a name that is not answered names no app.
+    limits = re.search(r"const STOPPED_BY_LIMIT = \{(.*?)\};", pages, re.S)
+    codes = re.search(r"const STOPPED_BY_CODE = \{(.*?)\};", pages, re.S)
+    assert limits is not None
+    assert codes is not None
+    assert dict(re.findall(r'"?([\w-]+)"?: "([^"]+)"', limits.group(1))) == {
+        "client-day": "row.stop.client-day",
+        "client-30-days": "row.stop.client-30-days",
+        "pool-day": "row.stop.shared",
+        "pool-30-days": "row.stop.shared",
+        "searches": "row.stop.searches",
+        "calls": "row.stop.calls",
+    }
+    assert dict(re.findall(r'(\w+): "([^"]+)"', codes.group(1))) == {
+        code: f"row.stop.{code}"
+        for code in ("NEEDS_APPROVAL", "NOT_FOUND", "BAD_REQUEST", "UNAVAILABLE")
+    }
+    stop = function_body(pages, "function stopKey(item) {")
+    assert (
+        stop.splitlines()[2].strip() == 'if (item.app === UNANSWERED) return "row.stop.unanswered";'
+    )
+    assert stop.rstrip().endswith('table[word] : "row.stop.other";')
+    # The two lists are the two kinds the app is asked for, twenty rows at a time, and a press
+    # on a row opens the details of its entry.
+    page = function_body(pages, "export function activityPage(ctx) {")
+    assert re.findall(r'\{ value: "(\w+)", label: t\("([^"]+)"\) \}', page) == [
+        ("release", "activity.label.left"),
+        ("refusal", "activity.label.stopped"),
+    ]
+    assert "onchange: (tab) => ctx.showRows(tab)," in page
+    assert "onclick: () => ctx.moreRows()" in page
+    assert 'href: "#/pro/activity" }, t("activity.button.full")' in page
+    row = function_body(pages, "export function activityRow(ctx, item) {")
+    assert "onclick: (event) => ctx.openPanel(item.seq, event.detail === 0)," in row
+    main = without_comments(scripts()["main.js"])
+    more = function_body(main, "async function moreRows() {")
+    assert "before: rows.order[rows.order.length - 1] }" in more
+    assert "kind: tab," in more
+
+
+def test_a_refused_file_is_worded_by_the_word_of_the_answer() -> None:
+    # Why the app did not take a file is one word of its answer; the page has a text for each
+    # word the app can send, and shows the app's own English sentence only for a refusal
+    # without a word, or with one it does not know.
+    from wdva.gate import extract
+
+    manage = without_comments(scripts()["manage.js"])
+    listed = re.search(r"const REFUSED = \{(.*?)\};", manage, re.S)
+    assert listed is not None
+    keys = dict(re.findall(r'(\w+): "([^"]+)"', listed.group(1)))
+    assert keys == {
+        "unsupported": "docs.error.type",
+        "empty": "docs.error.empty",
+        "no_text": "docs.error.notext",
+        "not_utf8": "docs.error.encoding",
+        "no_pdf_support": "docs.error.pdf",
+        "pdf_encrypted": "docs.error.password",
+        "pdf_no_text": "docs.error.scan",
+        "pdf_unreadable": "docs.error.unreadable",
+        "pdf_too_much": "docs.error.toomuch",
+        "pdf_too_slow": "docs.error.slow",
+    }
+    words = function_body(manage, "function refusedWords(error, rules) {")
+    assert 'if (error.code === "duplicate") return () => t("docs.error.duplicate");' in words
+    assert 'if (reason === "too_large") return () => t("docs.error.large", ' in words
+    assert "return () => t(REFUSED[reason]);" in words
+    assert words.rstrip().endswith(
+        'return () => t("docs.error.other", { reason: errorText(error) });'
+    )
+    # The word counts only beside the code it belongs to.
+    assert 'const reason = error.code === "invalid" && typeof error.reason === "string"' in words
+    # Every word the app has is one the page words.
+    assert set(extract.REFUSALS) == set(keys) | {"too_large"}
+    english = scripts()["text-en.js"]
+    for key in [*keys.values(), "docs.error.large", "docs.error.other"]:
+        assert f'  "{key}": "Not added: ' in english, key
+    # A Word file: what to do about it is said with the refusal.
+    assert '"docs.error.type": "Not added: only PDF and text files can be read. ' in english
+    assert "Save a Word file as PDF and add that." in english
+    # The command that adds PDF reading is the app's own, shown under the files once, with "Copy".
+    zone = function_body(manage, "export function dropZone(ctx, collection, options = {}) {")
+    assert (
+        "const install = state.items.some((item) => item.install) && "
+        'typeof rules.install === "string" ? rules.install : "";'
+    ) in zone
+    assert 'copyLine(ctx, `install-copy-${collection}`, install, t("docs.label.install")),' in zone
+    assert "pip install" not in manage
+    upload = function_body(manage, "export async function uploadFiles(ctx, collection, files) {")
+    assert "item.install = needsPdfSupport(error);" in upload
+    api = without_comments(scripts()["api.js"])
+    assert "this.reason = reason;" in api
 
 
 # -- two languages ----------------------------------------------------------------
@@ -2084,16 +2395,26 @@ def test_the_switch_stands_on_every_screen_before_the_vault_is_open_and_in_both_
     ):
         assert "return gateScreen(" in function_body(gateway, head), head
     assert gateway.count("languageSwitch(") == 1
-    # In today's two frames: the foot of Pro's sidebar, and the top bar of the Basic page.
+    # In both frames of an open vault it stands at the foot of the sidebar, above what is said
+    # about the lock. In the simple frame at 720 px and narrower that foot is part of the top
+    # bar, and the stylesheet shows the two letters in place of the words.
     main = without_comments(scripts()["main.js"])
     assert "chooseLanguage: pressLanguage," in main
     foot = function_body(main, "function sidebar() {")
-    assert foot.index("languageSwitch(pressLanguage),") < foot.index("viewSwitch(),")
-    assert "languageSwitch(pressLanguage, { short: true })," in function_body(
-        main, "function topbar() {"
-    )
+    assert foot.index("languageSwitch(pressLanguage),") < foot.index('class: ["lock-state",')
+    side = function_body(main, "function simpleSidebar() {")
+    assert side.index("languageSwitch(pressLanguage),") < side.index('class: ["side-lock",')
+    assert main.count("languageSwitch(pressLanguage)") == 3
+    narrow = without_comments(read(STATIC / "home.css")).split("@media (max-width: 720px) {")[1]
+    assert re.search(r"\.side-foot \.lang-word \{\s*display: none;", narrow)
+    assert re.search(r"\.side-foot \.lang-code \{\s*display: inline;", narrow)
     assert "languageSwitch(pressLanguage)" in function_body(main, "function stuckScreen() {")
-    # The switch is laid out by its own rules and is no part of the choice of the view.
+    # And on the page Settings, with its two words in full.
+    settings = function_body(
+        without_comments(scripts()["pages.js"]), "export function settingsPage(ctx) {"
+    )
+    assert "languageSwitch(ctx.chooseLanguage)," in settings
+    # The switch is laid out by its own rules and is no part of another choice.
     assert "segmented" not in switch
     assert [bool(rule) for rule in css_rules("app.css", ".gate-lang")] == [True]
     assert ["position: absolute" in rule for rule in css_rules("app.css", ".gate-lang")] == [True]
@@ -2140,17 +2461,25 @@ ON_THE_TABLE = {
         "async function createVault(ctx) {",
         "export function createScreen(ctx) {",
     ),
-    "main.js": ("function stuckScreen() {",),
     "views.js": (
         "async function decide(ctx, item, release, event) {",
         "function decidedWords(ctx, done) {",
         "function decidedLine(ctx, done) {",
         "function whyItWaits(item) {",
         "function approvalCard(ctx, item, index) {",
+        "function recordFold(ctx, panel, item) {",
+        "function leftBlocks(item, figure) {",
+        "function simplePanelBody(ctx, panel, item) {",
     ),
-    "sheets.js": ("export function requestReauth(demoPassphrase = null) {",),
+    "sheets.js": (
+        "export function requestReauth(demoPassphrase = null) {",
+        "export function generalSentence() {",
+        "export function basicGrantSentence(app) {",
+    ),
     "manage.js": (
-        "function refusedWords(error) {",
+        "export function loadingBlock() {",
+        "function refusedWords(error, rules) {",
+        "function needsPdfSupport(error) {",
         "export async function uploadFiles(ctx, collection, files) {",
         "export function whoLine(ctx, collection) {",
         "export function dropZone(ctx, collection, options = {}) {",
@@ -2163,6 +2492,28 @@ ON_THE_TABLE = {
         "export function languageSwitch(choose, { short = false } = {}) {",
         "export function errorText(error, own = {}) {",
         "export function toastError(error) {",
+        "export function copyButton(ctx, id, text, what, words = null) {",
+        "export function copyLine(ctx, id, text, what) {",
+        "export function problemBar(ctx, problem) {",
+    ),
+    "main.js": (
+        "function stuckScreen() {",
+        "function simpleSidebar() {",
+        "function simpleShell() {",
+    ),
+    "pages.js": (
+        "function whereTextGoes(readers) {",
+        "function fileNames(files) {",
+        "async function addToWhichGroup(ctx, files) {",
+        "function documentRow(ctx, entry, several) {",
+        "export function documentsPage(ctx) {",
+        "function stopKey(item) {",
+        "function passageOf(item, passages) {",
+        "export function rowSentence(item, passages = null) {",
+        "export function activityRow(ctx, item) {",
+        "export function activityPage(ctx) {",
+        "export function settingsPage(ctx) {",
+        "export function howPage(ctx) {",
     ),
 }
 

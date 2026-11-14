@@ -15,13 +15,15 @@ that left.
   against limits per app, per kind of app and per document. Where you say so, each passage waits
   for your approval first.
 - **A record.** Every result is written down with its exact text before it is handed over. You
-  read it on the same page: what left, row by row, and in the view named Pro every entry.
+  read it on the same page: what left, row by row, and under Settings every entry.
 
-![The Basic page of an unlocked vault: the headline "Nothing is waiting for you", the rows under "What left the vault", and under "Documents" and "Apps" one app that is set to "Ask me each time"](images/gate-basic.png)
+![Home of an unlocked vault, as it looked when it was one page called Basic: the headline "Nothing is waiting for you", the rows under "What left the vault", and under "Documents" and "Apps" one app that is set to "Ask me each time"](images/gate-basic.png)
 
-The page has two views of the same vault. **Basic** is one page with what you use every day:
-what waits for your approval, what left, your documents and your apps. **Pro** is six pages with
-every setting. A new vault opens in Basic, after a first run in four steps.
+The page opens on **Home**: what waits for your approval, what left, and your apps.
+**Documents**, **Activity** and **Settings** are the other three entries of its sidebar, and
+under Settings are six pages with every setting. A new vault opens on Home, after a first run in
+four steps. The pictures in this guide were taken before the sidebar was there: they show the
+same parts in the two views it replaces, which were called Basic and Pro.
 
 **What it is not.** Read this before you put anything real into it.
 
@@ -48,7 +50,7 @@ Contents:
 1. [Try it in two minutes](#try-it-in-two-minutes)
 2. [Install on a Mac](#install-on-a-mac)
 3. [First run with your own documents](#first-run-with-your-own-documents)
-4. [Basic and Pro](#basic-and-pro)
+4. [Home and Settings](#home-and-settings)
 5. [Connecting each app](#connecting-each-app)
 6. [Daily use](#daily-use)
 7. [What an AI app sees](#what-an-ai-app-sees)
@@ -58,12 +60,16 @@ Contents:
 11. [Command reference](#command-reference)
 12. [What was tested and what was not](#what-was-tested-and-what-was-not)
 
-The words on this page are the words of the interface, and the two views do not use the same
-ones. Pro says "hosted" for an app whose model runs at a provider (Anthropic, OpenAI and so on)
-and "local" for an app whose model runs on your Mac. Basic and the first run say "apps that
-send text to a provider" and "apps that run on this computer" for the same two kinds. A named
-set of documents, which is what you give to an app, is a "collection" in Pro and a "group" in
-Basic. This guide uses the words of the page it is describing. The developer's pages are
+The words on this page are the words of the interface, and its pages do not all use the same
+ones. The six pages under Settings say "hosted" for an app whose model runs at a provider
+(Anthropic, OpenAI and so on) and "local" for an app whose model runs on your Mac. Home,
+Documents and the first run say "apps that send text to a provider" and "apps that run on this
+computer" for the same two kinds. A named set of documents, which is what you give to an app, is
+a "collection" on the six pages and a "group" everywhere else. This guide uses the words of the
+page it is describing. Home is the page that was called Basic, and the six pages under Settings
+were the view called Pro; a few sentences of Home still say "Basic" and "Pro", and where this
+guide says "the Basic page" or "Basic" it means Home, and by "Pro" the six pages. The developer's
+pages are
 [GATE_FORMAT.md](GATE_FORMAT.md), which specifies the files of a vault and its record, and
 [THREAT_MODEL.md](THREAT_MODEL.md).
 
@@ -155,17 +161,17 @@ Things to try:
    has three groups, three apps and both kinds of app, which is more than a new vault has. "Hide"
    on the guide puts the guide away and unfolds them all; the guide is back when the page is
    loaded again.
-7. **Switch to Pro.** At the bottom of the page, "View" offers "Basic" and "Pro". Pro shows the
-   same vault on six pages. Activity there lists every entry, the demo's own preparations
+7. **Open the six pages.** Press "Settings", then "Overview" under "All settings". They show
+   the same vault with every setting. Activity there lists every entry, the demo's own preparations
    included; the row of "A name not in use" says "Asked and was refused: no app is answered under
    that name". On Overview and on Apps a strip says "Apps that run on this Mac are not answered
    yet": until you choose, only the apps that send text to a provider are answered, and
    [Connecting each app](#connecting-each-app) says why. "Apps on this Mac only" and "Both" have
    an app answered that was not. So once ten minutes have passed since the passphrase was last
    given, which the demo does by itself at its start, either one asks for it first; the sheet
-   shows the demo's passphrase. Pro has no button that makes the played app ask again: "Basic"
-   under "View" leads back to the guide.
-8. **Press "Lock now"**, at the top right of the Basic page, then unlock again. The locked page
+   shows the demo's passphrase. The six pages have no button that makes the played app ask
+   again: "← Home", above their six entries, leads back to the guide.
+8. **Press "Lock now"**, at the foot of the sidebar, then unlock again. The locked page
    shows the demo's passphrase and a button "Fill it in". A passage that was waiting when the
    vault locked does not wait any more, and the played app does not ask again by itself: the
    guide then says "Nothing is waiting now" and offers its button.
@@ -298,14 +304,15 @@ stand two words, "English" and "Polski". The page starts in the language of your
 that is Polish or English, and in English otherwise; a press changes it at once. While there is
 no vault the choice lives in the page alone, so reloading the tab loses it. "Create my vault"
 keeps it with the vault, and from then on a press is kept at once, also while the vault is
-locked: [Basic and Pro](#basic-and-pro) says where. The switch also stands at the foot of the
-sidebar in Pro and in the top bar of the Basic page (there as "EN" and "PL"). In this version
-the chosen language reaches the screens before the vault is open, the approval card, the sheet
-"Enter your passphrase again", the place where files are added with its lines, the question
-before a document is removed, the eight statements under "What Locktender cannot do", and a few
-labels of the panel that shows one entry of the record. Numbers, sizes and times are written
+locked: [Home and Settings](#home-and-settings) says where. The switch also stands at the foot
+of the sidebar and on the page Settings; in a narrow window it is in the bar at the top, as "EN"
+and "PL". In this version the chosen language reaches the screens before the vault is open, the
+sidebar, the pages Documents, Activity, Settings and "How it works and what it cannot do", the
+approval card, the sheet "Enter your passphrase again", the question before a document is
+removed, and the panel that shows what one entry released. Numbers, sizes and times are written
 the way the chosen language writes them on every page ("12 000", "5 min temu"). Everything else
-on the page is in English, and so is everything an AI app is told.
+is in English: Home but for its cards, the steps of the first run, and the six pages under
+Settings. So is everything an AI app is told.
 
 - **The pairing belongs to the tab.** Reloading the tab keeps it. A new tab or window asks for
   the code again, and takes the same code for as long as Locktender runs.
@@ -336,10 +343,10 @@ The screen "Choose a passphrase" asks for a passphrase twice. The rules:
 here on the address of the page names the step, so reloading the tab shows the same step again.
 
 Along with the vault, Locktender writes two or three words into a small file in the vault's
-folder that is not sealed: which view you use, which is Basic for a new vault, that setting up is
-not finished, and your language (`en` or `pl`) if you chose one on the way here. Without a
-choice the file holds the two words, and the page goes by your browser.
-[Basic and Pro](#basic-and-pro) says what the file is for.
+folder that is not sealed: on which page the app opens, which is Home for a new vault, that
+setting up is not finished, and your language (`en` or `pl`) if you chose one on the way here.
+Without a choice the file holds the two words, and the page goes by your browser.
+[Home and Settings](#home-and-settings) says what the file is for.
 
 ### Step 2: App
 
@@ -382,7 +389,7 @@ Under the rule: "A passage is one piece of a document, at most 800 characters."
 
 The first run gives this one rule. The other two choices, "Can read" and "No access", are made
 later: on the Basic page with "Change" in the app's row, or in Pro under Apps.
-[The Basic page](#the-basic-page) has the three side by side.
+[Home](#home) has the three side by side.
 
 Two details. If more than ten minutes have passed since you typed the passphrase, the press asks
 for it first ([When the passphrase is asked again](#when-the-passphrase-is-asked-again)). And if
@@ -426,9 +433,9 @@ Word file as PDF and add that."
 
 Under the files that were sealed the screen says who can ask for them from now on, for example
 "Apps that can ask for it from now on: claude-desktop." It names the apps by the names they have
-in the vault, and not what each may do with the document: that is on the Basic page under
-"Apps", and in Pro. Adding a document never asks for the passphrase, so this is said where the
-documents are added in the first run and on the Basic page.
+in the vault, and not what each may do with the document: that is on Home under "Apps", and
+under Settings on the page Apps. Adding a document never asks for the passphrase, so this is
+said where the documents are added, in the first run and on the page Documents.
 
 **The file you added stays where it was, not encrypted.** The page says so after every upload:
 "A sealed copy goes into the vault, and the file you add stays where it was, not encrypted."
@@ -533,8 +540,8 @@ else ([Approvals](#approvals)).
 - After "Don’t release": "Not released", and "Nothing from that passage left. If claude-desktop
   asks again, the passage waits here again."
 
-"Open my vault" then leads to the Basic page; while the sample letter is the only document, "Add a
-document of your own" stands beside it. Under the buttons is the command for another day: "To open
+"Open my vault" then leads to Home; while the sample letter is the only document, "Add a
+document of your own" stands beside it and leads to the page Documents. Under the buttons is the command for another day: "To open
 Locktender again after you quit it or restart this computer, run this in Terminal:".  **"Nothing
 arrives?"** unfolds what to look at while the line still waits: "Was Claude Desktop really quit and
 opened again? On a Mac, closing the window is not enough."; "Ask it plainly: “Use the Locktender
@@ -560,14 +567,15 @@ documentation says.
   on the Basic page, and the card leads on.
 - **When setting up is over.** It is over once the vault has an app and a document and an app has
   asked; "Open my vault" after the first request ends it too, and so does "Hide" on the card:
-  "Setup is hidden. Adding an app, adding documents and the connection steps stay on this page."
+  "Setup is hidden. Adding an app and the connection steps stay on this page; documents are
+  added under Documents."
   Locktender notes it in the small file beside the vault, and the card does not come back.
 - **The steps later.** They stay reachable from the Basic page: "Add an app" opens step 2, and
   "Show the connection steps", in the sheet behind an app's "Change", opens step 4 for that app.
   Once setting up is over, a step opened this way has no row of four parts at its top, and
   step 2 has "Cancel" where "Skip" was.
-- **"Set everything up yourself in Pro".** This link at the foot of steps 2 to 4 makes Pro your view
-  and opens Overview. There a card "Getting started" lists the same work as four steps of its
+- **"Set everything up yourself in Pro".** This link at the foot of steps 2 to 4 makes the six
+  pages under Settings what the app opens on, and opens Overview. There a card "Getting started" lists the same work as four steps of its
   own: "Add documents", "Add an app", "Give the app a collection" and "Connect the app". A vault
   that is created while Locktender runs with `--view pro` goes there straight after "Create the
   vault".
@@ -575,26 +583,53 @@ documentation says.
 ### Every later start
 
 On every later start you pair with the new code and type your passphrase on the page "The vault
-is locked". A vault whose view is Basic then opens on the Basic page. You do not have to restart
+is locked". The vault then opens on Home, or on Overview where you chose "All settings" under
+"Open on". You do not have to restart
 your AI apps when Locktender is locked, unlocked or started again: they ask anew with every call.
 
-## Basic and Pro
+## Home and Settings
 
-The page has two views of one vault. What an app gets does not depend on the view you look at.
+Once the vault is open, the page has a sidebar with four entries. What an app gets does not
+depend on the page you look at.
 
-- **Basic** is one page: what waits for your approval, what left the vault, your documents and
-  your apps. It is made for a vault with one group of documents and apps that ask each time, and
-  it changes few things. [The Basic page](#the-basic-page) goes through it.
-- **Pro** is six pages, Overview, Activity, Approvals, Documents, Apps and Vault, with every
-  setting: collections, limits, pausing, words to replace, the record entry by entry.
+- **Home** is what you use every day: what waits for your approval, what left the vault, and
+  your apps. [Home](#home) goes through it. While a passage waits, the entry carries the number.
+- **Documents** holds your documents: how many there are, the sentence "A sealed copy goes into
+  the vault, and the file you add stays where it was, not encrypted.", where text from them
+  goes when an app can ask for them, the place that takes files, and a row for each document
+  with its number of passages, the day it was added and a bin. The bin asks first. A file that
+  is not added says why, in the language of the page. In a vault with several groups each row
+  names its group, and files you add are held until you have answered "Add to which group?".
+  The sheet lists each group with the apps that can ask for what is in it. No group is chosen
+  for you.
+- **Activity** has two lists: "Given to apps", the answers apps were given, and "Stopped", the
+  calls that were stopped. The newest is on top, twenty at a time; "Show more" adds twenty. A
+  press on a row opens the exact text that left. "Full record (in English)" leads to the page
+  under Settings that has every entry, your own changes included.
+- **Settings** has the language; "All settings", six rows that lead to the six pages; the
+  command that opens Locktender again, with "Copy"; the link "How it works and what it cannot
+  do"; "Open on"; and two grey lines, the version and the folder of the vault.
 
-![The Overview page of Pro in the demo: the six pages in the sidebar with the view switch under them, what each app was sent in the last 24 hours, the latest activity, and the encryption status with the newest entry of the record](images/gate-overview.png)
+Under the entries the sidebar says until when the vault is unlocked, and has the two languages
+and "Lock now". In a window of 720 px or narrower there is no sidebar: the name, "EN" and "PL"
+and a button with a lock are in a bar at the top, and the four entries in a bar at the bottom
+that stays in view.
 
-**The switch.** It is labelled "View" and has two choices, "Basic" and "Pro". On the Basic page
-it is in a bar at the bottom of the window, with the sentence "Basic shows what you use every
-day; Pro shows every setting. Both show the same vault." In Pro it is at the foot of the sidebar,
-above "Lock now"; in a narrow window, where the sidebar shows icons, it is one button, "Switch to
-Basic view". A press switches at once: "Basic" opens the Basic page, "Pro" opens Overview.
+**The six pages.** Overview, Activity, Approvals, Documents, Apps and Vault have every setting:
+collections, limits, pausing, words to replace, the record entry by entry. They are in English.
+Their own sidebar lists the six, and above them "← Home". The addresses of the page say where
+you are: `#/home`, `#/documents`, `#/activity`, `#/settings`, and `#/pro/overview` to
+`#/pro/vault` for the six. An address from an earlier version still opens a page: `#/basic` is
+Home; `#/overview`, `#/approvals`, `#/apps` and `#/vault` are the pages under `#/pro/`; and
+`#/documents` and `#/activity` are now the two pages of the sidebar.
+
+![The Overview page in the demo, as it looked before the sidebar had "← Home": the six pages in the sidebar, what each app was sent in the last 24 hours, the latest activity, and the encryption status with the newest entry of the record](images/gate-overview.png)
+
+**"Open on".** This setting, the last on the page Settings, has two choices: "Home" and "All
+settings". With "Home" the vault opens on Home after every unlock. With "All settings" it opens
+on Overview when Locktender is started, and after a later unlock on the page that was open. A
+press is kept at once, and you stay on Settings. Looking at one of the six pages keeps nothing,
+and neither does "← Home".
 
 **Where the choice is kept.** Beside the vault, in the file `run/interface.json` in the vault's
 folder, together with two more words: whether setting up is finished, and the language of the
@@ -603,39 +638,38 @@ belong to the vault and not to the browser: they are the same in every tab and a
 and the screens that come before the vault is open, pairing included, are in that language. The
 file is not sealed, it is no setting of the vault, and changing it leaves no entry in the record.
 
-- A new vault starts in Basic.
-- A vault from before the two views has no such file. It opens in Pro until you choose "Basic",
-  and Basic shows it no card "Finish setting up".
-- The demo opens in Basic.
-- `wdva gate app --view basic` and `wdva gate app --view pro` set the view at the start.
+- A new vault opens on Home.
+- A vault from before this file existed has none. It opens on Overview until you choose "Home"
+  under "Open on", and Home shows it no card "Finish setting up".
+- The demo opens on Home.
+- `wdva gate app --view basic` and `wdva gate app --view pro` set it at the start: `basic` is
+  Home, `pro` is Overview.
 - A file that is missing, or that holds anything but those two words, with a language (`en` or
   `pl`) beside them or without one, counts as no file. It never keeps a vault from unlocking.
 
-**A visit to Pro.** Where Basic shows a thing it does not change, it has a link into Pro: "Change
-in Pro", "Open in Pro", "Add an app (in Pro)", "Words to replace". Following one while your view
-is Basic is a visit. A bar at the top of the Pro page says "You are in Pro, where every setting
-is. Your view stays Basic." and has two buttons: "← Back to Basic", and "Stay in Pro", which
-makes Pro your view.
+**Links into the six pages.** Where Home shows a thing it does not change, it has a link to the
+page that does: "Change in Pro", "Open in Pro", "Add an app (in Pro)". They lead to the same
+pages as the rows under "All settings".
 
 **What each view does.**
 
-| | In Basic | In Pro |
+| | On Home, Documents, Activity | Under Settings |
 | --- | --- | --- |
-| Approve or refuse a passage | On the page, under "Approvals" | Approvals |
-| See what left, with the exact text | "What left the vault": the answers apps were given | Activity: every entry, your own changes included |
-| See what was refused | "Stopped in the last 24 hours" | Activity, "Refused" |
-| Add and remove documents | Yes | Documents |
-| More than one group of documents, notes, titles shown to apps | Shown, not changed | Documents |
-| Add an app | Where the vault has one group and no app on this computer | Apps |
-| Change what an app may do, remove an app | "Change" in the app's row, where the vault has one group | Apps, for each collection |
-| Pause an app, choose which kinds of apps are answered | Shown, not changed | Apps |
-| Limits | One figure for each app is shown | Apps and Vault |
-| Words to replace | A link | Vault |
-| Verify the record | Says that it was checked when you unlocked | Overview, "Verify now" |
-| Lock | "Lock now", top right | "Lock now", bottom left |
+| Approve or refuse a passage | On Home, under "Approvals" | Approvals |
+| See what left, with the exact text | Home, "What left the vault", and Activity, "Given to apps" | Activity: every entry, your own changes included |
+| See what was refused | Home, "Stopped in the last 24 hours", and Activity, "Stopped" | Activity, "Refused" |
+| Add and remove documents | Documents | Documents |
+| More than one group of documents, notes, titles shown to apps | The group of each document is shown; the rest is said on Home, not changed | Documents |
+| Add an app | On Home, where the vault has one group and no app on this computer | Apps |
+| Change what an app may do, remove an app | "Change" in the app's row on Home, where the vault has one group | Apps, for each collection |
+| Pause an app, choose which kinds of apps are answered | Shown on Home, not changed | Apps |
+| Limits | One figure for each app is shown on Home | Apps and Vault |
+| Words to replace | How many there are is said on Home | Vault |
+| Verify the record | It is checked at every unlock; nothing here says so | Overview, "Verify now" |
+| Lock | "Lock now", at the foot of the sidebar | "Lock now", at the foot of the sidebar |
 
-Whatever Pro set that Basic has no control for is said on the Basic page in sentences, under "Also
-set for this vault, in Pro".
+Whatever was set on the six pages that Home has no control for is said on Home in sentences,
+under "Also set for this vault, in Pro".
 
 ## Connecting each app
 
@@ -777,21 +811,18 @@ local app's name."
 
 ## Daily use
 
-Start Locktender in a Terminal window, pair, unlock, and leave both open. In Basic everything is
-on one page, which comes first here. Pro has six pages: Overview, Activity, Approvals, Documents,
-Apps and Vault. The parts after "The Basic page" follow Pro and say for each thing where Basic
-has it.
+Start Locktender in a Terminal window, pair, unlock, and leave both open. Home comes first
+here; [Home and Settings](#home-and-settings) says what Documents, Activity and Settings hold.
+The six pages under Settings follow: Overview, Activity, Approvals, Documents, Apps and Vault.
+Their parts say for each thing where Home has it.
 
 While the tab is in the background, it tells you when a passage waits: its title begins with the
 number, as in "(1) Locktender", and its icon gets a dot. A locked vault shows as "Locktender –
 locked".
 
-### The Basic page
+### Home
 
 From top to bottom:
-
-**The top bar.** The name at the left; at the right "Unlocked until" with the time at which the
-vault locks itself, and "Lock now". It stays in view while you scroll.
 
 **"Approvals".** Under this label stands the headline of the page: "Nothing is waiting for you",
 "1 passage is waiting for you" or, for example, "3 passages are waiting for you". The passages
@@ -822,7 +853,8 @@ again.", which "Got it" puts away.
 - A line such as "Before you unlocked at 9:06 AM" divides what left in this session from what
   left before.
 - "Press a row to see the exact text that left." The panel that opens is the one of Pro's
-  [Activity](#activity). On the Basic page its last two parts are folded behind "Record details".
+  [Activity](#activity). Opened from Home or from the page Activity, its last two parts are
+  folded behind "Record details".
 - What is not in this list: an app's question about what it may use, which hands out no document
   text, the calls that were refused, and your own changes. Pro's Activity has all of them.
 
@@ -831,21 +863,6 @@ for each app and each kind of stop. A line reads, for example, "claude-desktop w
 by its limit for 24 hours. It can get more as earlier answers become older than 24 hours.", or
 "1 call came under a name that is not answered here, and got nothing." A passage that waits for
 your approval is not listed here: it is a card. A press on a line opens the entry.
-
-**"Documents".** A count ("1 document, sealed in the vault."), the amber sentence about where
-text goes when an app that sends text to a provider can use the documents, and the place to add
-files, which works as in [Step 3](#step-3-documents). "Show the documents" unfolds a table with
-"Title", "Passages", "Added" and "Left so far", and a bin in each row. The bin asks first: "Apps
-can no longer search or read it, and what was released earlier stays under Activity.", and "Its
-files are deleted, not shredded, and backups keep what they have." Under the table: "Apps are shown a
-document's number, not its file name.", unless Pro switched titles on. While the sample letter
-of the first run is in the vault, a line says "1 of them is the invented sample letter.", with
-the button "Remove it".
-
-In a vault with several groups the count names them ("4 documents in 3 groups (collections in
-Pro): home (2), medical (1), tax (1)."), and files you add are held until you have answered "Add
-to which group?". The sheet lists each group with the apps that can ask for what is in it. No
-group is chosen for you.
 
 **"Apps".** The section begins with "A name is a label: Locktender cannot check which program is
 really asking." According to the vendors' documentation, one name can also stand for two
@@ -897,17 +914,11 @@ in Pro). What an app may do is set for each group.", "“medical” is not open 
 text to a provider.", "Limits were changed from the values of a new vault." or "1 word or number
 is replaced with [REDACTED] in everything that leaves."
 
-**The foot.** It has:
-
-- the command for another day: "To open Locktender again after you quit it or restart this
-  computer, run this in Terminal:", with "Copy", and "A page opens and asks for a new pairing code
-  from that terminal, then for your passphrase.";
-- "The record of what left was checked when you unlocked.";
-- "What Locktender cannot do", which opens the eight statements that Pro shows under Vault;
-- "A name or number that must never leave? Add it under “Words to replace” in Pro.";
-- the version, and "Everything on this page comes from Locktender on this computer."
-
-Under the foot, at the bottom of the window, is the bar with "View".
+**The foot.** One link, "How it works and what it cannot do". That page says in four parts how
+a passage reaches an app, where your files stay, what Locktender cannot do, in the eight
+statements that the page Vault shows too, and what a locked vault shows; its last line is the
+version. The command for another day is on the page Settings: "To open Locktender again after
+you quit it, run this in a terminal:", with "Copy".
 
 ### Overview
 
@@ -933,8 +944,8 @@ kind: "Released", "Questions", "Refused", "Approvals", "Changes", "Vault".
 
 ![The Activity page of Pro with one release opened in a panel that shows the exact text that left](images/gate-activity.png)
 
-Click a row to open it. The same panel opens from a row of the Basic page, with "Entry" and
-"Chain" folded behind "Record details". A release shows:
+Click a row to open it. The same panel opens from a row of Home or of the page Activity, with
+"Entry" and "Chain" folded behind "Record details". A release shows:
 
 - **who asked**: the app's name in your vault, where its text goes, and what the calling program
   said about itself, marked "unverified" because it is not checked. The name is the one in the
@@ -1040,7 +1051,7 @@ A collection can carry a one-line note that says what is inside. Apps that are g
 collection see that note. An empty collection can be removed.
 
 Basic shows a vault with several collections too, and then changes less of it:
-[The Basic page](#the-basic-page) says what.
+[Home](#home) says what.
 
 ### Apps
 
@@ -1056,7 +1067,7 @@ Each app has a card: its name, "Hosted" or "Local", where its text goes, its las
 switch "Answering", the buttons "Connect" and "Limits", and a bin. Under "Collections" the card
 has a row for every collection with three choices: "No access", "Can read" and "Ask me each
 time". They mean for that one collection what they mean in Basic for your documents; the table
-under [The Basic page](#the-basic-page) has them. A choice that gives more than before asks
+under [Home](#home) has them. A choice that gives more than before asks
 first, with the sentence that says where the text goes, for example: "Text this app receives from
 "documents" is sent to Anthropic and cannot be recalled." Where a collection is not open to
 hosted apps, the row of a hosted app says "Not open to hosted apps." and links to Documents.
@@ -1124,8 +1135,8 @@ are registered. They are answered from then on, which lets more leave.
 
 ### Locking
 
-- **"Lock now"** locks the vault at once. It is at the top right of the Basic page and at the
-  bottom left in Pro.
+- **"Lock now"** locks the vault at once. It is at the foot of the sidebar; in a narrow window
+  it is the button with a lock at the top right.
 - **Ctrl-C** in the Terminal window locks the vault and quits. So does closing that window.
 - **The vault locks itself** at the time that was announced when you unlocked it: eight hours
   later by default. Start with `--lock-after HOURS` for another span, from 0.02 (72 seconds) to
@@ -1143,7 +1154,7 @@ locked, apps get one answer: the vault is locked." Where the view that is kept i
 shows the number and the size of the sealed files, which anyone who can see the folder can see
 too, the number of the newest entry of the record and the start of its hash, and a second
 sentence: "The number and sizes of the sealed files are visible without the key, and what is in
-them is not." Where the view is Basic it shows none of these figures.
+them is not." Where the vault opens on Home it shows none of these figures.
 
 A passage that waits when the vault locks is not released, and it does not wait any more after
 you unlock: the app has to ask again. A page that saw the vault lock says so on the locked
@@ -1170,10 +1181,11 @@ passphrase, the page says "Nothing was changed."
 
 Never held up: lowering a limit, pausing, taking a collection away from an app, closing a
 collection, approving or refusing a single passage, adding and removing documents, adding a word
-to replace, switching between Basic and Pro, choosing a language, and locking. Note the one that
+to replace, choosing the page the vault opens on, choosing a language, and locking. Note the one that
 may surprise: a document you add to a collection is available at once to every app that has
-that collection. That is why the Basic page and the first run say, under the files you added,
-which apps can ask for them from now on. Pro's Documents page does not say it.
+that collection. That is why the page Documents and the first run say, under the files you
+added, which apps can ask for them from now on. The Documents page under Settings does not say
+it.
 
 Passphrases are checked one at a time, and a wrong one is answered after a second at the
 earliest: four wrong ones sent at the same moment were answered after 1, 2, 3 and 4 seconds in a
@@ -1183,8 +1195,8 @@ keystrokes has your passphrase.
 ### Words to replace
 
 In Pro, under Vault, "Words to replace" takes words and numbers that must never leave: a name, an
-account number. The foot of the Basic page links there, and Basic says how many are listed under
-"Also set for this vault, in Pro". Each has 2 to 200 characters, and a vault takes up to 200 of
+account number. Under Settings the row "Vault: limits, words to replace, the record" leads
+there, and Home says how many are listed under "Also set for this vault, in Pro". Each has 2 to 200 characters, and a vault takes up to 200 of
 them. Wherever one occurs in
 text that is about to leave, the app receives `[REDACTED]` in its place, and a search for it finds
 nothing. In a run for this guide, with one name listed, the sentence "Marguerite looks after the
@@ -1203,8 +1215,8 @@ nor remove from it.
 ### Verifying the record
 
 Every entry of the record holds the hash of the entry before it. Locktender checks the whole chain
-each time you unlock, and unlocks nothing if it does not hold. The foot of the Basic page says
-so: "The record of what left was checked when you unlocked." In Pro, "Verify now" on Overview
+each time you unlock, and unlocks nothing if it does not hold. Under Settings, "Verify now" on
+Overview
 checks it again while you watch and answers, for example, "The record verifies: 23 entries
 checked in 0.01 s."
 
@@ -1345,9 +1357,9 @@ replacement.
 
 - **The vault folder.** Every file in it is sealed, except three in its subfolder `run`: a lock
   file, while the vault is unlocked the socket, and the small file `interface.json`. That file
-  holds two or three words about the page and nothing from the vault: which view you use (`basic`
-  or `pro`), whether setting up is finished (`open` or `done`), and a language for the page (`en`
-  or `pl`) once one is kept there; see [Basic and Pro](#basic-and-pro). Without the passphrase
+  holds two or three words about the page and nothing from the vault: on which page it opens
+  (`basic` or `pro`), whether setting up is finished (`open` or `done`), and a language for the
+  page (`en` or `pl`) once one is kept there; see [Home and Settings](#home-and-settings). Without the passphrase
   the folder shows that it is a vault, how many files it holds, their sizes and the times they
   were written, and those words. It shows no title, no file name, no text, no search, no app
   name and no setting of the vault. The language, if one is kept, is also told to whatever
@@ -1374,8 +1386,8 @@ every program that decrypts something in order to use it.
 ## Limits you should know
 
 Most of these come out of three hostile reviews of the code; the rest the interface lists itself
-in eight statements headed "What Locktender cannot do": in Pro on the page Vault, in Basic
-behind the link of that name in the foot of the page. They are properties of the design, not
+in eight statements headed "What Locktender cannot do": on the page "How it works and what it
+cannot do", which Home and Settings link to, and under Settings on the page Vault. They are properties of the design, not
 defects that wait for a fix.
 
 - **Released text cannot be recalled.** Whatever an app received is with that app and, for a
@@ -1459,7 +1471,7 @@ is printed in Terminal, and the command ends.
 | "Pairing is switched off after five wrong codes." | Five wrong codes were sent since Locktender started, by you or by another program. | Quit Locktender with Ctrl-C and start it again. A tab that is paired already goes on working until then. |
 | "Pair this browser" in a tab of a browser you paired before | The pairing belongs to the tab. A new tab or window has none. | Type the code from the Terminal window again. It is the same code until Locktender is restarted. |
 | "The session ended. Pair again." | Locktender was restarted and came back at the same address, so the open page reached it again. The pairing of the earlier run is gone. | Type the new code. The old one answers "That is not the code." |
-| A bar "Locktender is not answering. Is it still running in its terminal? What you see may be out of date.", and "State unknown" where the page said "Unlocked": at the top right in Basic, at the bottom left in Pro | The program in Terminal has stopped, or its window was closed. When it stops, the vault is locked. | Start it again. On the Basic page and on the steps of the first run the bar has the command: "To start it again, run this in Terminal:", with "Copy", and under it what to expect: "It opens a new page. This one can then be closed.", or, where Locktender was started with `--no-browser`, "It prints the address of a new page. Open that one; this one can then be closed." Where it was started with a fixed `--port`: "This page continues by itself." In Pro the bar has the sentence alone, and so has a demo, which that command would not start again. Without a fixed `--port` Locktender has a new address after a restart: open the one on the `open:` line and pair there. With the same address, the open page continues by itself and asks for the new code. |
+| A bar "Locktender is not answering, so what you see may be out of date.", and "State unknown" at the foot of the sidebar, where it said until when the vault is unlocked | The program in Terminal has stopped, or its window was closed. When it stops, the vault is locked. | Start it again. The bar has the command: "To start Locktender again, run this in a terminal:", with "Copy". A demo's bar has the first sentence alone: that command would not start a demo again. Without a fixed `--port` Locktender has a new address after a restart: open the one on the `open:` line and pair there. With the same address, the open page continues by itself and asks for the new code. |
 | A page "Locktender is not answering" with the button "Try now" | The same, seen by a page that had nothing of the vault to show yet. | The same. The page says it in these words: "Start Locktender again in a terminal, then open the address it prints." It promises nothing about itself: a new start has a new address unless you named a port, and only at the same address does "Try now" find Locktender again. |
 | "That passphrase did not open the vault." | A wrong passphrase. Each try takes at least a second. | Try again. There is no limit on tries and no recovery; see "You forgot the passphrase" below. |
 | "The vault is open in another program. Lock it there first." | A second Locktender has this vault unlocked, usually in another Terminal window. | Lock or quit it there. A crash cannot leave a vault locked out: the lock ends with the program that held it. |
@@ -1472,10 +1484,11 @@ is printed in Terminal, and the command ends.
 | "The path of the vault is too long for the local socket that apps connect to." | Apps reach the vault through a socket inside its folder. The path of that socket, which is the folder's path with `/run/gate.sock` behind it, can have 100 bytes. | Choose a shorter place with `--store`. |
 | `wdva: error: the interface cannot listen on port N of this computer; is another program using it?` | The port you gave with `--port` is taken. | Give another port, or leave `--port` out. |
 | `wdva: error: Locktender does not run on Windows yet` | You are on Windows. | Use a Mac or Linux. |
-| "Not added: only .txt, .md, .markdown, .rst, .text and .pdf files can be read." | Another type of file, for example a Word document. | Save it as PDF or as text and add that. |
-| "Not added: the file is not UTF-8 text" | A text file in an older encoding. | Save it as UTF-8. |
-| "Not added: the PDF holds no text that can be read; scanned pages are not converted" | The PDF is made of pictures of pages. | Run text recognition on it in another program first. |
-| "Not added: reading PDFs is not installed with Locktender." | The environment Locktender runs in has no PDF reader: the package was installed without the `gate` or the `pdf` extra. Text files can be added all the same. | Install the reader into the same environment and start Locktender again. The line Locktender itself gives for this is `pip install "wdva[pdf] @ git+https://github.com/zd87pl/private-ai-adapters"`; `wdva[gate]` in its place installs the reader and the MCP SDK. |
+| "Not added: only PDF and text files can be read. Save a Word file as PDF and add that." | Another type of file, for example a Word document. | Save it as PDF or as text and add that. |
+| "Not added: this is not a text file in UTF-8." | A text file in an older encoding. | Save it as UTF-8. |
+| "Not added: this PDF holds pictures of pages, not text." | The PDF is made of pictures of pages. | Run text recognition on it in another program first. |
+| "Not added: this PDF is protected with a password." | The PDF cannot be opened without its password. | Save a copy without the password and add that. |
+| "Not added: this installation cannot read PDFs." | The environment Locktender runs in has no PDF reader: the package was installed without the `gate` or the `pdf` extra. Text files can be added all the same. | Install the reader into the same environment and start Locktender again. Under the files the page shows the line for this, "The command that adds PDF reading", with "Copy": `pip install "wdva[pdf] @ git+https://github.com/zd87pl/private-ai-adapters"`; `wdva[gate]` in its place installs the reader and the MCP SDK. |
 | "Not added: this document is already in the vault." | The same text was added before, perhaps under another name. | Nothing. |
 | "The record of this vault does not verify at entry #N. Nothing was unlocked." | Files of the record were changed, removed or restored only in part. | Restore the whole vault folder from a backup. |
 
@@ -1527,7 +1540,7 @@ move the old vault folder away or start with `--store` and a new place, and crea
 | `--window` | Open the page in a window of its own instead of the browser. Experimental. It needs the package pywebview, which no extra installs. Without it the page opens in the browser, or with `--no-browser` nowhere, and Terminal says which. The window asks for the pairing code like the browser does. |
 | `--demo` | Run on invented documents in a temporary vault, with a played agent and without pairing. `--store` is not used for the demo's vault; if you give it, the command that the demo shows and prints for a vault of your own carries it. |
 | `--lock-after HOURS` | Lock the vault this long after it was unlocked, 0.02 to 168. Default: 8. |
-| `--view {basic,pro}` | Open the page in this view and keep the choice beside the vault ([Basic and Pro](#basic-and-pro)). For a vault that exists the choice is stored at the start; a vault that is created in this run starts in it. Default: nothing is stored at the start, so a new vault starts in Basic and an existing one opens as it was left. A demo opens in Basic unless you say `--view pro`. |
+| `--view {basic,pro}` | Open on Home (`basic`) or on Overview under Settings (`pro`), and keep the choice beside the vault ([Home and Settings](#home-and-settings)). For a vault that exists the choice is stored at the start; a vault that is created in this run starts with it. Default: nothing is stored at the start, so a new vault opens on Home and an existing one opens as it was left. A demo opens on Home unless you say `--view pro`. |
 
 Ctrl-C locks the vault and quits. So does a signal that asks the program to end, such as the one
 it gets when its Terminal window is closed. A demo that stops prints one more line, "To start
@@ -1542,8 +1555,8 @@ WDVA_GATE_STORE=~/vaults/tax wdva gate app
 ```
 
 **The command to start again.** The page shows the command that starts this installation with
-this vault again: in the foot of the Basic page, on the screen "Ask your first question", and in
-the bar that appears on the Basic page when Locktender stops answering. It is not `wdva gate app`
+this vault again: on the page Settings, on the screen "Ask your first question", and in the bar
+that appears when Locktender stops answering. It is not `wdva gate app`
 but the long form of it, which works whatever your PATH holds: the Python of the installation by
 its full path, `-m wdva gate app`, `--store` with the folder of the vault, and those of `--port`,
 `--lock-after`, `--no-browser` and `--window` that this run was started with. It never holds
@@ -1593,15 +1606,19 @@ Tested:
   command that starts the app again, and the files of the page read as text: what they load,
   what they call and what they say.
 - **Three walk-throughs** drive the page in a real browser against the real program
-  (`tests/browser/`). `journey_demo.js` walks the demo: its guide on the Basic page, a passage
-  that is not released and does not come back by itself, the played app asking again when its
-  button is pressed, the passage released and read, then in Pro the passphrase asked for again,
-  lock and unlock. `journey_real.js` walks a new vault through Pro, from pairing to Ctrl-C:
-  documents, apps, what each app may do, an agent's calls, approvals, lock and unlock, a
-  restart. `journey_basic.js` walks the first run as the page offers it, and the Basic page, in
-  five runs with a new vault each: for Claude Desktop and for Claude Code; with every step
-  skipped; with the sample letter; with a vault that was set up in Pro; with a reload, a lock and
-  a restart in the middle of the first run; with five passages waiting; with the app stopped.
+  (`tests/browser/`). `journey_demo.js` walks the demo: its guide on Home, a passage that is
+  not released and does not come back by itself, the played app asking again when its button is
+  pressed, the passage released and read, then on the six pages under Settings the passphrase
+  asked for again, lock and unlock. `journey_real.js` walks a new vault through the six pages,
+  from pairing to Ctrl-C: documents, apps, what each app may do, an agent's calls, approvals,
+  lock and unlock, a restart, and the addresses of an earlier version. `journey_basic.js` walks
+  the first run as the page offers it, Home, and the pages Documents, Activity, Settings and "How
+  it works and what it cannot do", in five runs with a new vault each: for Claude Desktop and
+  for Claude Code; with every step skipped; with the sample letter; with a vault that was set up
+  on the six pages; with a reload, a lock and a restart in the middle of the first run; with
+  five passages waiting; with the app stopped. It also walks every one of those pages in a
+  window 400 px wide, and Documents, Activity, Settings and "How it works" in Polish, where a
+  Word file and a text file that is not UTF-8 are refused in Polish.
   The CI job "Browser" runs the three on every push, in Chromium on Linux and in WebKit, the
   engine of Safari, on macOS.
 - **What the walk-throughs stand in for.** No AI app takes part in them. The calls of "an app"

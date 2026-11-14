@@ -1,4 +1,4 @@
-// The first run as the page offers it, and the Basic view, walked in a browser against the real app.
+// The first run as the page offers it, Home and the plain pages, walked in a browser against the real app.
 //
 // Run it from the top of the repository (after "npm install --no-save playwright@1.63.0"
 // and "npx playwright install chromium"):
@@ -17,17 +17,19 @@
 //
 // Five runs, each with a new vault in an empty directory with a short path under /tmp:
 //   A  the first run as offered, for Claude Desktop: the app, a document, the first question with the
-//      look at the settings file, the first request, the first approval; then the Basic page on an
-//      ordinary day, with a passage waiting, its sheet for an app, locked; the switch to Pro and back
-//      across two restarts; the passphrase asked for again; the app stopped.
-//   B  skipping: every step left by "Skip", by a reload, by a lock; the empty Basic page and its
-//      line about setting up; "Hide"; the app stopped under a step.
+//      look at the settings file, the first request, the first approval; then Home on an ordinary
+//      day, and the plain pages Documents, Activity, Settings and "How it works"; all of them at
+//      400 px and, the plain ones, in Polish; a passage waiting, the sheet for an app, locked; "Open
+//      on" under Settings across two restarts; the passphrase asked for again; the app stopped.
+//   B  skipping: every step left by "Skip", by a reload, by a lock; the empty Home and its line about
+//      setting up; the empty page Documents; "Hide"; the app stopped under a step.
 //   C  the invented sample letter: a reload, a lock and a restart in the middle of the first run;
-//      "Don't release" as an ending; the letter named on the Basic page and removed.
-//   D  a vault made in Pro, opened in Basic: what Basic says of every setting it has no control for,
-//      and that it sends nothing but questions; a visit to Pro and back; "Stay in Pro".
+//      "Don't release" as an ending; the letter named on the page Documents and removed.
+//   D  a vault made on the six pages with every setting (Pro), looked at from Home: what Home says of
+//      every setting it has no control for, and that it sends nothing but questions; the page
+//      Documents with two groups; a look at the six pages and back; "Open on".
 //   E  the first run for Claude Code; a lock under its last step and the way back to that step from
-//      the Basic page; a busy day: five passages waiting.
+//      Home; a busy day: five passages waiting.
 //
 // Runs A and E count what the offered path costs a person (presses, addresses, typed fields, file
 // dialogs) from "Create my vault" to the first request seen on the page, and fail above the numbers
@@ -51,7 +53,9 @@ const {
   WAIT,
   agentCall,
   apiGet,
+  backHome,
   check,
+  chooseLanguage,
   closePage,
   deadline,
   decideApproval,
@@ -62,8 +66,11 @@ const {
   focused,
   lockElsewhere,
   newPage,
+  notOfTable,
   note,
   openBrowser,
+  openOn,
+  openPage,
   pageReachedApp,
   pressCopy,
   pressCounter,
@@ -76,7 +83,8 @@ const {
   started,
   step,
   stopApp,
-  switchView,
+  textTable,
+  textsIn,
   withdraw,
 } = require('./common');
 
@@ -169,21 +177,36 @@ const TEXT = {
   tryAgain: 'After you release a passage, the app gets it when it asks again. If it does not ask by itself, tell it: “try again”.',
   noApp: 'No app has been added, so no app gets an answer.',
   nameIsALabel: (product) => `A name is a label: ${product} cannot check which program is really asking.`,
-  recordChecked: 'The record of what left was checked when you unlocked.',
   cannotDo: (product) => `What ${product} cannot do`,
-  viewWords: 'Basic shows what you use every day; Pro shows every setting. Both show the same vault.',
+  howItWorks: 'How it works and what it cannot do',
   nothingYet: 'Nothing has left this vault yet.',
+  nothingLeftYet: 'Nothing has left yet.',
   nothingInADay: 'Nothing left in the last 24 hours.',
+  // The page Documents.
   noDocuments: 'No documents yet.',
-  oneDocument: '1 document, sealed in the vault.',
-  documents: (count) => `${count} documents, sealed in the vault.`,
-  sampleIsIn: '1 of them is the invented sample letter.',
+  oneDocument: '1 document',
+  documents: (count) => `${count} documents`,
+  sealedCopy: 'A sealed copy goes into the vault, and the file you add stays where it was, not encrypted.',
+  cannotCheckLocal: (product, name) => `${product} cannot check that ${name} is local, and if it uses a cloud model, text it receives leaves this computer.`,
+  sampleIsIn: 'One of them is the invented sample document.',
+  // The page Activity: a row is worded from fields of its entry. An app that names the passage and
+  // the number of results in the entry gets the fuller sentence.
+  rowRead: (name) => new RegExp(`^${name} read (a passage|passage \\d+ of “[^”]+”)$`),
+  rowSearch: (name) => new RegExp(`^${name} searched your documents(: \\d+ results?|: nothing found)?$`),
+  rowWaits: (name) => `${name} asked for a passage that waits for you`,
+  pressARow: 'Press a row to see the exact text that left.',
+  thatIsAll: 'That is everything.',
+  fullRecord: 'Full record (in English)',
+  // The page Settings.
+  sixPages: 'These six pages have every setting, and they are in English for now.',
+  allSettings: ['Overview', 'Activity, entry by entry', 'Approvals', 'Documents and groups', 'Apps and limits', 'Vault: limits, words to replace, the record'],
+  toOpenAgain: (product) => `To open ${product} again after you quit it, run this in a terminal:`,
   finishSetup: 'Finish setting up',
   done: (count) => `${count} of 4 done`,
   nextApp: 'Next: choose your AI app.',
   nextDocument: 'Next: add a document.',
   nextQuestion: 'Next: ask your AI app a first question.',
-  setupHidden: 'Setup is hidden. Adding an app, adding documents and the connection steps stay on this page.',
+  setupHidden: 'Setup is hidden. Adding an app and the connection steps stay on this page; documents are added under Documents.',
   askMe: 'Ask me each time',
   canRead: 'Can read',
   noAccess: 'No access',
@@ -192,14 +215,9 @@ const TEXT = {
   oneWaited: '1 passage was waiting when the vault locked; it was not released.',
   beforeUnlock: /^Before you unlocked (yesterday )?at \d/,
   nothingSince: /^Nothing has left since you unlocked (yesterday )?at \d/,
-  notAnswering: (product) => `${product} is not answering. Is it still running in its terminal? What you see may be out of date.`,
-  startAgain: 'To start it again, run this in Terminal:',
-  continuesByItself: 'This page continues by itself.',
-  printsNewPage: 'It prints the address of a new page. Open that one; this one can then be closed.',
-  notUpToDate: /^This page could not be brought up to date: .+ Trying again\.$/,
-  visit: 'You are in Pro, where every setting is. Your view stays Basic.',
-  backToBasic: '← Back to Basic',
-  stayInPro: 'Stay in Pro',
+  notAnswering: (product) => `${product} is not answering, so what you see may be out of date.`,
+  startAgain: (product) => `To start ${product} again, run this in a terminal:`,
+  notUpToDate: 'This page could not be brought up to date; trying again.',
   setInPro: 'Parts of this vault were set up in Pro. Basic shows them and does not change them.',
   addToWhich: 'Add to which group?',
   appsInPro: 'Apps are added in Pro for this vault: it has several groups of documents, or an app that runs on this computer.',
@@ -234,12 +252,15 @@ function writeFiles(directory) {
     boiler: path.join(directory, 'boiler.md'),
     rules: path.join(directory, 'house-rules.txt'),
     word: path.join(directory, 'letter.docx'),
+    latin: path.join(directory, 'old-letter.txt'),
   };
   fs.writeFileSync(files.flat, `${['Notes about the flat'].concat(PARAGRAPHS.slice(0, 7)).join('\n\n')}\n`);
   fs.writeFileSync(files.boiler, '# Boiler\n\nThe boiler was serviced in March. The next service is due in March of next year.\nThe heating engineer left a card in the kitchen drawer.\n');
   fs.writeFileSync(files.rules, `${['House rules'].concat(PARAGRAPHS).join('\n\n')}\n`);
   // Not a text file and not a PDF: the first bytes of a zip archive, which is what a Word file is.
   fs.writeFileSync(files.word, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x06, 0x00, 0x08, 0x00, 0x00, 0x00, 0x21, 0x00]));
+  // A text file from before UTF-8: "Grüße" as one byte for each letter. Its name is fine; its bytes are not.
+  fs.writeFileSync(files.latin, Buffer.from('Grüße aus dem alten Archiv.\n', 'latin1'));
   return files;
 }
 
@@ -474,7 +495,7 @@ async function chooseFiles(walk, scope, files) {
 }
 
 // =====================================================================================
-// Run A: the first run as offered, then Basic
+// Run A: the first run as offered, then Home and the plain pages
 // =====================================================================================
 
 async function runA(browser, work, files) {
@@ -821,8 +842,8 @@ async function runA(browser, work, files) {
     await walk.picture('b05c-released', { whole: true });
   });
 
-  // ------------------------------------------------------------------ the Basic page
-  const basic = page.locator('div.basic[data-key="basic"]');
+  // ------------------------------------------------------------------ Home, and the plain pages
+  const home = page.locator('.simple .page-body[data-key="view-home"]');
   const headline = page.locator('h1#basic-status');
   const stack = page.locator('section[data-key="basic-approvals"] .approval-stack');
   const appRow = page.locator(`div.basic-app[data-key="row-app-${DESKTOP}"]`);
@@ -842,10 +863,10 @@ async function runA(browser, work, files) {
   const choose = (sheet, mode) => sheet.locator('label.choice', { has: page.locator(`input[name="basic-mode"][value="${mode}"]`) }).click();
   const grantOf = async () => (await walk.apps()).apps.find((entry) => entry.name === DESKTOP).grants.documents;
 
-  await step('A: "Open my vault" opens the Basic page on the exact text that left, with the record\'s own figures behind one button', async () => {
+  await step('A: "Open my vault" opens Home on the exact text that left, with the record\'s own figures behind one button', async () => {
     await stepCard.locator('#ask-open').click();
-    await page.locator(FRAME.basic).waitFor({ state: 'visible', timeout: WAIT });
-    check(walk.address() === '#/basic', `"Open my vault" leads to ${walk.address()}`);
+    await page.locator(FRAME.simple).waitFor({ state: 'visible', timeout: WAIT });
+    check(walk.address() === '#/home', `"Open my vault" leads to ${walk.address()}`);
     await eventually(async () => (await page.locator('#panel pre.released').textContent({ timeout: 2000 })) === firstRead.text, WAIT, 'the details do not show the text the app received');
     const gone = await walk.text('#panel .gone');
     check(gone.includes(known.destination) && TEXT.cannotTakeBack.test(gone), `under the text the details say: ${gone}`);
@@ -856,17 +877,26 @@ async function runA(browser, work, files) {
     await more.click();
     await eventually(async () => (await page.locator('#panel .panel-section .facts').count()) === 2, WAIT, '"Record details" did not show the two blocks');
     check((await more.getAttribute('aria-expanded')) === 'true' && /Entry #\d/.test(await page.locator('#panel').textContent()), 'the opened details do not name the entry');
-    check((await walk.count('.card-setup')) === 0 && (await walk.state()).interface.setup === 'done', 'the Basic page still asks to finish setting up');
-    await walk.picture('b05d-basic-what-left', { whole: true });
+    check((await walk.count('.card-setup')) === 0 && (await walk.state()).interface.setup === 'done', 'Home still asks to finish setting up');
+    // On a page that is not one of the six, the details say everything in the words of the page: the row's sentence, no chip of the record.
+    check(TEXT.rowRead(DESKTOP).test(await walk.text('#panel .panel-title')) && (await page.locator('#panel .panel-top .chip').textContent()).trim() === 'After your yes', `the details are headed: ${await walk.text('#panel .panel-title')}`);
+    await walk.picture('b05d-home-what-left', { whole: true });
     await closePanel();
   });
 
-  await step('A: the Basic page after the first run: one headline, how to ask, what left, the document, the app under its stored name, the view at its foot', async () => {
+  await step('A: Home after the first run: one headline, how to ask, what left, the app under its stored name, one link to "How it works"; documents and what stood at the foot have pages of their own', async () => {
     check((await headline.textContent()).trim() === TEXT.nothingWaits && (await walk.count('h1')) === 1, `the headline is "${await headline.textContent()}" among ${await walk.count('h1')}`);
     const approvals = page.locator('section[data-key="basic-approvals"]');
     check(trimmed(await approvals.locator('p.basic-label').textContent()) === 'Approvals' && (await walk.text('section[data-key="basic-approvals"] p.basic-none')) === TEXT.whenAnAppAsks, 'the part "Approvals" does not say what appears in it');
     check((await walk.text('p.basic-again')) === TEXT.tryAgain, `about asking again the page says: ${await walk.text('p.basic-again')}`);
-    check((await walk.count('aside.sidebar')) === 0 && (await walk.count('.strip')) === 0 && (await walk.count('.nav-item')) === 0, 'the Basic page shows the sidebar or the choice between the kinds of apps');
+    check((await walk.count('aside.sidebar')) === 0 && (await walk.count('.strip')) === 0 && (await walk.count('.nav-item')) === 0, 'Home shows the sidebar of the six pages or the choice between the kinds of apps');
+    // The frame: four entries with Home the current one, until when the vault is unlocked, and "Lock now".
+    const entries = await page.locator(`${FRAME.simple} a`).evaluateAll((nodes) => nodes.map((node) => `${node.getAttribute('href')} ${node.textContent.trim()}${node.getAttribute('aria-current') ? '*' : ''}`));
+    check(JSON.stringify(entries) === JSON.stringify(['#/home Home*', '#/documents Documents', '#/activity Activity', '#/settings Settings']), `the entries of the sidebar are ${JSON.stringify(entries)}`);
+    check(/^Unlocked until .*\d/.test(await walk.text('#side-lock')) && trimmed(await page.locator('.side-foot button.lock-now').textContent()) === 'Lock now', `the foot of the sidebar reads: ${await walk.text('.side-foot')}`);
+    // One column, 640 px wide at most, beside a sidebar of 208 px.
+    const [sideBox, columnBox] = [await page.locator('aside.side').boundingBox(), await home.boundingBox()];
+    check(Math.round(sideBox.width) === 208 && columnBox.width <= 640 && columnBox.x >= sideBox.x + sideBox.width, `the sidebar and the column are ${JSON.stringify([sideBox, columnBox])}`);
     // How to ask, and what left: the two answers the app was given, the newest first.
     const ask = left.locator('div.basic-ask[data-key="basic-ask"]');
     check((await ask.locator('pre.code').textContent()) === TEXT.askStart(walk.product) && (await ask.locator('#basic-ask-copy').count()) === 1, 'the page does not say how to ask');
@@ -880,11 +910,8 @@ async function runA(browser, work, files) {
     check((await left.locator('p.basic-hint').allTextContents()).some((text) => text.includes(TEXT.searchAnswer.slice(1))), 'the page does not say what a search answer holds');
     // No figure for calls that were refused, and nothing that was stopped: only the passage that waited, which is not a stop.
     check((await walk.count('ul.basic-stopped')) === 0 && (await walk.count('.stat')) === 0, 'the page shows stopped calls or a figure of them');
-    // Documents.
-    const documents = page.locator('section[data-key="basic-documents"]');
-    check((await walk.text('p.basic-count')) === TEXT.oneDocument, `the page counts: ${await walk.text('p.basic-count')}`);
-    check((await walk.text('section[data-key="basic-documents"] #docs-sentence')) === TEXT.sentence(DESKTOP, known.destination), 'the documents stand without the sentence about where text goes');
-    check((await documents.locator('.drop[data-key="drop-documents"]').count()) === 1 && (await documents.locator('.drop-large').count()) === 0 && (await walk.count('.drop')) === 1, 'the page has not exactly one bounded place for files');
+    // Documents have a page of their own: Home takes no file and lists none.
+    check((await walk.count('section[data-key="basic-documents"]')) === 0 && (await home.locator('.drop, table').count()) === 0, 'Home still has a part for documents');
     // Apps: the stored name, where its text goes, today's label, one control.
     check((await walk.text('#basic-labels')) === TEXT.nameIsALabel(walk.product), `under "Apps" the page says: ${await walk.text('#basic-labels')}`);
     check(trimmed(await appRow.locator('.basic-app-name').textContent()) === DESKTOP && trimmed(await appRow.locator('.basic-app-access').textContent()) === TEXT.askMe, `the row of the app reads: ${trimmed(await appRow.textContent())}`);
@@ -896,37 +923,217 @@ async function runA(browser, work, files) {
     check((await appRow.locator('.switch, input[type="number"]').count()) === 0 && (await appRow.locator('button').count()) === 1, 'the row has a control for pausing or for limits');
     check(trimmed(await page.locator('a.btn#basic-add-app').textContent()) === 'Add an app' && (await page.locator('a.btn#basic-add-app').getAttribute('href')) === '#/setup/app', 'the page does not offer to add an app');
     check((await walk.count('section[data-key="basic-also"]')) === 0, 'the page says that parts of this vault were set up in Pro');
-    // The foot: the command, the record, what it cannot do; and the view, bottom left.
+    // The foot: one link, to the page that says how it works. The command that opens the app again
+    // and the choice of where it opens are on Settings; no switch of a view is anywhere.
     const foot = page.locator('footer.basic-foot');
-    check((await foot.locator('.launch pre.code').textContent()) === now.launch.command && (await foot.locator('#launch-copy').count()) === 1, 'the foot does not hold the command that opens the app again');
-    check((await foot.textContent()).includes(TEXT.recordChecked) && trimmed(await foot.locator('#basic-cannot').textContent()) === TEXT.cannotDo(walk.product), 'the foot lacks the line about the record, or what the product cannot do');
-    const bar = page.locator('footer.viewbar[data-key="viewbar"]');
-    check(trimmed(await bar.locator('.view-label').textContent()) === 'View' && trimmed(await bar.locator('.viewbar-text').textContent()) === TEXT.viewWords, `the bar of the view reads: ${trimmed(await bar.textContent())}`);
-    check(JSON.stringify((await bar.locator('label.segment').allTextContents()).map(trimmed)) === JSON.stringify(['Basic', 'Pro']) && (await bar.locator('input[name="view"][value="basic"]').isChecked()), 'the view control does not offer "Basic" and "Pro" with "Basic" chosen');
-    const [barBox, switchBox] = [await bar.boundingBox(), await bar.locator('.segmented').boundingBox()];
-    check(barBox.y + barBox.height >= page.viewportSize().height - 1 && switchBox.x < page.viewportSize().width / 2, `the view control is not in the bottom-left corner: ${JSON.stringify([barBox, switchBox])}`);
+    check(trimmed(await foot.textContent()) === TEXT.howItWorks && (await foot.locator('a#home-how').getAttribute('href')) === '#/how', `the foot of Home reads: ${trimmed(await foot.textContent())}`);
+    check((await walk.count('.launch')) === 0 && (await walk.count('input[name="view"]')) === 0 && (await walk.count('footer.viewbar')) === 0, 'Home still holds the command, or a switch of the view');
     // Setting up is over and nothing waits: no button of the page is the loud one.
-    check((await basic.locator('.btn-primary').count()) === 0, 'a button of the page is filled although nothing is left to set up');
+    check((await page.locator('.simple .btn-primary').count()) === 0, 'a button of the page is filled although nothing is left to set up');
     check((await page.locator('link[rel="icon"]').getAttribute('href')) === 'favicon.svg', 'the icon of the tab carries a dot although nothing waits');
-    // "What it cannot do" is the list of the Vault page, in a sheet that "Close" has the focus of.
-    await foot.locator('#basic-cannot').click();
-    const cannot = walk.sheetWith('ul.cannot');
-    await cannot.waitFor({ state: 'visible', timeout: WAIT });
-    check((await cannot.locator('ul.cannot li').count()) === 8 && (await focused(cannot.locator('.sheet-foot button'))), 'the sheet does not hold the eight statements with the focus on "Close"');
-    await cannot.locator('.sheet-foot button').click();
+  });
+
+  await step('A: Documents: the count, the two sentences, one place for files with the one filled button, and the document as a row with its bin, which asks first', async () => {
+    await openPage(page, 'documents');
+    check(walk.address() === '#/documents' && (await walk.count(FRAME.pro)) === 0, `the entry "Documents" leads to ${walk.address()}`);
+    check((await walk.text('h1#page-title')) === 'Documents' && (await walk.text('#page-count')) === TEXT.oneDocument && (await walk.count('h1')) === 1, `the page is headed: ${await walk.text('.column-head')}`);
+    check((await walk.text('#docs-say-1')) === TEXT.sealedCopy && (await walk.text('#docs-say-2')) === TEXT.sentence(DESKTOP, known.destination), `the two sentences of the page read: ${await walk.text('#main .says')}`);
+    const zone = page.locator('.drop[data-key="drop-documents"]');
+    check((await walk.count('.simple .drop')) === 1 && (await page.locator('.drop.drop-large').count()) === 0, 'the page has not exactly one bounded place for files');
+    check(trimmed(await zone.locator('label.file-button').textContent()) === 'Add documents' && /^PDF or text, up to 20\sMB each$/.test(await walk.text('.drop-hint')), `the zone reads: ${trimmed(await zone.textContent())}`);
+    const filled = await page.locator('.btn-primary').evaluateAll((nodes) => nodes.map((node) => node.textContent.trim()));
+    check(JSON.stringify(filled) === JSON.stringify(['Add documents']), `the filled buttons of the page are ${JSON.stringify(filled)}`);
+    // The document: its title, how many passages and when it was added, and the bin. No table.
+    const rows = page.locator('ul.doc-rows li.doc-row');
+    const title = (await walk.get('/api/documents')).collections[0].documents[0].title;
+    check((await rows.count()) === 1 && trimmed(await rows.first().locator('.doc-name').textContent()) === title && /^3 passages · added \S/.test(trimmed(await rows.first().locator('.row-sub').textContent())), `the row of the document reads: ${trimmed(await rows.first().textContent())}`);
+    check((await rows.first().locator('.icon-btn').getAttribute('aria-label')) === `Remove ${title}` && (await rows.first().locator('.row-group').count()) === 0, 'the row lacks its bin, or names a group in a vault with one');
+    check((await walk.count('#main table')) === 0 && (await walk.count('#basic-docs-toggle')) === 0, 'the page Documents shows a table, or hides the documents behind a button');
+    // The bin asks first, with "Cancel" in focus, and "Cancel" keeps the document.
+    await rows.first().locator('.icon-btn').click();
+    const confirm = walk.sheetWith('.sheet-foot');
+    await confirm.waitFor({ state: 'visible', timeout: WAIT });
+    check(trimmed(await confirm.locator('.sheet-title').textContent()) === `Remove “${title}”?` && (await focused(confirm.locator('.sheet-foot button').first())), `the question reads: ${trimmed(await confirm.locator('.sheet-title').textContent())}`);
+    await confirm.locator('.sheet-foot button').first().click();
     await walk.noSheet();
-    // The documents are listed behind one button, each with a way to remove it.
-    await page.locator('#basic-docs-toggle').click();
-    const table = documents.locator('table.doc-table');
-    await table.waitFor({ state: 'visible', timeout: WAIT });
-    check((await table.locator('tbody tr').count()) === 1 && (await table.locator('tbody .icon-btn').count()) === 1, 'the table does not list the one document with its bin');
-    check((await documents.locator('p.basic-hint').allTextContents()).some((text) => text.includes("a document's number, not its file name")), 'the page does not say that apps are shown a number in place of the file name');
-    await page.locator('#basic-docs-toggle').click();
-    await eventually(async () => (await documents.locator('table.doc-table').count()) === 0, WAIT, 'the list of documents did not fold again');
+    check((await walk.state()).encryption.documents === 1 && (await rows.count()) === 1, '"Cancel" removed the document');
+    await walk.picture('b06b-documents', { whole: true });
+  });
+
+  await step('A: Activity: what the app was given, newest first, in the words of the page; a row opens the exact text; what was stopped is the other list, which a reload keeps; the full record is one link away', async () => {
+    await openPage(page, 'activity');
+    check(walk.address() === '#/activity' && (await walk.text('h1#page-title')) === 'Activity', `the entry "Activity" leads to ${walk.address()}`);
+    const rows = page.locator('ul.act-rows li.row-item');
+    await rows.first().waitFor({ state: 'visible', timeout: WAIT });
+    const record = await walk.activity();
+    const given = record.filter((item) => item.kind === 'release');
+    check(given.length === 2 && (await rows.count()) === 2, `the page lists ${await rows.count()} rows for ${given.length} answers`);
+    // The read that followed the owner's yes is the newest; under it the search. No row is the app's English sentence.
+    const sentences = (await rows.locator('.row-what').allTextContents()).map(trimmed);
+    check(TEXT.rowRead(DESKTOP).test(sentences[0]) && TEXT.rowSearch(DESKTOP).test(sentences[1]), `the rows read ${JSON.stringify(sentences)}`);
+    check(trimmed(await rows.first().locator('.chip').textContent()) === 'After your yes' && (await rows.nth(1).locator('.chip').count()) === 0, 'the row of the approved read is not marked, or the search is');
+    check(/^[\d,]+ characters$/.test(trimmed(await rows.first().locator('.row-chars').textContent())) && (await rows.first().locator('time').count()) === 1, `after its sentence the row says: ${trimmed(await rows.first().locator('.row-sub').textContent())}`);
+    check((await walk.text('#main .says')) === TEXT.pressARow && (await walk.text('.rows-end')) === TEXT.thatIsAll, 'the page lacks its sentence, or does not say that this is everything');
+    check(!(await page.locator('#main').textContent()).includes(known.label) && (await walk.count('#main table')) === 0, 'a row names the program in place of the stored name, or the page shows a table');
+    // A press opens the details: the row's sentence with what the entry itself says of the passage, the exact text, the record's figures folded.
+    const title = (await walk.get('/api/documents')).collections[0].documents[0].title;
+    await rows.first().locator('button.row-open').click();
+    await eventually(async () => (await page.locator('#panel pre.released').textContent({ timeout: 2000 })) === firstRead.text, WAIT, 'the details do not show the text the app received');
+    check((await walk.text('#panel .panel-title')) === `${DESKTOP} read passage 1 of “${title}”`, `the details are headed: ${await walk.text('#panel .panel-title')}`);
+    check((await page.locator('#panel #panel-more').getAttribute('aria-expanded')) === 'false' && (await page.locator('#panel .facts').count()) === 0, 'the figures of the record are shown without a press');
+    check((await rows.first().locator('button.row-open').getAttribute('aria-pressed')) === 'true', 'the row of the open details is not marked');
+    await walk.picture('b06c-activity', { whole: true });
+    await closePanel();
+    // "Stopped": the one call that was stopped so far is the read that had to wait for the owner.
+    const stopped = record.filter((item) => item.kind === 'refusal');
+    await page.locator('label.segment', { has: page.locator('input[name="activity-kind"][value="refusal"]') }).click();
+    await eventually(() => walk.address() === '#/activity?show=stopped', WAIT, `"Stopped" leaves the address at ${walk.address()}`);
+    await eventually(async () => (await rows.count()) === stopped.length && stopped.length === 1, WAIT, `the page lists ${await rows.count()} rows for ${stopped.length} stopped calls`);
+    check((await walk.text('ul.act-rows .row-what')) === TEXT.rowWaits(DESKTOP) && (await rows.first().locator('.row-chars').count()) === 0, `the stopped call reads: ${await walk.text('ul.act-rows .row-what')}`);
+    await reload(page);
+    await rows.first().waitFor({ state: 'visible', timeout: 40000 });
+    check((await page.locator('input[name="activity-kind"][value="refusal"]').isChecked()) && (await walk.text('ul.act-rows .row-what')) === TEXT.rowWaits(DESKTOP), 'a reload did not keep the list that was shown');
+    await page.locator('label.segment', { has: page.locator('input[name="activity-kind"][value="release"]') }).click();
+    await eventually(async () => walk.address() === '#/activity' && (await rows.count()) === 2, WAIT, `"Given to apps" leaves the page at ${walk.address()}`);
+    // Every entry, the owner's own changes included, is on one of the six pages, in English.
+    const full = page.locator('a#activity-full');
+    check(trimmed(await full.textContent()) === TEXT.fullRecord && (await full.getAttribute('href')) === '#/pro/activity', `the link at the foot reads: ${trimmed(await full.textContent())}`);
+  });
+
+  await step('A: Settings: the language, six rows to the pages with every setting, the command that opens the app again, where it opens; "How it works" holds the eight statements, and Home leads there too', async () => {
+    await openPage(page, 'settings');
+    const main = page.locator('#main');
+    check(walk.address() === '#/settings' && (await walk.text('h1#page-title')) === 'Settings', `the entry "Settings" leads to ${walk.address()}`);
+    const languages = await main.locator('.lang button').evaluateAll((nodes) => nodes.map((node) => `${node.dataset.language} ${node.getAttribute('aria-label')} ${node.getAttribute('aria-pressed')}`));
+    check(JSON.stringify(languages) === JSON.stringify(['en English true', 'pl Polski false']), `the language is offered as ${JSON.stringify(languages)}`);
+    const rows = await main.locator('ul.link-rows a.row-link').evaluateAll((nodes) => nodes.map((node) => `${node.getAttribute('href')} ${node.textContent.trim()}`));
+    const six = ['overview', 'activity', 'approvals', 'documents', 'apps', 'vault'].map((name, index) => `#/pro/${name} ${TEXT.allSettings[index]}`);
+    check(JSON.stringify(rows) === JSON.stringify(six), `the rows of "All settings" are ${JSON.stringify(rows)}`);
+    const says = (await main.locator('.says').allTextContents()).map(trimmed);
+    check(JSON.stringify(says) === JSON.stringify([TEXT.sixPages, TEXT.toOpenAgain(walk.product)]), `the sentences of Settings are ${JSON.stringify(says)}`);
+    // The command is the one this installation was started with, and "Copy" copies it.
+    const now = await walk.state();
+    check((await main.locator('.copy-line pre.code').textContent()) === now.launch.command && now.launch.command.includes(`--store ${walk.store}`), `the command reads: ${await main.locator('.copy-line pre.code').textContent()}`);
+    await pressCopy(page, options, main.locator('#settings-launch-copy'), now.launch.command);
+    // Where the app opens: "Home" for a vault that was made as offered. It comes last.
+    const start = main.locator('section.setting[data-key="start"]');
+    check(trimmed(await start.locator('.setting-label').textContent()) === 'Open on' && JSON.stringify((await start.locator('label.segment').allTextContents()).map(trimmed)) === JSON.stringify(['Home', 'All settings']), `"Open on" reads: ${trimmed(await start.textContent())}`);
+    check((await start.locator('input[name="start"][value="basic"]').isChecked()) && (await topOf(start)) > (await topOf(main.locator('#settings-how'))), '"Open on" does not show "Home", or does not come after the links');
+    const facts = (await main.locator('.page-facts p').allTextContents()).map(trimmed);
+    check(JSON.stringify(facts) === JSON.stringify([`Version ${now.version}`, `Vault: ${walk.store}`]), `the two grey lines read ${JSON.stringify(facts)}`);
+    check((await main.locator('.btn-primary').count()) === 0 && (await walk.count('#main table')) === 0, 'Settings has a filled button, or a table');
+    await walk.picture('b06d-settings', { whole: true });
+
+    // "How it works and what it cannot do": the one page that explains at length.
+    await main.locator('#settings-how').click();
+    await page.locator('.simple .page-body[data-key="view-how"]').waitFor({ state: 'attached', timeout: WAIT });
+    check(walk.address() === '#/how' && (await walk.text('h1#page-title')) === TEXT.howItWorks, `the link leads to ${walk.address()}`);
+    const headings = (await main.locator('section.how h2').allTextContents()).map(trimmed);
+    check(JSON.stringify(headings) === JSON.stringify(['How it works', 'Your files', TEXT.cannotDo(walk.product), 'A locked vault']), `the parts of the page are ${JSON.stringify(headings)}`);
+    check((await main.locator('ul.cannot li').count()) === 8 && (await walk.text('#main p.version')).includes(now.version), 'the page lacks the eight statements, or the line about the version');
+    check((await page.locator(`${FRAME.simple} a[aria-current="page"]`).count()) === 0 && (await main.locator('button').count()) === 0, 'an entry of the sidebar is marked on this page, or the page has a button');
+    await walk.picture('b06e-how', { whole: true });
+    await main.locator('#how-back').click();
+    await home.waitFor({ state: 'attached', timeout: WAIT });
+    check(walk.address() === '#/home', `"← Home" leads to ${walk.address()}`);
+    await page.locator('#home-how').click();
+    await page.locator('.simple .page-body[data-key="view-how"]').waitFor({ state: 'attached', timeout: WAIT });
+    await openPage(page, 'home');
+  });
+
+  await step('A: at 400 px no simple page scrolls sideways and the four entries stay in view at the bottom; in Polish the plain pages show no English word but names, and a file is refused in Polish with what to do about it', async () => {
+    const size = page.viewportSize();
+    const nav = page.locator(FRAME.simple);
+    await page.setViewportSize({ width: 400, height: 800 });
+    try {
+      /** The page that is open fits the window, and the bar with the four entries is at the bottom of the window wherever the page is scrolled to. */
+      const fits = async (name) => {
+        const beyond = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+        check(beyond <= 0, `at 400 px the page ${name} scrolls sideways by ${beyond} px`);
+        for (const where of ['bottom', 'top']) {
+          await page.evaluate((to) => window.scrollTo(0, to === 'bottom' ? document.documentElement.scrollHeight : 0), where);
+          const box = await nav.boundingBox();
+          check(box && Math.round(box.x) === 0 && Math.round(box.width) === 400 && Math.round(box.y + box.height) === 800, `at 400 px, at the ${where} of ${name}, the bar with the four entries is at ${JSON.stringify(box)}`);
+        }
+        const entries = await nav.locator('a').evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().width)));
+        check(entries.length === 4 && entries.every((width) => width >= 80), `the four entries of the bar are ${JSON.stringify(entries)} px wide`);
+      };
+      for (const name of ['home', 'documents', 'activity', 'settings']) {
+        await openPage(page, name);
+        await fits(name);
+      }
+      await page.locator('#settings-how').click();
+      await page.locator('.simple .page-body[data-key="view-how"]').waitFor({ state: 'attached', timeout: WAIT });
+      await fits('how');
+      // The top bar: the mark and the name, the two languages as their letters, and "Lock now" as a button that carries its name.
+      const shown = await page.locator('.side-foot .lang button').evaluateAll((nodes) => nodes.map((node) => Array.from(node.children).filter((child) => getComputedStyle(child).display !== 'none').map((child) => child.textContent).join('')));
+      check(JSON.stringify(shown) === JSON.stringify(['EN', 'PL']), `in the top bar the languages are shown as ${JSON.stringify(shown)}`);
+      const lock = page.locator('.side-foot button.lock-now');
+      check((await lock.getAttribute('aria-label')) === 'Lock now' && (await lock.boundingBox()).width <= 44 && (await lock.boundingBox()).y < 52, `"Lock now" in the top bar is ${JSON.stringify(await lock.boundingBox())}`);
+      await walk.picture('b06f-how-400');
+
+      // Polish. On the plain pages everything that is read is a text of the Polish table or a name;
+      // a command, a path and a moment are data and are left out. Home keeps its English for now.
+      const polish = await textTable(page, walk.base, 'pl');
+      const title = (await walk.get('/api/documents')).collections[0].documents[0].title;
+      const allPolish = async (name, names, keys) => {
+        const read = await textsIn(page, '#main', 'pre, .path, time');
+        const foreign = notOfTable(read, polish, [walk.product, 'EN', 'PL', ...names]);
+        check(foreign.length === 0, `in Polish, the page ${name} still shows: ${JSON.stringify(foreign)}`);
+        for (const key of keys) check(notOfTable(read, { [key]: polish[key] }).length < read.length, `in Polish, the page ${name} does not show the text of ${key}`);
+      };
+      await chooseLanguage(page, '.side-foot', 'pl');
+      await eventually(async () => (await walk.state()).interface.language === 'pl', WAIT, 'the app did not keep the language');
+      await allPolish('How', [], ['how.title', 'how.works.title', 'how.works.1', 'how.files.3', 'how.cannot.title', 'how.cannot.8', 'how.locked.2', 'how.version', 'how.button.back']);
+      await openPage(page, 'settings');
+      // The part of the grey line that stands before the place of the vault.
+      const before = polish['settings.status.vault'].split('{path}')[0].trim();
+      // The button that copied the command a moment ago says so for two seconds, then "Copy" again.
+      await says(page.locator('#settings-launch-copy'), polish['common.button.copy'], 'in Polish, the button beside the command reads');
+      await allPolish('Settings', [before], ['settings.title', 'common.label.language', 'settings.all.title', 'settings.say.1', 'settings.label.overview', 'settings.label.vault', 'settings.say.2', 'common.button.copy', 'how.title', 'settings.label.start', 'settings.label.start.home', 'settings.status.version']);
+      await openPage(page, 'activity');
+      await page.locator('ul.act-rows li.row-item').first().waitFor({ state: 'visible', timeout: WAIT });
+      await allPolish('Activity', [], ['activity.title', 'activity.label.left', 'activity.label.stopped', 'activity.say.1', 'row.chip.approved', 'row.status.chars', 'activity.status.end', 'activity.button.full']);
+      await page.locator('ul.act-rows li.row-item button.row-open').first().click();
+      await page.locator('#panel pre.released').waitFor({ state: 'visible', timeout: WAIT });
+      const inPanel = await textsIn(page, '#panel', 'pre, time');
+      check(notOfTable(inPanel, polish, [walk.product, known.destination]).length === 0, `in Polish, the details still show: ${JSON.stringify(notOfTable(inPanel, polish, [walk.product, known.destination]))}`);
+      await walk.picture('b06g-activity-panel-polish-400');
+      await closePanel();
+      await openPage(page, 'documents');
+      await page.locator('ul.doc-rows li.doc-row').first().waitFor({ state: 'visible', timeout: WAIT });
+      await allPolish('Documents', [title], ['docs.title', 'docs.status.count', 'docs.say.1', 'docs.say.2', 'docs.button.add', 'docs.status.types', 'docs.status.row']);
+
+      // A Word file: the page itself sees that it cannot be read, and says in Polish what to do with it.
+      const mark = walk.sent.length;
+      const refused = page.locator('.drop li.upload.upload-error .upload-note');
+      await page.setInputFiles('#files-documents', files.word);
+      await refused.first().waitFor({ state: 'visible', timeout: WAIT });
+      check(trimmed(await refused.first().textContent()) === polish['docs.error.type'] && polish['docs.error.type'].includes('PDF'), `the Word file is answered: ${trimmed(await refused.first().textContent())}`);
+      check(walk.changesSince(mark).length === 0, `the Word file was sent to the app: ${JSON.stringify(walk.changesSince(mark))}`);
+      // A text file that is not UTF-8: the app refuses it, with a word for the reason, and the page words that reason in Polish.
+      expectHttp(400, '/api/documents');
+      await page.setInputFiles('#files-documents', files.latin);
+      await eventually(async () => (await refused.count()) === 2, WAIT, 'the second refused file has no line');
+      check(trimmed(await refused.nth(1).textContent()) === polish['docs.error.encoding'], `the file that is not UTF-8 is answered: ${trimmed(await refused.nth(1).textContent())}`);
+      check((await walk.state()).encryption.documents === 1 && (await walk.count('.upload-install')) === 0, 'a refused file was added, or the page shows a command nobody needs');
+      await allPolish('Documents', [title, path.basename(files.word), path.basename(files.latin)], ['docs.error.type', 'docs.error.encoding', 'docs.button.clear']);
+      await walk.picture('b06h-documents-refused-polish-400', { whole: true });
+      await page.locator('.drop .upload-clear button').click();
+      await eventually(async () => (await walk.count('.drop li.upload')) === 0, WAIT, '"Clear this list" left a line');
+      const beyond = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      check(beyond <= 0, `in Polish, at 400 px, the page Documents scrolls sideways by ${beyond} px`);
+      await chooseLanguage(page, '.side-foot', 'en');
+      await eventually(async () => (await walk.state()).interface.language === 'en', WAIT, 'the app did not keep the language that was chosen back');
+    } finally {
+      await page.setViewportSize(size);
+    }
+    await walk.noToast();
+    await openPage(page, 'home');
   });
 
   let waitingRef = '';
-  await step('A: a passage waits on the Basic page: the card is first, nothing is filled, and whatever comes or goes near it makes "Release once" wait again', async () => {
+  await step('A: a passage waits on Home: the card is first, nothing is filled, and whatever comes or goes near it makes "Release once" wait again', async () => {
     // The owner comes back to the page at its top, where what waits is shown.
     await page.evaluate(() => window.scrollTo(0, 0));
     waitingRef = `${doc}.2`;
@@ -934,19 +1141,21 @@ async function runA(browser, work, files) {
     const card = stack.locator(`> .approval[data-key="${key(waitingRef)}"]`);
     await card.waitFor({ state: 'visible', timeout: WAIT });
     await says(headline, TEXT.oneWaits, 'with one passage waiting the headline reads');
-    // Between the top bar and the card stand the label and the headline, and nothing else.
+    // Above the card stand the label and the headline, and nothing else.
     const order = await page.locator('section[data-key="basic-approvals"]').evaluate((node) => Array.from(node.children).filter((child) => !child.classList.contains('sr-only')).map((child) => child.className.split(' ')[0]));
     check(order.slice(0, 3).join(',') === 'basic-label,basic-status,approval-stack', `under "Approvals" stand, in order: ${order.join(', ')}`);
     check((await stack.locator('> *').first().getAttribute('data-key')) === key(waitingRef), 'the card is not the first thing under the headline');
-    const top = await page.locator('.basic-top').boundingBox();
+    // The block at the head of the column holds the bar that says what is wrong, and on Home nothing else.
+    const headEnds = () => page.locator('.column-top').evaluate((node) => node.getBoundingClientRect().bottom);
     const label = await page.locator('section[data-key="basic-approvals"] p.basic-label').boundingBox();
-    check(top.y + top.height <= label.y + 1 && label.y < (await headline.boundingBox()).y && (await headline.boundingBox()).y < (await card.boundingBox()).y, 'the label, the headline and the card are not in this order under the top bar');
-    check((await page.locator('.basic-top').locator('.offline-bar').count()) === 0, 'a bar stands above the card although nothing is wrong');
+    check((await headEnds()) <= label.y + 1 && label.y < (await headline.boundingBox()).y && (await headline.boundingBox()).y < (await card.boundingBox()).y, 'the label, the headline and the card are not in this order under the head of the column');
+    check((await page.locator('.column-top .offline-bar').count()) === 0, 'a bar stands above the card although nothing is wrong');
+    check((await page.locator(`${FRAME.simple} a[href="#/home"] .nav-count`).textContent()) === '1', 'the entry "Home" does not carry the number of what waits');
     check((await walk.count('.btn-primary')) === 0, 'a button is filled while a passage waits');
     check((await page.title()).startsWith('(1) ') && (await page.locator('link[rel="icon"]').getAttribute('href')) === 'favicon-waiting.svg', `the tab is called "${await page.title()}" with the icon ${await page.locator('link[rel="icon"]').getAttribute('href')}`);
     check((await card.locator('pre.released').textContent()).includes('Small repairs of up to 110 EUR'), 'the card does not show the exact text of the second passage');
     await card.locator('button[data-key="release"]:not(.is-waiting)').waitFor({ state: 'visible', timeout: WAIT });
-    await walk.picture('b07-basic-waiting', { whole: true });
+    await walk.picture('b07-home-waiting', { whole: true });
 
     const tops = async () => [await topOf(headline), await topOf(card)];
     const start = await tops();
@@ -956,7 +1165,7 @@ async function runA(browser, work, files) {
     // A list that cannot be loaded brings a bar above the card; when it loads again the bar goes.
     const documentsList = (url) => url.pathname === '/api/documents';
     const failing = expectHttp(503, '/api/documents', { times: 1000, optional: true });
-    const bar = page.locator('.basic-top .offline-bar');
+    const bar = page.locator('.column-top .offline-bar');
     let refused = true;
     await page.route(documentsList, (route) => route.fulfill({ status: 503, contentType: 'application/json', body: '{}' }));
     try {
@@ -965,8 +1174,8 @@ async function runA(browser, work, files) {
         check(walk.agent(DESKTOP, 'search', 'caretaker laundry', 'documents').code === 'OK', 'the search of the app was not answered');
         await eventually(async () => (await bar.count()) === 1, WAIT, 'no bar said that a list could not be loaded');
       });
-      check(TEXT.notUpToDate.test(trimmed(await bar.textContent())), `the bar reads: ${trimmed(await bar.textContent())}`);
-      check((await page.locator('.basic-top').boundingBox()).height + (await page.locator('.basic-top').boundingBox()).y <= (await page.locator('section[data-key="basic-approvals"] p.basic-label').boundingBox()).y + 1, 'the bar lies over the page');
+      check(trimmed(await bar.textContent()) === TEXT.notUpToDate, `the bar reads: ${trimmed(await bar.textContent())}`);
+      check((await headEnds()) <= (await page.locator('section[data-key="basic-approvals"] p.basic-label').boundingBox()).y + 1, 'the bar lies over the page');
       await waitsAgain(walk, card, 'the bar above the card went', async () => {
         // The list can be loaded again from here on; the page tries by itself.
         await page.unroute(documentsList);
@@ -1060,12 +1269,16 @@ async function runA(browser, work, files) {
     check((await grantOf()) === 'read', `the vault says: ${await grantOf()}`);
     await page.locator('#toasts .toast', { hasText: `${DESKTOP}: ${TEXT.canRead}.` }).waitFor({ state: 'visible', timeout: WAIT });
 
-    // A second file: the line after it says that passages of it can now leave without asking.
+    // A second file, on the page Documents: the line after it says which app can ask for it from now on.
+    // What is true of the file the owner chose is the first sentence of that page; the zone does not say it again.
+    await openPage(page, 'documents');
     await page.setInputFiles('#files-documents', files.boiler);
     await eventually(async () => (await walk.count('li.upload.upload-done')) === 1, 60000, 'the second file was not sealed');
     check((await walk.text('p.upload-who')) === TEXT.whoAsks(DESKTOP), `after the second file the page says: ${await walk.text('p.upload-who')}`);
-    check((await walk.count('.upload-outside')) === 1, 'what is true of the chosen file is not said exactly once');
-    await says(page.locator('p.basic-count'), TEXT.documents(2), 'the page counts');
+    check((await walk.count('.upload-outside')) === 0 && (await walk.count('#docs-say-1')) === 1, 'what is true of the chosen file is not said exactly once');
+    await says(page.locator('#page-count'), TEXT.documents(2), 'the page counts');
+    check((await page.locator('ul.doc-rows li.doc-row').count()) === 2, `the page lists ${await page.locator('ul.doc-rows li.doc-row').count()} documents`);
+    await openPage(page, 'home');
 
     // Back to "Ask me each time". Lowering asks nothing.
     const again = await openSheet();
@@ -1077,21 +1290,21 @@ async function runA(browser, work, files) {
     await says(appRow.locator('.basic-app-access'), TEXT.askMe, 'after the second "Save" the row of the app says');
   });
 
-  await step('A: locked with a passage waiting, the screen says what became of it and shows no figure of the record; "Unlock" opens the Basic page at its headline', async () => {
+  await step('A: locked with a passage waiting, the screen says what became of it and shows no figure of the record; "Unlock" opens Home at its headline', async () => {
     check(walk.agent(DESKTOP, 'read', waitingRef).code === 'NEEDS_APPROVAL', 'the passage did not wait again');
     await stack.locator(`> .approval[data-key="${key(waitingRef)}"]`).waitFor({ state: 'visible', timeout: WAIT });
     await page.click('button.lock-now');
     await page.locator('#unlock-passphrase').waitFor({ state: 'visible', timeout: WAIT });
-    // The view that is kept is Basic: no figure of the sealed files or of the record, and the one sentence at the foot.
-    check((await walk.count('dl.seal-facts')) === 0, 'the locked screen of a vault whose view is Basic shows figures');
+    // This vault opens on Home: no figure of the sealed files or of the record, and the one sentence at the foot.
+    check((await walk.count('dl.seal-facts')) === 0, 'the locked screen of a vault that opens on Home shows figures');
     check((await walk.text('.gate-foot')) === TEXT.lockedFoot, `the foot of the locked screen reads: ${await walk.text('.gate-foot')}`);
     check((await walk.text('#locked-waiting')) === TEXT.oneWaited, `about what waited the locked screen says: ${await walk.text('#locked-waiting')}`);
-    check((await walk.count('input[name="view"]')) === 0 && (await walk.count('#view-basic')) === 0, 'the locked screen has the view control');
+    check((await walk.count('input[name="view"]')) === 0 && (await walk.count('input[name="start"]')) === 0, 'the locked screen offers to choose where the app opens');
     check(walk.agent(DESKTOP, 'search', 'rent').code === 'LOCKED', 'a locked vault answered a search');
-    await walk.picture('b08-locked-basic');
+    await walk.picture('b08-locked');
     await unlock(walk);
-    await page.locator(FRAME.basic).waitFor({ state: 'visible', timeout: 40000 });
-    check(walk.address() === '#/basic', `after "Unlock" the address is ${walk.address()}`);
+    await page.locator(FRAME.simple).waitFor({ state: 'visible', timeout: 40000 });
+    check(walk.address() === '#/home', `after "Unlock" the address is ${walk.address()}`);
     await eventually(() => focused(headline), WAIT, 'after "Unlock" the focus is not on the headline');
     // What waited was not released and waits no more; the app has to ask again.
     await says(headline, TEXT.nothingWaits, 'after the unlock, with no app having asked again, the headline reads');
@@ -1111,50 +1324,64 @@ async function runA(browser, work, files) {
       return true;
     });
     check((await list.locator('li.act-none').count()) === 0, 'the page still says that nothing left since the unlock');
-    check((await walk.state()).record.verified === true && (await page.locator('footer.basic-foot').textContent()).includes(TEXT.recordChecked), 'the foot does not say that the record was checked at the unlock');
-    await walk.picture('b06-basic', { whole: true });
+    check((await walk.state()).record.verified === true, 'the record was not checked at the unlock');
+    await walk.picture('b06-home', { whole: true });
   });
 
   let head = null;
-  await step('A: the switch to Pro stores the view and says nothing; a restart opens Pro, the switch back and a restart open Basic; the record gains no entry by it', async () => {
+  await step('A: "Open on" under Settings keeps where the app opens and says nothing; a restart then opens Overview, with "← Home" above its six entries; chosen back, a restart opens Home; the record gains no entry by it', async () => {
     await walk.noToast();
     head = (await walk.state()).record;
-    await switchView(page, 'pro');
-    check(walk.address() === '#/overview', `"Pro" leads to ${walk.address()}`);
-    await page.locator('.page-body[data-key="view-overview"]').waitFor({ state: 'attached', timeout: WAIT });
-    check((await walk.state()).interface.view === 'pro', 'the switch did not keep the view');
-    check((await walk.count('.visit-bar')) === 0 && (await walk.count('#toasts .toast')) === 0, 'the switch to Pro left a bar or a message');
-    check(!/Basic/.test(await page.locator('#main').textContent()), 'a page of Pro speaks of Basic');
-    // The control is at the foot of the sidebar, above the state of the lock, with "Pro" chosen; the six links are where they were.
-    const control = page.locator('.sidebar-foot .view-switch[data-key="view"]');
-    check(trimmed(await control.locator('.view-label').textContent()) === 'View' && (await control.locator('input[name="view"][value="pro"]').isChecked()), 'the view control of Pro does not show "Pro" chosen under the word "View"');
-    check((await control.boundingBox()).y + (await control.boundingBox()).height <= (await page.locator('.sidebar-foot .lock-state').boundingBox()).y + 1, 'the view control is not above the state of the lock');
-    check((await page.locator('aside.sidebar a.nav-item').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('href')))).join(',') === '#/overview,#/activity,#/approvals,#/documents,#/apps,#/vault', 'the six links of Pro are not the six');
+    await openPage(page, 'settings');
+    let mark = walk.sent.length;
+    await openOn(page, 'pro');
+    await eventually(async () => (await walk.state()).interface.view === 'pro', WAIT, 'the choice "All settings" was not kept');
+    check(JSON.stringify(walk.changesSince(mark)) === JSON.stringify(['POST /api/interface']), `the choice sent ${JSON.stringify(walk.changesSince(mark))}`);
+    // The owner stays where they are: the choice is about where the app opens, not about this page.
+    check(walk.address() === '#/settings' && (await walk.count(FRAME.pro)) === 0, `the choice led to ${walk.address()}`);
+    check((await walk.count('#toasts .toast')) === 0 && (await walk.count('.visit-bar')) === 0, 'the choice left a message or a bar');
+    let now = await walk.state();
+    check(now.record.head_seq === head.head_seq && now.record.head_hash === head.head_hash, 'the choice wrote an entry into the record');
+
+    // The first row under "All settings" leads to Overview: the six pages, in their own frame.
+    await page.locator('a.row-link[href="#/pro/overview"]').click();
+    await page.locator('.page-body[data-key="view-pro/overview"]').waitFor({ state: 'attached', timeout: WAIT });
+    check(walk.address() === '#/pro/overview' && (await walk.count(FRAME.simple)) === 0, `the row "Overview" leads to ${walk.address()}`);
+    check(!/Basic/.test(await page.locator('#main').textContent()), 'one of the six pages speaks of Basic');
+    // Their sidebar: "← Home" first, then the six where they were; no switch of a view.
+    const links = await page.locator('aside.sidebar nav a').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('href')));
+    check(links.join(',') === '#/home,#/pro/overview,#/pro/activity,#/pro/approvals,#/pro/documents,#/pro/apps,#/pro/vault', `the entries of the sidebar lead to ${links.join(',')}`);
+    check((await walk.text('#pro-home')) === '← Home' && (await walk.count('input[name="view"]')) === 0 && (await walk.count('.view-switch')) === 0, `above the six the sidebar reads "${await walk.text('#pro-home')}", or it still has the switch "View"`);
     // The vault is as the first run left it: the app is named as answered, and nothing is left to get started.
     await page.locator('.hero-line').waitFor({ state: 'visible', timeout: WAIT });
     check((await walk.text('.hero-line')).includes(DESKTOP) && (await walk.count('.card-start')) === 0, 'Overview offers the list for a new vault, or does not name the app');
     const newest = (await walk.activity()).find((item) => item.app === DESKTOP);
     await page.locator(`.card[data-key="latest"] li.act-item[data-key="a${newest.seq}"]`).waitFor({ state: 'visible', timeout: WAIT });
-    let now = await walk.state();
-    check(now.record.head_seq === head.head_seq && now.record.head_hash === head.head_hash, 'the switch wrote an entry into the record');
 
     await restart(walk);
     await unlock(walk);
     await page.locator(FRAME.pro).waitFor({ state: 'visible', timeout: 40000 });
-    check((await walk.count(FRAME.basic)) === 0 && (await walk.state()).interface.view === 'pro', 'after a restart the vault does not open in Pro');
+    check(walk.address() === '#/pro/overview' && (await walk.count(FRAME.simple)) === 0 && (await walk.state()).interface.view === 'pro', `after a restart the vault opens at ${walk.address()}`);
     head = (await walk.state()).record;
-    await switchView(page, 'basic');
-    check(walk.address() === '#/basic' && (await walk.state()).interface.view === 'basic', `"Basic" leads to ${walk.address()}`);
-    check((await walk.count('#toasts .toast')) === 0, 'the switch to Basic left a message');
+    // "← Home" is a look at Home: it keeps nothing. "Open on" under Settings does.
+    mark = walk.sent.length;
+    await backHome(page);
+    check(walk.address() === '#/home' && (await walk.state()).interface.view === 'pro' && walk.changesSince(mark).length === 0, `"← Home" leads to ${walk.address()}, or kept something`);
+    await openPage(page, 'settings');
+    check(await page.locator('input[name="start"][value="pro"]').isChecked(), '"Open on" does not show what is kept');
+    await openOn(page, 'basic');
+    await eventually(async () => (await walk.state()).interface.view === 'basic', WAIT, 'the choice "Home" was not kept');
+    check((await walk.count('#toasts .toast')) === 0, 'the choice "Home" left a message');
     now = await walk.state();
-    check(now.record.head_seq === head.head_seq && now.record.head_hash === head.head_hash, 'the switch back wrote an entry into the record');
-    check(fs.readFileSync(path.join(walk.store, 'run', 'interface.json'), 'utf8') === '{"view": "basic", "setup": "done"}\n', `beside the vault the view is kept as: ${fs.readFileSync(path.join(walk.store, 'run', 'interface.json'), 'utf8')}`);
+    check(now.record.head_seq === head.head_seq && now.record.head_hash === head.head_hash, 'the choice back wrote an entry into the record');
+    const kept = fs.readFileSync(path.join(walk.store, 'run', 'interface.json'), 'utf8');
+    check(kept === '{"view": "basic", "setup": "done", "language": "en"}\n', `beside the vault the choice is kept as: ${kept}`);
 
     // Once more, with owner mode as short as this run was told: the next step waits for its end.
     await restart(walk, { ownerSeconds: options.ownerSeconds });
     await unlock(walk);
-    await page.locator(FRAME.basic).waitFor({ state: 'visible', timeout: 40000 });
-    check(walk.address() === '#/basic' && (await walk.count(FRAME.pro)) === 0, `after the second restart the page is at ${walk.address()}`);
+    await page.locator(FRAME.simple).waitFor({ state: 'visible', timeout: 40000 });
+    check(walk.address() === '#/home' && (await walk.count(FRAME.pro)) === 0, `after the second restart the page is at ${walk.address()}`);
     check((await walk.state()).launch.port_fixed === true, 'an app that was given its port does not say so');
   });
 
@@ -1180,23 +1407,23 @@ async function runA(browser, work, files) {
     check(trimmed(await appRow.locator('.basic-app-access').textContent()) === TEXT.askMe, 'the row does not say what is in force');
   });
 
-  await step('A: Ctrl-C: the Basic page says that the app is not answering, with the command that starts it again', async () => {
+  await step('A: Ctrl-C: Home says that the app is not answering, in two sentences, with the command that starts it again', async () => {
     const command = (await walk.state()).launch.command;
     const exit = await stopApp(walk.app, 'SIGINT');
     check(exit && exit.code === 0, `exit: ${JSON.stringify(exit)}`);
     check(walk.app.err === '', `standard error: ${walk.app.err}`);
     check(!fs.existsSync(path.join(walk.store, 'run', 'gate.sock')), 'the socket is still there');
-    const bar = page.locator('.basic-top .basic-bar .offline-bar');
+    const bar = page.locator('.column-top .offline-bar');
     await bar.waitFor({ state: 'visible', timeout: WAIT });
     const said = (await bar.locator('p').allTextContents()).map(trimmed);
-    check(said[0] === TEXT.notAnswering(walk.product) && said[1] === TEXT.startAgain && said[2] === TEXT.continuesByItself, `the bar reads: ${JSON.stringify(said)}`);
+    check(JSON.stringify(said) === JSON.stringify([TEXT.notAnswering(walk.product), TEXT.startAgain(walk.product)]), `the bar reads: ${JSON.stringify(said)}`);
     check((await bar.locator('pre.code').textContent()) === command && command.includes(`--port ${walk.app.port}`) && (await bar.locator('#bar-launch-copy').count()) === 1, `the bar holds the command: ${await bar.locator('pre.code').textContent()}`);
-    // At the top of the page the bar covers nothing of it, and the top bar no longer says what the vault's state was.
+    // At the top of the page the bar covers nothing of it, and the sidebar no longer says until when the vault is unlocked.
     await page.evaluate(() => window.scrollTo(0, 0));
     const [barBox, labelBox] = [await bar.boundingBox(), await page.locator('section[data-key="basic-approvals"] p.basic-label').boundingBox()];
     check(barBox.y + barBox.height <= labelBox.y, `the bar lies over the page: ${JSON.stringify([barBox, labelBox])}`);
-    check(trimmed(await page.locator('.topbar .lock-state.is-unknown').textContent()) === 'State unknown', 'the top bar still says that the vault is unlocked');
-    await walk.picture('b14-basic-app-stopped');
+    check(trimmed(await page.locator('#side-lock.is-unknown').textContent()) === 'State unknown', 'the sidebar still says that the vault is unlocked');
+    await walk.picture('b14-home-app-stopped');
   });
 
   await step('A: in all of this the page asked no address but the app\'s and kept nothing in the browser but its session', async () => {
@@ -1214,7 +1441,7 @@ async function runB(browser, work) {
   const { page } = walk;
   const form = page.locator('form.gate-card[data-key="step-3"]');
   const setup = page.locator('section.card-setup[data-key="setup"]');
-  /** The line about setting up, as the Basic page shows it: the count, what is next, and where its button leads. */
+  /** The line about setting up, as Home shows it: the count, what is next, and where its button leads. */
   const setupLine = async () => ({
     title: trimmed(await setup.locator('.card-title').textContent()),
     done: trimmed(await setup.locator('.card-aside').textContent()),
@@ -1249,14 +1476,14 @@ async function runB(browser, work) {
   });
   if (!walk.base) return;
 
-  await step('B: locked under the app step, the vault opens on the Basic page, whose one line names the step and leads back to it', async () => {
+  await step('B: locked under the app step, the vault opens on Home, whose one line names the step and leads back to it', async () => {
     await lockElsewhere(page, walk.base);
     await page.locator('#unlock-passphrase').waitFor({ state: 'visible', timeout: WAIT });
     check(walk.address() === '#/setup/app', `a lock changed the address to ${walk.address()}`);
     check((await walk.count('#locked-waiting')) === 0, 'the locked screen speaks of passages that waited although none did');
     await unlock(walk);
-    await page.locator(FRAME.basic).waitFor({ state: 'visible', timeout: 40000 });
-    check(walk.address() === '#/basic', `after "Unlock" the address is ${walk.address()}`);
+    await page.locator(FRAME.simple).waitFor({ state: 'visible', timeout: 40000 });
+    check(walk.address() === '#/home', `after "Unlock" the address is ${walk.address()}`);
     await setup.waitFor({ state: 'visible', timeout: WAIT });
     check(JSON.stringify(await setupLine()) === firstLine, `the line about setting up reads ${JSON.stringify(await setupLine())}`);
     await setup.locator('#setup-continue').click();
@@ -1264,25 +1491,31 @@ async function runB(browser, work) {
     check(walk.address() === '#/setup/app' && (await stepperMarks(walk)) === '+>--', `"Continue" leads to ${walk.address()} with the stepper ${await stepperMarks(walk)}`);
   });
 
-  await step('B: "Set everything up yourself in Pro" stores the view and opens Overview with its list for a new vault; the switch leads back', async () => {
+  await step('B: "Set everything up yourself in Pro" keeps the six pages as where the app opens, and opens Overview with its list for a new vault; "← Home" leads back, and "Open on" under Settings takes the choice back', async () => {
     const mark = walk.sent.length;
     await page.locator('a#setup-pro').click();
     await page.locator(FRAME.pro).waitFor({ state: 'visible', timeout: WAIT });
-    check(walk.address() === '#/overview', `the link leads to ${walk.address()}`);
+    check(walk.address() === '#/pro/overview', `the link leads to ${walk.address()}`);
     const kept = (await walk.state()).interface;
     check(kept.view === 'pro' && kept.setup === 'open', `the link left the vault as ${JSON.stringify(kept)}`);
     check(JSON.stringify(walk.changesSince(mark)) === JSON.stringify(['POST /api/interface']), `the link sent ${JSON.stringify(walk.changesSince(mark))}`);
-    // Setting up is still open, so Pro's own list for a new vault takes over, and no bar speaks of a visit.
+    // Setting up is still open, so Overview's own list for a new vault takes over.
     await page.locator('.card-start').waitFor({ state: 'visible', timeout: WAIT });
-    check((await page.locator('.card-start .start-step').count()) === 4 && (await walk.count('.visit-bar')) === 0, 'Overview does not show its four steps, or shows the bar of a visit');
-    await switchView(page, 'basic');
+    check((await page.locator('.card-start .start-step').count()) === 4 && (await walk.count('.visit-bar')) === 0, 'Overview does not show its four steps, or shows a bar above them');
+    await backHome(page);
+    check(walk.address() === '#/home' && (await walk.state()).interface.view === 'pro', `"← Home" leads to ${walk.address()}, or changed where the app opens`);
+    await openPage(page, 'settings');
+    check(await page.locator('input[name="start"][value="pro"]').isChecked(), '"Open on" does not show what the link kept');
+    await openOn(page, 'basic');
+    await eventually(async () => (await walk.state()).interface.view === 'basic', WAIT, 'the choice "Home" was not kept');
+    await openPage(page, 'home');
     await setup.waitFor({ state: 'visible', timeout: WAIT });
-    check(JSON.stringify(await setupLine()) === firstLine, `back in Basic the line about setting up reads ${JSON.stringify(await setupLine())}`);
+    check(JSON.stringify(await setupLine()) === firstLine, `back on Home the line about setting up reads ${JSON.stringify(await setupLine())}`);
     await setup.locator('#setup-continue').click();
     await form.waitFor({ state: 'visible', timeout: WAIT });
   });
 
-  await step('B: "Skip" on both steps sends nothing and leads to the Basic page; a reload on the way shows the same step', async () => {
+  await step('B: "Skip" on both steps sends nothing and leads to Home; a reload on the way shows the same step', async () => {
     const mark = walk.sent.length;
     await form.locator('.gate-actions .btn-quiet').click();
     const card = walk.card('step-2');
@@ -1297,14 +1530,14 @@ async function runB(browser, work) {
     await card.waitFor({ state: 'visible', timeout: 40000 });
     check(walk.address() === '#/setup/documents', `after a reload the address is ${walk.address()}`);
     await card.locator('.gate-actions .btn-quiet').click();
-    await page.locator(FRAME.basic).waitFor({ state: 'visible', timeout: WAIT });
-    check(walk.address() === '#/basic', `skipping both steps leads to ${walk.address()}`);
+    await page.locator(FRAME.simple).waitFor({ state: 'visible', timeout: WAIT });
+    check(walk.address() === '#/home', `skipping both steps leads to ${walk.address()}`);
     check(walk.changesSince(mark).length === 0, `skipping sent ${JSON.stringify(walk.changesSince(mark))}`);
     const now = await walk.state();
     check(now.interface.setup === 'open' && now.encryption.documents === 0 && (await walk.apps()).apps.length === 0, 'skipping stored something');
   });
 
-  await step('B: the empty Basic page says one thing in each part, and its line about setting up is the one filled button', async () => {
+  await step('B: the empty Home says one thing in each part, and its line about setting up is the one filled button; the empty page Documents is its count, one sentence and the place for files', async () => {
     const empty = async () => {
       await setup.waitFor({ state: 'visible', timeout: WAIT });
       check(JSON.stringify(await setupLine()) === firstLine, `the line about setting up reads ${JSON.stringify(await setupLine())}`);
@@ -1314,11 +1547,11 @@ async function runB(browser, work) {
       await left.locator('p.basic-none').waitFor({ state: 'visible', timeout: WAIT });
       check(trimmed(await left.locator('.section-aside').textContent()) === TEXT.nothingInADay && trimmed(await left.locator('p.basic-none').textContent()) === TEXT.nothingYet, `about what left the page says: ${trimmed(await left.textContent())}`);
       check((await walk.count('div.basic-ask')) === 0, 'the page says how to ask although no app can');
-      check((await walk.text('p.basic-count')) === TEXT.noDocuments && (await walk.count('.drop[data-key="drop-documents"]')) === 1 && (await walk.count('#docs-sentence')) === 0, 'the part "Documents" is not the count and the drop zone');
+      check((await walk.count('section[data-key="basic-documents"]')) === 0 && (await walk.count('.simple .drop')) === 0, 'Home has a part for documents');
       const apps = page.locator('section[data-key="basic-apps"]');
       check(trimmed(await apps.locator('p.basic-none').textContent()) === TEXT.noApp && trimmed(await apps.locator('a.btn#basic-add-app').textContent()) === 'Choose your AI app', `the part "Apps" reads: ${trimmed(await apps.textContent())}`);
       check((await walk.count('#basic-labels')) === 0 && (await walk.count('.basic-app')) === 0, 'the part "Apps" shows a row');
-      check((await page.locator('footer.basic-foot .launch pre.code').count()) === 1 && (await walk.count('#basic-cannot')) === 1, 'the foot lacks the command or what the product cannot do');
+      check((await page.locator('footer.basic-foot a#home-how').getAttribute('href')) === '#/how' && (await walk.count('footer.basic-foot .launch')) === 0, 'the foot is not the one link to the page that says how it works');
       // One filled button on the page, and it is the one that goes on with setting up.
       const filled = await page.locator('.btn-primary').evaluateAll((nodes) => nodes.map((node) => node.id));
       check(JSON.stringify(filled) === JSON.stringify(['setup-continue']), `the filled buttons of the page are ${JSON.stringify(filled)}`);
@@ -1326,11 +1559,24 @@ async function runB(browser, work) {
       check((await topOf(setup)) > (await topOf(page.locator('p.basic-again'))) && (await topOf(setup)) < (await topOf(left)), 'the line about setting up is not between "Approvals" and what left');
     };
     await empty();
-    await walk.picture('b09-basic-empty', { whole: true });
+    await walk.picture('b09-home-empty', { whole: true });
     await reload(page);
-    await page.locator(FRAME.basic).waitFor({ state: 'visible', timeout: 40000 });
-    check(walk.address() === '#/basic', `after a reload the address is ${walk.address()}`);
+    await page.locator(FRAME.simple).waitFor({ state: 'visible', timeout: 40000 });
+    check(walk.address() === '#/home', `after a reload the address is ${walk.address()}`);
     await empty();
+    // Documents, with nothing in the vault and no app that could ask: no sentence about where text goes.
+    await openPage(page, 'documents');
+    check((await walk.text('#page-count')) === TEXT.noDocuments && (await walk.text('#docs-say-1')) === TEXT.sealedCopy && (await walk.count('#docs-say-2')) === 0, `the empty page Documents reads: ${await walk.text('.column-head')} ${await walk.text('#main .says')}`);
+    check((await walk.count('.drop[data-key="drop-documents"]')) === 1 && (await walk.count('.simple .drop')) === 1 && (await walk.count('ul.doc-rows')) === 0 && (await walk.count('p.doc-sample')) === 0, 'the empty page Documents is not one place for files and nothing under it');
+    const filled = await page.locator('.btn-primary').evaluateAll((nodes) => nodes.map((node) => node.textContent.trim()));
+    check(JSON.stringify(filled) === JSON.stringify(['Add documents']), `the filled buttons of the empty page Documents are ${JSON.stringify(filled)}`);
+    await walk.picture('b09b-documents-empty', { whole: true });
+    // Activity, with nothing in the record of what apps did: one sentence in each list.
+    await openPage(page, 'activity');
+    await page.locator('#main .rows-none').waitFor({ state: 'visible', timeout: WAIT });
+    check((await walk.text('#main .rows-none')) === TEXT.nothingLeftYet && (await walk.count('ul.act-rows')) === 0, `the empty page Activity reads: ${await walk.text('#main .rows-none')}`);
+    await openPage(page, 'home');
+    await setup.waitFor({ state: 'visible', timeout: WAIT });
   });
 
   await step('B: "Hide" ends the line about setting up for good; what it offered stays on the page', async () => {
@@ -1345,7 +1591,7 @@ async function runB(browser, work) {
     await reload(page);
     await page.locator('a.btn#basic-add-app').waitFor({ state: 'visible', timeout: 40000 });
     check((await setup.count()) === 0, 'a reload brought the line about setting up back');
-    check((await walk.count('.drop[data-key="drop-documents"]')) === 1 && trimmed(await page.locator('a.btn#basic-add-app').textContent()) === 'Choose your AI app', 'what the line offered is not on the page any more');
+    check(trimmed(await page.locator('a.btn#basic-add-app').textContent()) === 'Choose your AI app' && (await page.locator(`${FRAME.simple} a[href="#/documents"]`).count()) === 1, 'what the line offered is not within reach any more');
   });
 
   await step('B: "Choose your AI app" opens the same step without the stepper, and when the app stops under it the step says how to start it again', async () => {
@@ -1362,8 +1608,8 @@ async function runB(browser, work) {
     const bar = page.locator('.gate-bar .offline-bar');
     await bar.waitFor({ state: 'visible', timeout: WAIT });
     const said = (await bar.locator('p').allTextContents()).map(trimmed);
-    // This app chose its port itself, so it comes back at another address, and it opens no page by itself.
-    check(said[0] === TEXT.notAnswering(walk.product) && said[1] === TEXT.startAgain && said[2] === TEXT.printsNewPage, `the bar reads: ${JSON.stringify(said)}`);
+    // Two sentences and the command, under a step as on every page.
+    check(JSON.stringify(said) === JSON.stringify([TEXT.notAnswering(walk.product), TEXT.startAgain(walk.product)]), `the bar reads: ${JSON.stringify(said)}`);
     check((await bar.locator('pre.code').textContent()) === command && !command.includes('--port') && (await bar.locator('#bar-launch-copy').count()) === 1, `the bar holds the command: ${await bar.locator('pre.code').textContent()}`);
     const [barBox, cardBox] = [await bar.boundingBox(), await form.boundingBox()];
     check(barBox.y + barBox.height <= cardBox.y, `the bar lies over the step: ${JSON.stringify([barBox, cardBox])}`);
@@ -1388,7 +1634,7 @@ async function runC(browser, work) {
   const stepCard = walk.card('step-4');
   let known = null;
 
-  await step('C: with an app added, a reload shows the documents step again, and after a lock the Basic page leads back to it', async () => {
+  await step('C: with an app added, a reload shows the documents step again, and after a lock Home leads back to it', async () => {
     await pair(walk);
     await create(walk);
     const form = page.locator('form.gate-card[data-key="step-3"]');
@@ -1403,7 +1649,7 @@ async function runC(browser, work) {
     await eventually(async () => (await docsCard.locator('.gate-lead').allTextContents()).map(trimmed).includes(TEXT.canThen(DESKTOP)), WAIT, 'after a reload the step does not say which app will be able to ask');
     await lockElsewhere(page, walk.base);
     await unlock(walk);
-    await page.locator(FRAME.basic).waitFor({ state: 'visible', timeout: 40000 });
+    await page.locator(FRAME.simple).waitFor({ state: 'visible', timeout: 40000 });
     await setup.waitFor({ state: 'visible', timeout: WAIT });
     check(trimmed(await setup.locator('.card-aside').textContent()) === TEXT.done(2) && trimmed(await setup.locator('p.setup-next').textContent()) === TEXT.nextDocument, `the line about setting up reads: ${trimmed(await setup.textContent())}`);
     check(trimmed(await setup.locator('#setup-continue').textContent()) === 'Continue' && (await setup.locator('#setup-continue').getAttribute('href')) === '#/setup/documents', 'the line does not lead to the documents step');
@@ -1472,18 +1718,18 @@ async function runC(browser, work) {
     await walk.picture('b03e-nothing-arrives', { whole: true });
   });
 
-  await step('C: stopped and started again under the step: the step says how, and after pairing and "Unlock" the Basic page leads back to it', async () => {
+  await step('C: stopped and started again under the step: the step says how, and after pairing and "Unlock" Home leads back to it', async () => {
     const command = (await walk.state()).launch.command;
     await restart(walk, {
       whileDown: async () => {
         const bar = page.locator('.gate-bar .offline-bar');
         await bar.waitFor({ state: 'visible', timeout: WAIT });
-        check((await bar.locator('pre.code').textContent()) === command && trimmed(await bar.textContent()).includes(TEXT.startAgain), `the bar reads: ${trimmed(await bar.textContent())}`);
+        check((await bar.locator('pre.code').textContent()) === command && trimmed(await bar.textContent()).includes(TEXT.startAgain(walk.product)), `the bar reads: ${trimmed(await bar.textContent())}`);
       },
     });
     await unlock(walk);
-    await page.locator(FRAME.basic).waitFor({ state: 'visible', timeout: 40000 });
-    check(walk.address() === '#/basic', `after the restart the page is at ${walk.address()}`);
+    await page.locator(FRAME.simple).waitFor({ state: 'visible', timeout: 40000 });
+    check(walk.address() === '#/home', `after the restart the page is at ${walk.address()}`);
     await setup.waitFor({ state: 'visible', timeout: WAIT });
     check(trimmed(await setup.locator('.card-aside').textContent()) === TEXT.done(3) && trimmed(await setup.locator('p.setup-next').textContent()) === TEXT.nextQuestion, `the line about setting up reads: ${trimmed(await setup.textContent())}`);
     check(trimmed(await setup.locator('#setup-continue').textContent()) === 'Show me how' && (await setup.locator('#setup-continue').getAttribute('href')) === '#/setup/connect', 'the line does not lead to the step "First question"');
@@ -1519,15 +1765,16 @@ async function runC(browser, work) {
     await walk.picture('b10-not-released', { whole: true });
   });
 
-  await step('C: "Add a document of your own" opens the Basic page at "Choose files"; the sample is named there and removed on a press', async () => {
+  await step('C: "Add a document of your own" opens the page Documents at "Add documents"; the sample is named there and removed on a press', async () => {
     await stepCard.locator('#ask-own').click();
-    await page.locator(FRAME.basic).waitFor({ state: 'visible', timeout: WAIT });
-    check(walk.address() === '#/basic', `the button leads to ${walk.address()}`);
-    await eventually(() => focused(page.locator('#files-documents')), WAIT, 'the focus is not on "Choose files"');
-    check((await setup.count()) === 0, 'the Basic page still asks to finish setting up');
-    const sample = page.locator('p.basic-sample');
+    await page.locator('.simple .page-body[data-key="view-documents"]').waitFor({ state: 'attached', timeout: WAIT });
+    check(walk.address() === '#/documents', `the button leads to ${walk.address()}`);
+    await eventually(() => focused(page.locator('#files-documents')), WAIT, 'the focus is not on "Add documents"');
+    const sample = page.locator('p.doc-sample');
     check(trimmed(await sample.locator('span').first().textContent()) === TEXT.sampleIsIn && trimmed(await sample.locator('#sample-remove').textContent()) === 'Remove it', `about the sample the page says: ${trimmed(await sample.textContent())}`);
-    check((await walk.text('p.basic-count')) === TEXT.oneDocument, `the page counts: ${await walk.text('p.basic-count')}`);
+    check((await walk.text('#page-count')) === TEXT.oneDocument && (await page.locator('ul.doc-rows li.doc-row').count()) === 1, `the page counts: ${await walk.text('#page-count')}`);
+    check((await walk.text('#docs-say-2')) === TEXT.sentence(DESKTOP, known.destination), `where text goes is said as: ${await walk.text('#docs-say-2')}`);
+    await walk.picture('b10b-documents-sample', { whole: true });
     const mark = walk.sent.length;
     await sample.locator('#sample-remove').click();
     const confirm = walk.sheetWith('.sheet-foot');
@@ -1535,10 +1782,13 @@ async function runC(browser, work) {
     check(trimmed(await confirm.locator('.sheet-title').textContent()) === 'Remove “invented-sample-letter”?', `the question reads: ${trimmed(await confirm.locator('.sheet-title').textContent())}`);
     await confirm.locator('.sheet-foot button').last().click();
     await walk.noSheet();
-    await says(page.locator('p.basic-count'), TEXT.noDocuments, 'after the sample was removed the page counts');
-    check((await sample.count()) === 0, 'the sample is still named on the page');
+    await says(page.locator('#page-count'), TEXT.noDocuments, 'after the sample was removed the page counts');
+    check((await sample.count()) === 0 && (await walk.count('ul.doc-rows')) === 0, 'the sample is still named on the page');
     check(walk.changesSince(mark).length === 1 && walk.changesSince(mark)[0].startsWith('DELETE /api/documents/'), `removing sent ${JSON.stringify(walk.changesSince(mark))}`);
     check((await walk.state()).encryption.documents === 0, 'the sample is still in the vault');
+    // Setting up ended with the answer on the step: Home does not ask to finish it.
+    await openPage(page, 'home');
+    check((await setup.count()) === 0, 'Home still asks to finish setting up');
   });
 
   await step('C: in all of this the page asked no address but the app\'s and kept nothing in the browser but its session', async () => {
@@ -1551,15 +1801,15 @@ async function runC(browser, work) {
 }
 
 // =====================================================================================
-// Run D: a vault made in Pro, opened in Basic
+// Run D: a vault made on the six pages with every setting, looked at from Home
 // =====================================================================================
 
 async function runD(browser, work, files) {
   const walk = await begin(browser, work, 'd', { args: ['--view', 'pro'] });
   const { page } = walk;
   const go = async (route) => {
-    await page.click(`a.nav-item[href="#/${route}"]`);
-    await page.locator(`.page-body[data-key="view-${route}"]`).waitFor({ state: 'attached', timeout: WAIT });
+    await page.click(`a.nav-item[href="#/pro/${route}"]`);
+    await page.locator(`.page-body[data-key="view-pro/${route}"]`).waitFor({ state: 'attached', timeout: WAIT });
   };
   const appCard = (name) => page.locator(`.app-card[data-key="app-${name}"]`);
   const segment = (scope, value) => scope.locator('label.segment', { has: page.locator(`input[value="${value}"]`) });
@@ -1589,18 +1839,18 @@ async function runD(browser, work, files) {
     await eventually(() => hasClass(choice, 'is-selected'), WAIT, `the card does not show ${mode} for ${collection}`);
   };
   const row = (name) => page.locator(`div.basic-app[data-key="row-app-${name}"]`);
-  let mark = 0; // what the page had sent when the view was switched to Basic
+  let mark = 0; // what the page had sent when the owner went from the six pages to Home
   let limit = 0;
 
   await step('D: started with "--view pro", "Create my vault" opens Overview, and the vault is set up in Pro: two groups, three apps, a limit, a pause, a word', async () => {
     await pair(walk);
     await create(walk);
     await page.locator(FRAME.pro).waitFor({ state: 'visible', timeout: 40000 });
-    check(walk.address() === '#/overview', `after "Create my vault" the address is ${walk.address()}`);
+    check(walk.address() === '#/pro/overview', `after "Create my vault" the address is ${walk.address()}`);
     const kept = (await walk.state()).interface;
     check(kept.view === 'pro' && kept.setup === 'open' && kept.stored === true, `a vault made with "--view pro" starts as ${JSON.stringify(kept)}`);
     await page.locator('.card-start').waitFor({ state: 'visible', timeout: WAIT });
-    check((await walk.count('.visit-bar')) === 0 && (await walk.count('ol.steps')) === 0, 'Pro shows a step of the first run, or the bar of a visit');
+    check((await walk.count('.visit-bar')) === 0 && (await walk.count('ol.steps')) === 0 && (await walk.count('#pro-home')) === 1, 'Overview shows a step of the first run, or lacks the way to Home');
 
     // Two groups of documents. "documents" is opened to apps that send text to a provider and shows its titles; "tax" carries a note and stays closed.
     await go('documents');
@@ -1648,9 +1898,9 @@ async function runD(browser, work, files) {
     await page.locator('#replace-word').fill('Sample-Account-4711');
     await page.locator('form.word-form button[type="submit"]').click();
     await eventually(async () => (await walk.get('/api/settings')).replaced_strings === 1, WAIT, 'the word was not added');
-    // The fact about where the view is kept stands on this page.
+    // The fact about what is kept beside the vault stands on this page.
     const facts = (await page.locator('.card[data-key="location"] .fact').allTextContents()).map(trimmed);
-    check(facts.some((fact) => fact.includes('Kept beside the vault, not sealed') && fact.includes('Which view you use, whether setup was finished, and your language once you chose one')), `the Vault page does not say where the view is kept: ${JSON.stringify(facts)}`);
+    check(facts.some((fact) => fact.includes('Kept beside the vault, not sealed') && fact.includes('Your language, the page it opens on, and whether the first steps are done')), `the Vault page does not say what is kept beside the vault: ${JSON.stringify(facts)}`);
 
     const now = await walk.state();
     const apps = await walk.apps();
@@ -1660,13 +1910,13 @@ async function runD(browser, work, files) {
   });
   if (!walk.base) return;
 
-  await step('D: in Basic every app is read-only: its access per group, "Change in Pro", and the chips for a paused app and one that is not answered', async () => {
+  await step('D: "← Home" keeps nothing; on Home every app is read-only: its access per group, "Change in Pro", and the chips for a paused app and one that is not answered', async () => {
     await walk.noToast();
     mark = walk.sent.length;
-    await switchView(page, 'basic');
-    check(walk.address() === '#/basic' && (await walk.state()).interface.view === 'basic', `"Basic" leads to ${walk.address()}`);
+    await backHome(page);
+    check(walk.address() === '#/home' && (await walk.state()).interface.view === 'pro', `"← Home" leads to ${walk.address()}, or changed where the app opens`);
     await row(LOCAL).waitFor({ state: 'visible', timeout: WAIT });
-    check((await walk.count('button[data-key^="change-"]')) === 0 && (await walk.count('input[name="basic-mode"]')) === 0, 'Basic offers to change what an app may do in a vault with several groups');
+    check((await walk.count('button[data-key^="change-"]')) === 0 && (await walk.count('input[name="basic-mode"]')) === 0, 'Home offers to change what an app may do in a vault with several groups');
     const closed = 'tax: No access (not open to apps that send text to a provider)';
     const expected = {
       [CODE]: { access: 'Different for each group', lines: ['documents: Ask me each time', closed], chips: ['Paused'], idle: true },
@@ -1684,23 +1934,23 @@ async function runD(browser, work, files) {
       };
       check(JSON.stringify(shown) === JSON.stringify(wanted), `the row of ${name} reads ${JSON.stringify(shown)}`);
       const change = line.locator(`a[data-key="change-${name}"]`);
-      check(trimmed(await change.textContent()) === 'Change in Pro' && (await change.getAttribute('href')) === '#/apps', `the row of ${name} lacks "Change in Pro"`);
+      check(trimmed(await change.textContent()) === 'Change in Pro' && (await change.getAttribute('href')) === '#/pro/apps', `the row of ${name} lacks "Change in Pro"`);
       check((await line.locator('button, input, select').count()) === 0, `the row of ${name} has a control`);
     }
     // The figure of a row is that app's own limit for 24 hours, and the row says that it is not the whole account.
     check(trimmed(await row(DESKTOP).locator('.basic-app-used span').first().textContent()) === `In its last 24 hours: 0 answers, 0 of ${limit.toLocaleString('en-US')} characters`, `the second line of the row reads: ${trimmed(await row(DESKTOP).locator('.basic-app-used').textContent())}`);
     check(trimmed(await row(DESKTOP).locator('.basic-app-others').textContent()) === 'Other limits apply too. They are set in Pro.' && (await row(CODE).locator('.basic-app-others').count()) === 0, 'the rows do not tell apart the app with limits of its own');
     const add = page.locator('a#basic-add-app');
-    check(trimmed(await add.textContent()) === 'Add an app (in Pro)' && (await add.getAttribute('href')) === '#/apps' && !(await hasClass(add, 'btn')), `under the rows the page offers: ${trimmed(await add.textContent())}`);
+    check(trimmed(await add.textContent()) === 'Add an app (in Pro)' && (await add.getAttribute('href')) === '#/pro/apps' && !(await hasClass(add, 'btn')), `under the rows the page offers: ${trimmed(await add.textContent())}`);
     // No strip that asks which kinds of apps are answered, no switch, no field for a limit.
-    check((await walk.count('.strip')) === 0 && (await walk.count('.basic .switch')) === 0 && (await walk.count('.basic input[type="number"]')) === 0, 'Basic shows a control for the kinds of apps, for pausing or for limits');
+    check((await walk.count('.strip')) === 0 && (await walk.count('.simple .page-body .switch')) === 0 && (await walk.count('.simple input[type="number"]')) === 0, 'Home shows a control for the kinds of apps, for pausing or for limits');
     // No app has asked yet, so setting up is still open: its line is there, and its button is the one filled button of the page.
     const setup = page.locator('section.card-setup[data-key="setup"]');
     check(trimmed(await setup.locator('.card-aside').textContent()) === TEXT.done(3) && trimmed(await setup.locator('p.setup-next').textContent()) === TEXT.nextQuestion, `the line about setting up reads: ${trimmed(await setup.textContent())}`);
     check(JSON.stringify(await page.locator('.btn-primary').evaluateAll((nodes) => nodes.map((node) => node.id))) === JSON.stringify(['setup-continue']), 'the filled buttons of the page are not the one of the line about setting up');
   });
 
-  await step('D: "Also set for this vault, in Pro" says each thing Pro set, by the page of Pro where it is set', async () => {
+  await step('D: "Also set for this vault, in Pro" says each thing that was set there, by the page where it is set; the page Documents names the group of each document', async () => {
     const also = page.locator('section[data-key="basic-also"]');
     await also.waitFor({ state: 'visible', timeout: WAIT });
     check(trimmed(await also.locator('p.basic-hint').first().textContent()) === TEXT.setInPro, `the part begins: ${trimmed(await also.locator('p.basic-hint').first().textContent())}`);
@@ -1714,7 +1964,7 @@ async function runD(browser, work, files) {
     const wanted = [
       {
         title: 'Under Apps',
-        link: 'also-apps #/apps Open in Pro',
+        link: 'also-apps #/pro/apps Open in Pro',
         lines: [
           `${DESKTOP} has limits of its own.`,
           `${CODE} is paused until the vault locks.`,
@@ -1723,7 +1973,7 @@ async function runD(browser, work, files) {
       },
       {
         title: 'Under Documents',
-        link: 'also-documents #/documents Open in Pro',
+        link: 'also-documents #/pro/documents Open in Pro',
         lines: [
           'The documents are in 2 groups (collections in Pro). What an app may do is set for each group.',
           '“tax” carries a note that apps are shown.',
@@ -1731,82 +1981,84 @@ async function runD(browser, work, files) {
           '“tax” is not open to apps that send text to a provider.',
         ],
       },
-      { title: 'Under Vault', link: 'also-vault #/vault Open in Pro', lines: ['1 word or number is replaced with [REDACTED] in everything that leaves.'] },
+      { title: 'Under Vault', link: 'also-vault #/pro/vault Open in Pro', lines: ['1 word or number is replaced with [REDACTED] in everything that leaves.'] },
     ];
     check(JSON.stringify(groups) === JSON.stringify(wanted), `the part reads ${JSON.stringify(groups)}`);
-    // The count names the groups, and the sentence about where text goes is the one for several apps.
-    check((await walk.text('p.basic-count')) === '2 documents in 2 groups (collections in Pro): documents (1), tax (1).', `the page counts: ${await walk.text('p.basic-count')}`);
-    check((await walk.text('section[data-key="basic-documents"] #docs-sentence')) === TEXT.general, `where text goes is said as: ${await walk.text('section[data-key="basic-documents"] #docs-sentence')}`);
-    await page.locator('#basic-docs-toggle').click();
-    const table = page.locator('table.doc-table');
-    await table.waitFor({ state: 'visible', timeout: WAIT });
-    check(JSON.stringify((await table.locator('tbody .doc-group').allTextContents()).map(trimmed)) === JSON.stringify(['documents', 'tax']), 'the table does not name the group of each document');
-    const hints = (await page.locator('section[data-key="basic-documents"] p.basic-hint').allTextContents()).map(trimmed);
-    check(JSON.stringify(hints) === JSON.stringify(["In “tax”, apps are shown a document's number, not its file name."]), `under the table the page says: ${JSON.stringify(hints)}`);
-    await page.locator('#basic-docs-toggle').click();
-    await walk.picture('b11-basic-set-in-pro', { whole: true });
+    await walk.picture('b11-home-set-in-pro', { whole: true });
+    // Documents: the count is of all of them, the sentence about where text goes is the one for several apps,
+    // and each row says which group its document is in. The newest is first.
+    await openPage(page, 'documents');
+    check((await walk.text('#page-count')) === TEXT.documents(2) && (await walk.text('#docs-say-2')) === TEXT.general, `the page Documents reads: ${await walk.text('#page-count')} / ${await walk.text('#docs-say-2')}`);
+    const rows = await page.locator('ul.doc-rows li.doc-row').evaluateAll((nodes) => nodes.map((node) => `${node.querySelector('.doc-name').textContent} in ${node.querySelector('.row-group').textContent}`));
+    // The newest first; two that the vault says were added at the same moment stand in the order of their groups.
+    const held = (await walk.get('/api/documents')).collections.flatMap((group) => group.documents.map((entry) => ({ row: `${entry.title} in ${group.name}`, added: String(entry.added) })));
+    const newestFirst = held.slice().sort((a, b) => (a.added < b.added ? 1 : a.added > b.added ? -1 : 0)).map((entry) => entry.row);
+    check(JSON.stringify(rows) === JSON.stringify(newestFirst) && JSON.stringify(rows.slice().sort()) === JSON.stringify(['boiler in tax', 'flat-notes in documents']), `the rows of the documents read ${JSON.stringify(rows)}, and by their moments they would read ${JSON.stringify(newestFirst)}`);
+    check((await walk.count('#main table')) === 0, 'the page Documents shows a table');
+    await walk.picture('b11b-documents-two-groups', { whole: true });
   });
 
   await step('D: a chosen file is held until the owner says which group it goes to, with no group chosen for them; "Cancel" sends nothing', async () => {
-    check((await walk.count('.drop[data-key="drop-basic"]')) === 1 && (await walk.count('.drop')) === 1, 'the page has not exactly one place for files');
-    // The files this page added in Pro are listed under the zone, each with its group, and each group says who can ask for them.
+    check((await walk.count('.drop[data-key="drop-chosen"]')) === 1 && (await walk.count('.drop')) === 1, 'the page has not exactly one place for files');
+    // The files this page added on the six pages are listed under the zone, each with its group, and each group says who can ask for them.
     const listed = (await page.locator('.drop li.upload').evaluateAll((nodes) => nodes.map((node) => `${node.querySelector('.upload-name').textContent} in ${node.querySelector('.upload-group').textContent}`)));
     check(JSON.stringify(listed) === JSON.stringify(['flat-notes.txt in documents', 'boiler.md in tax']), `under the zone the page lists ${JSON.stringify(listed)}`);
     const whoCanAsk = (await page.locator('.drop p.upload-who').allTextContents()).map(trimmed);
     check(whoCanAsk.length === 2 && whoCanAsk[0] === TEXT.whoAsks(CODE, DESKTOP) && whoCanAsk[1] === TEXT.whoAsks(LOCAL), `after the files of each group the page says: ${JSON.stringify(whoCanAsk)}`);
-    await page.setInputFiles('#files-basic', files.rules);
-    const sheet = walk.sheetWith('input[name="basic-group"]');
+    await page.setInputFiles('#files-chosen', files.rules);
+    const sheet = walk.sheetWith('input[name="docs-group"]');
     await sheet.waitFor({ state: 'visible', timeout: WAIT });
     check(trimmed(await sheet.locator('.sheet-title').textContent()) === TEXT.addToWhich && trimmed(await sheet.locator('.sheet-files').textContent()) === '1 file: house-rules.txt', `the sheet reads: ${trimmed(await sheet.locator('.sheet-title').textContent())} / ${trimmed(await sheet.locator('.sheet-files').textContent())}`);
-    const groups = sheet.locator('input[name="basic-group"]');
+    const groups = sheet.locator('input[name="docs-group"]');
     check((await groups.evaluateAll((nodes) => nodes.map((node) => `${node.value}${node.checked ? '*' : ''}`))).join(',') === 'documents,tax', 'a group is chosen for the owner, or the groups are not the two');
     const add = sheet.locator('.sheet-foot .btn-primary');
     check((await add.isDisabled()) && trimmed(await add.textContent()) === 'Add' && (await focused(sheet.locator('.sheet-foot button').first())), '"Add" can be pressed before a group is chosen, or the focus is not on "Cancel"');
-    // Each group says who can ask for what is in it, and an app that gets no answer right now is said to be so.
+    // Each group names the apps that can ask for what is in it.
     const who = (await sheet.locator('.choice-hint').allTextContents()).map(trimmed);
-    check(JSON.stringify(who) === JSON.stringify([`${CODE} (Ask me each time; paused), ${DESKTOP} (Can read: passages can leave without asking)`, `${LOCAL} (Ask me each time; not answered in this session)`]), `the groups say who can ask: ${JSON.stringify(who)}`);
+    check(JSON.stringify(who) === JSON.stringify([`${CODE} and ${DESKTOP}`, LOCAL]), `the groups say who can ask: ${JSON.stringify(who)}`);
     check((await sheet.locator('.note-amber').count()) === 0, 'the sheet speaks of where text goes before a group is chosen');
-    await sheet.locator('label.choice', { has: page.locator('input[name="basic-group"][value="documents"]') }).click();
+    // With a group chosen, the sentence about where its text goes: of the one app that can ask, or the general one.
+    await sheet.locator('label.choice', { has: page.locator('input[name="docs-group"][value="tax"]') }).click();
     await eventually(async () => !(await add.isDisabled()), WAIT, '"Add" stays dimmed after a group was chosen');
-    check(trimmed(await sheet.locator('.note-amber').textContent()) === TEXT.general, `with a group chosen the sheet says: ${trimmed(await sheet.locator('.note-amber').textContent())}`);
+    check((await walk.text('#group-sentence')) === TEXT.cannotCheckLocal(walk.product, LOCAL), `with "tax" chosen the sheet says: ${await walk.text('#group-sentence')}`);
+    await sheet.locator('label.choice', { has: page.locator('input[name="docs-group"][value="documents"]') }).click();
+    await says(page.locator('#group-sentence'), TEXT.general, 'with "documents" chosen the sheet says');
     await sheet.locator('.sheet-foot button').first().click();
     await walk.noSheet();
     check((await walk.state()).encryption.documents === 2 && (await walk.count('.drop li.upload')) === listed.length, '"Cancel" added the file');
+    await openPage(page, 'home');
   });
 
-  await step('D: a link into Pro is a visit: a bar leads back, nothing is stored, and Basic has sent nothing but questions', async () => {
+  await step('D: a link from Home into the six pages keeps nothing and shows no bar; "← Home" leads back, and Home and Documents have sent nothing but questions', async () => {
     await page.locator('section[data-key="basic-also"] a[data-key="also-apps"]').click();
-    await page.locator('.page-body[data-key="view-apps"]').waitFor({ state: 'attached', timeout: WAIT });
-    const bar = page.locator('nav.visit-bar[data-key="visit"]');
-    await bar.waitFor({ state: 'visible', timeout: WAIT });
-    check(trimmed(await bar.locator('#visit-back').textContent()) === TEXT.backToBasic && trimmed(await bar.locator('.visit-text').textContent()) === TEXT.visit && trimmed(await bar.locator('#visit-stay').textContent()) === TEXT.stayInPro, `the bar reads: ${trimmed(await bar.textContent())}`);
-    // The bar stands above the head of the page, and the view control shows what is on screen.
-    check((await bar.boundingBox()).y + (await bar.boundingBox()).height <= (await page.locator('.page-title').boundingBox()).y, 'the bar of the visit lies over the title of the page');
-    check(await page.locator('.sidebar-foot input[name="view"][value="pro"]').isChecked(), 'during a visit the view control does not show "Pro"');
-    check((await walk.state()).interface.view === 'basic', 'a link from Basic stored a view');
-    // Both kinds of apps exist: Pro asks which are answered, on the page the link led to.
+    await page.locator('.page-body[data-key="view-pro/apps"]').waitFor({ state: 'attached', timeout: WAIT });
+    check(walk.address() === '#/pro/apps' && (await walk.count(FRAME.simple)) === 0, `the link leads to ${walk.address()}`);
+    check((await walk.count('.visit-bar')) === 0 && (await walk.count('input[name="view"]')) === 0, 'the six pages show the bar of a visit, or the switch "View"');
+    // Both kinds of apps exist: the page asks which are answered, on the page the link led to.
     await page.locator('.strip.strip-amber').waitFor({ state: 'visible', timeout: WAIT });
-    await walk.picture('b12-visit-bar');
-    await bar.locator('#visit-back').click();
-    await page.locator(FRAME.basic).waitFor({ state: 'visible', timeout: WAIT });
-    check(walk.address() === '#/basic' && (await walk.state()).interface.view === 'basic', `"Back to Basic" leads to ${walk.address()}`);
-    // From the switch to Basic until now: the one request that kept the view, and questions.
-    check(JSON.stringify(walk.changesSince(mark)) === JSON.stringify(['POST /api/interface']), `since the switch to Basic the page sent ${JSON.stringify(walk.changesSince(mark))}`);
+    await walk.picture('b12-six-pages-from-home');
+    await backHome(page);
+    check(walk.address() === '#/home' && (await walk.state()).interface.view === 'pro', `"← Home" leads to ${walk.address()}, or changed where the app opens`);
+    // From the first "← Home" until now: questions, and nothing else.
+    check(walk.changesSince(mark).length === 0, `since "← Home" the page sent ${JSON.stringify(walk.changesSince(mark))}`);
   });
 
-  await step('D: on a second visit "Stay in Pro" stores the view, and the bar goes', async () => {
-    const before = walk.sent.length;
+  await step('D: "Change in Pro" leads to Apps; under Settings "Open on" shows what the vault was made with, and "Home" is kept on a press and across a reload', async () => {
     await row(DESKTOP).locator(`a[data-key="change-${DESKTOP}"]`).click();
-    await page.locator('.page-body[data-key="view-apps"]').waitFor({ state: 'attached', timeout: WAIT });
-    const bar = page.locator('nav.visit-bar[data-key="visit"]');
-    await bar.locator('#visit-stay').click();
-    await eventually(async () => (await bar.count()) === 0, WAIT, 'the bar of the visit stayed');
-    check(walk.address() === '#/apps' && (await walk.state()).interface.view === 'pro', `"Stay in Pro" left the page at ${walk.address()}`);
-    check(JSON.stringify(walk.changesSince(before)) === JSON.stringify(['POST /api/interface']), `"Stay in Pro" sent ${JSON.stringify(walk.changesSince(before))}`);
-    check((await walk.count('#toasts .toast')) === 0, '"Stay in Pro" left a message');
+    await page.locator('.page-body[data-key="view-pro/apps"]').waitFor({ state: 'attached', timeout: WAIT });
+    check(walk.address() === '#/pro/apps', `"Change in Pro" leads to ${walk.address()}`);
+    await backHome(page);
+    await openPage(page, 'settings');
+    check(await page.locator('input[name="start"][value="pro"]').isChecked(), '"Open on" does not show "All settings" for a vault made with "--view pro"');
+    const before = walk.sent.length;
+    await openOn(page, 'basic');
+    await eventually(async () => (await walk.state()).interface.view === 'basic', WAIT, 'the choice "Home" was not kept');
+    check(JSON.stringify(walk.changesSince(before)) === JSON.stringify(['POST /api/interface']), `the choice sent ${JSON.stringify(walk.changesSince(before))}`);
+    check((await walk.count('#toasts .toast')) === 0 && walk.address() === '#/settings', `the choice left a message, or led to ${walk.address()}`);
     await reload(page);
-    await page.locator(FRAME.pro).waitFor({ state: 'visible', timeout: 40000 });
-    check((await walk.count('.visit-bar')) === 0, 'after a reload the bar of a visit is back');
+    await page.locator(FRAME.simple).waitFor({ state: 'visible', timeout: 40000 });
+    await page.locator('input[name="start"]').first().waitFor({ state: 'attached', timeout: WAIT });
+    check(walk.address() === '#/settings' && (await page.locator('input[name="start"][value="basic"]').isChecked()), `after a reload the page is at ${walk.address()}, or "Open on" lost the choice`);
   });
 
   await step('D: in all of this the page asked no address but the app\'s and kept nothing in the browser but its session', async () => {
@@ -1872,22 +2124,22 @@ async function runE(browser, work, files) {
   });
   if (!walk.base) return;
 
-  await step('E: locked under the step "First question", the vault opens on the Basic page, and the sheet of the app leads back to the step', async () => {
+  await step('E: locked under the step "First question", the vault opens on Home, and the sheet of the app leads back to the step', async () => {
     await lockElsewhere(page, walk.base);
     await unlock(walk);
-    await page.locator(FRAME.basic).waitFor({ state: 'visible', timeout: 40000 });
-    check(walk.address() === '#/basic', `after "Unlock" the address is ${walk.address()}`);
+    await page.locator(FRAME.simple).waitFor({ state: 'visible', timeout: 40000 });
+    check(walk.address() === '#/home', `after "Unlock" the address is ${walk.address()}`);
     // The first request ended setting up, so no line about it is left; the way back to the step is in the sheet of the app.
     const row = page.locator(`div.basic-app[data-key="row-app-${CODE}"]`);
     await row.waitFor({ state: 'visible', timeout: WAIT });
-    check((await walk.count('.card-setup')) === 0 && (await walk.state()).interface.setup === 'done', 'the Basic page still asks to finish setting up');
+    check((await walk.count('.card-setup')) === 0 && (await walk.state()).interface.setup === 'done', 'Home still asks to finish setting up');
     await row.locator(`button[data-key="change-${CODE}"]`).click();
     const sheet = walk.sheetWith('input[name="basic-mode"]');
     await sheet.locator('#basic-steps').click();
     await walk.noSheet();
     await stepCard.locator('p.ask-wait.ask-arrived').waitFor({ state: 'visible', timeout: WAIT });
     check(walk.address() === `#/setup/connect?app=${CODE}`, `"Show the connection steps" leads to ${walk.address()}`);
-    // Opened from the Basic page, the step is no part of setting up: no stepper, the three lines folded, a way back.
+    // Opened from Home, the step is no part of setting up: no stepper, the three lines folded, a way back.
     check((await walk.count('ol.steps')) === 0 && (await stepCard.locator('ol.ask-steps').count()) === 0, 'the step still looks like a part of setting up');
     check((await walk.text('p.ask-wait.ask-arrived')).includes(`under the name ${CODE}`) && (await stepCard.locator('.ask-end #ask-open').count()) === 1, 'the step does not say that the app has asked, or offers no way back');
     await stepCard.locator('#ask-steps-toggle').click();
@@ -1895,7 +2147,7 @@ async function runE(browser, work, files) {
     check((await page.locator('#ask-steps-toggle').getAttribute('aria-expanded')) === 'true', 'the button of the unfolded lines does not say that they are shown');
   });
 
-  await step('E: five passages wait: three cards and "Show the other 2", on the step and on the Basic page, with nothing filled', async () => {
+  await step('E: five passages wait: three cards and "Show the other 2", on the step and on Home, with nothing filled', async () => {
     const search = walk.agent(CODE, 'search', 'cellar balcony parcels', 'documents');
     check(search.code === 'OK' && REF.test(search.text), `search: ${JSON.stringify(search)}`);
     doc = REF.exec(search.text)[1];
@@ -1907,13 +2159,13 @@ async function runE(browser, work, files) {
     check(trimmed(await page.locator('#ask-more-approvals').textContent()) === 'Show the other 2' && trimmed(await stepCard.locator('h2.ask-heading').textContent()) === 'It asks for 5 passages. This is the exact text of each.', `above and under the cards the step says: ${trimmed(await stepCard.locator('h2.ask-heading').textContent())} / ${trimmed(await page.locator('#ask-more-approvals').textContent())}`);
     check((await walk.count('.btn-primary')) === 0, 'a button is filled while passages wait');
     await stepCard.locator('.gate-actions #ask-open').click();
-    await page.locator(FRAME.basic).waitFor({ state: 'visible', timeout: WAIT });
+    await page.locator(FRAME.simple).waitFor({ state: 'visible', timeout: WAIT });
     const stack = page.locator('section[data-key="basic-approvals"] .approval-stack');
-    await eventually(async () => (await stack.locator('> .approval').count()) === 3, WAIT, 'the Basic page does not show three cards');
+    await eventually(async () => (await stack.locator('> .approval').count()) === 3, WAIT, 'Home does not show three cards');
     check((await walk.text('h1#basic-status')) === TEXT.waits(5) && (await page.title()).startsWith('(5) '), `with five passages waiting the headline reads "${await walk.text('h1#basic-status')}" and the tab "${await page.title()}"`);
     check(trimmed(await page.locator('#basic-more-approvals').textContent()) === 'Show the other 2' && (await walk.count('.btn-primary')) === 0, 'the page lacks the button for the other cards, or a button is filled');
     await stack.locator('> .approval button[data-key="release"]:not(.is-waiting)').first().waitFor({ state: 'visible', timeout: WAIT });
-    await walk.picture('b16-basic-busy', { whole: true });
+    await walk.picture('b16-home-busy', { whole: true });
   });
 
   await step('E: "Show the other 2" makes "Release once" wait again, and a press on it while it waits releases nothing', async () => {

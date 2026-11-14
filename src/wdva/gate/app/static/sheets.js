@@ -11,6 +11,7 @@ import { el, icon } from "./dom.js";
 import { num } from "./format.js";
 import {
   button,
+  codeWords,
   confirmSheet,
   copyText,
   demoPassphraseNote,
@@ -44,21 +45,22 @@ export function grantSentence(app, collection) {
   );
 }
 
-/** The same, where no one app is meant: what holds for every app that sends text to a provider. */
-export const GENERAL_SENTENCE = "Text that an app receives from your documents is sent to the company behind the app and cannot be recalled.";
+/**
+ * The same, where no one app is meant: what holds for every app that sends text to a
+ * provider. It is a text of the table, so it is worded when it is drawn.
+ */
+export function generalSentence() {
+  return t("docs.say.2.general");
+}
 
 /**
  * The sentence for one app where the documents are not told apart by collection:
- * the Basic page and the first run, which say "your documents".
+ * every place that says "your documents". The app is named by the name it has in the
+ * vault. For an app the owner declared local it says what cannot be checked.
  */
 export function basicGrantSentence(app) {
-  if (app.hosted) {
-    return `Text that ${app.name} receives from your documents is sent to ${app.destination} and cannot be recalled.`;
-  }
-  return (
-    `${PRODUCT} cannot check that this app is local. If it uses a cloud model, or has tools that send ` +
-    "data out, text it receives from your documents leaves this Mac."
-  );
+  if (app.hosted) return t("docs.say.2", { app: app.name, destination: app.destination });
+  return t("docs.say.2.local", { app: app.name });
 }
 
 // -- the passphrase again -----------------------------------------------------------
@@ -484,18 +486,6 @@ export async function loadConnect(view, update) {
   }
   view.loading = false;
   update();
-}
-
-/**
- * A configuration as words and the spaces between them, so that a long line wraps
- * at a space and never inside an option such as "--store". Only a word that is
- * longer than a whole line wraps inside itself (the style sheet sees to that).
- */
-export function codeWords(text) {
-  return String(text)
-    .split(/(\s+)/)
-    .filter(Boolean)
-    .map((part) => (/^\s+$/.test(part) ? part : el("span", { class: "code-word" }, part)));
 }
 
 /** The configuration blocks with their copy buttons, the file locations and the notes. */

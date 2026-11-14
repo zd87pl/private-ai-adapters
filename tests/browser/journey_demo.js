@@ -14,12 +14,13 @@
 //   GATE_OWNER_SECONDS  how long owner mode lasts in this run (default: 30; the app's own value is 600)
 //
 // The app is started with --demo through launch_app.py, which only shortens how
-// long owner mode lasts. The walk first follows the guide of the demo on the Basic
-// page: the played app asks for a passage, "Don't release" is not undone by a clock,
-// and after either answer the played app asks again only when the walk presses the
-// button that tells it to. Then, in Pro, it waits until owner mode is over, raises a
-// limit (the passphrase is asked for and shown, one click fills it in), locks the
-// vault, unlocks it with the passphrase the page shows, and sees the played agent go on.
+// long owner mode lasts. The walk first follows the guide of the demo on Home: the
+// played app asks for a passage, "Don't release" is not undone by a clock, and after
+// either answer the played app asks again only when the walk presses the button that
+// tells it to. Then, on the six pages under Settings, it waits until owner mode is
+// over, raises a limit (the passphrase is asked for and shown, one click fills it in),
+// locks the vault, unlocks it with the passphrase the page shows, and sees the played
+// agent go on.
 //
 // Every step prints "ok" or "FAIL". Exit status 1 when a step failed, the page
 // logged an error, a request failed, or an HTTP error came that no step announced.
@@ -27,7 +28,7 @@
 'use strict';
 
 const fs = require('fs');
-const { FRAME, WAIT, apiGet, check, deadline, decideApproval, eventually, expectHttp, finish, newPage, note, openBrowser, readOptions, run, shot, sleep, startApp, started, step, stopApp, switchView } = require('./common');
+const { FRAME, WAIT, apiGet, check, deadline, decideApproval, eventually, expectHttp, finish, newPage, note, openAllSettings, openBrowser, readOptions, run, shot, sleep, startApp, started, step, stopApp } = require('./common');
 
 const options = readOptions({ ownerSeconds: 30 });
 
@@ -83,16 +84,18 @@ run(async () => {
     await eventually(async () => (await page.locator('#toasts .toast').count()) === 0, WAIT).catch(() => {});
     await shot(page, `demo-${name}`);
   };
+  /** Open one of the six pages with every setting: from one of them by its entry, from a simple page through Settings. */
   const go = async (route) => {
-    await page.click(`a.nav-item[href="#/${route}"]`);
-    await page.locator(`.page-body[data-key="view-${route}"]`).waitFor({ state: 'attached', timeout: WAIT });
+    if ((await page.locator(FRAME.pro).count()) === 0) await openAllSettings(page, route);
+    else await page.click(`a.nav-item[href="#/pro/${route}"]`);
+    await page.locator(`.page-body[data-key="view-pro/${route}"]`).waitFor({ state: 'attached', timeout: WAIT });
   };
   /** The open sheet that holds the element `selector` names. */
   const sheetWith = (selector) => page.locator('dialog[open]', { has: page.locator(selector) });
   const noSheet = () => eventually(async () => (await page.locator('dialog[open]').count()) === 0, WAIT, 'a sheet stayed open');
   const kindFilter = (value) => page.locator('.filters label.segment', { has: page.locator(`input[value="${value}"]`) });
   const chips = async () => (await page.locator('.act-row .act-status').allTextContents()).map((text) => text.trim());
-  // The guide of the demo, on the Basic page.
+  // The guide of the demo, on Home.
   const guide = page.locator('section.card-guide[data-key="demo-guide"]');
   /** The title of the guide, once it has found its place from the lists of the page. */
   const guideTitle = async () => ((await guide.locator('#guide-title').textContent()) || '').trim();
@@ -115,10 +118,12 @@ run(async () => {
   // Without the app there is nothing to walk.
   if (!base) await finish(browser);
 
-  await step('the demo opens unlocked on the Basic page, with its badge and its guide, and nothing to set up', async () => {
+  await step('the demo opens unlocked on Home, in the frame of four entries, with its badge and its guide, and nothing to set up', async () => {
     await page.goto(base);
-    await page.locator(FRAME.basic).waitFor({ state: 'visible', timeout: WAIT });
-    check((await page.locator('.topbar .brand .chip').textContent()).trim() === TEXT.demo, 'the top bar does not carry the badge of the demo');
+    await page.locator(FRAME.simple).waitFor({ state: 'visible', timeout: WAIT });
+    check((await page.locator('.side-brand .chip').textContent()).trim() === TEXT.demo, 'the sidebar does not carry the badge of the demo');
+    check((await page.locator(`${FRAME.simple} a`).count()) === 4, 'the sidebar does not have four entries');
+    check((await page.locator(`${FRAME.simple} a[aria-current="page"]`).getAttribute('href')) === '#/home', 'the entry of Home is not the current one');
     const now = await state();
     check(now.demo === true && now.locked === false, `the demo is not unlocked: ${JSON.stringify({ demo: now.demo, locked: now.locked })}`);
     check(now.demo_passphrase === passphrase, 'the state does not carry the passphrase the terminal shows');
@@ -137,21 +142,21 @@ run(async () => {
     check((await guide.locator('#demo-again').count()) === 0, 'the guide offers to ask again before anything was decided');
     // Nothing of a vault that is being set up, no choice above the guide, and the lower parts folded to their headings.
     check((await page.locator('.card-setup').count()) === 0, 'the demo shows the card of a vault that is being set up');
-    check((await page.locator('.strip').count()) === 0, 'the Basic page shows the choice between the kinds of apps');
-    check((await page.locator('.basic-foot .launch').count()) === 0, 'the foot of the demo says how to open the demo\'s vault again');
+    check((await page.locator('.strip').count()) === 0, 'Home shows the choice between the kinds of apps');
     await page.locator('#fold-also').waitFor({ state: 'visible', timeout: WAIT });
-    for (const part of ['documents', 'apps', 'also']) {
+    for (const part of ['apps', 'also']) {
       check((await page.locator(`#fold-${part}`).getAttribute('aria-expanded')) === 'false', `"${part}" is not folded while the guide is open`);
     }
-    check((await page.locator('.basic .drop, .basic .basic-app, .basic .also-list').count()) === 0, 'a folded part of the page shows what is in it');
+    // Documents have a page of their own: Home takes no file.
+    check((await page.locator('.simple .drop, .simple .basic-app, .simple .also-list').count()) === 0, 'a folded part of the page shows what is in it, or Home takes files');
     check((await page.locator('.btn-primary').count()) === 0, 'a button of the demo\'s page is filled');
     await picture('00-guide');
     // A folded part opens and closes on its own button.
     await page.locator('#fold-apps').click();
-    await page.locator('.basic .basic-app').first().waitFor({ state: 'visible', timeout: WAIT });
+    await page.locator('.simple .basic-app').first().waitFor({ state: 'visible', timeout: WAIT });
     check((await page.locator('#fold-apps').getAttribute('aria-expanded')) === 'true', 'the button of an open part does not say that it is open');
     await page.locator('#fold-apps').click();
-    await eventually(async () => (await page.locator('.basic .basic-app').count()) === 0, WAIT, '"Apps" did not fold again');
+    await eventually(async () => (await page.locator('.simple .basic-app').count()) === 0, WAIT, '"Apps" did not fold again');
   });
 
   await step('the played app asks: the whole card is in the window, "Don\'t release" stays, and it asks again only on a press', async () => {
@@ -164,15 +169,15 @@ run(async () => {
     await card.waitFor({ state: 'visible', timeout: WAIT });
     check((await card.locator('pre.released').textContent()) === waiting.body, 'the card shows other text than would be released');
     check((await card.locator('.approval-head').textContent()).includes(waiting.destination), `the card does not say where the text goes (${waiting.destination})`);
-    // The card is whole, with both answers, between the top bar and the bar with the view: nothing has to be scrolled.
+    // The card is whole in the window, with both answers, in the one column beside the sidebar: nothing has to be scrolled.
     const size = page.viewportSize();
-    const top = await page.locator('.basic-top').boundingBox();
-    const foot = await page.locator('footer.viewbar').boundingBox();
+    const side = await page.locator('aside.side').boundingBox();
     const box = await card.boundingBox();
-    check(box.y >= top.y + top.height && box.y + box.height <= foot.y && foot.y + foot.height <= size.height + 1, `the card is not whole in the window: ${JSON.stringify({ card: box, top, foot, size })}`);
+    check(box.y >= 0 && box.y + box.height <= size.height && box.x >= side.x + side.width && box.x + box.width <= size.width, `the card is not whole in the window: ${JSON.stringify({ card: box, side, size })}`);
+    check(box.width <= 640, `the card is wider than the column: ${box.width}`);
     for (const answer of ['dismiss', 'release']) {
       const button = await card.locator(`button[data-key="${answer}"]`).boundingBox();
-      check(button.y >= box.y && button.y + button.height <= foot.y && button.x >= 0 && button.x + button.width <= size.width, `"${answer}" is not in the window`);
+      check(button.y >= box.y && button.y + button.height <= size.height && button.x >= 0 && button.x + button.width <= size.width, `"${answer}" is not in the window`);
     }
     await guideSays(TEXT.turn);
     check((await guide.locator('.guide-text').first().textContent()).includes(TEXT.eitherAnswer), 'the guide does not say that either answer is fine');
@@ -234,19 +239,29 @@ run(async () => {
     // "Hide" takes the guide away and unfolds what was folded while it was open.
     await guide.locator('#guide-hide').click();
     await eventually(async () => (await guide.count()) === 0, WAIT, 'the guide did not go');
-    await page.locator('.basic .basic-app').first().waitFor({ state: 'visible', timeout: WAIT });
-    check((await page.locator('#fold-documents, #fold-apps, #fold-also').count()) === 0, 'a part of the page is still folded after the guide was hidden');
+    await page.locator('.simple .basic-app').first().waitFor({ state: 'visible', timeout: WAIT });
+    check((await page.locator('#fold-apps, #fold-also').count()) === 0, 'a part of the page is still folded after the guide was hidden');
   });
 
-  await step('one press shows the same demo in Pro, without anything to set up', async () => {
-    await switchView(page, 'pro');
+  await step('two presses, "Settings" and "Overview", show the same demo on the six pages, without anything to set up', async () => {
+    await page.locator(`${FRAME.simple} a[href="#/settings"]`).click();
+    await page.locator('.link-rows').waitFor({ state: 'visible', timeout: WAIT });
+    // A demo is not opened again by the command the app names: Settings does not show it.
+    check((await page.locator('#settings-launch-copy').count()) === 0, 'Settings says how to open the demo\'s vault again');
+    check((await page.locator('.link-rows a.row-link').count()) === 6, 'Settings does not list six pages');
+    await page.locator('a.row-link[href="#/pro/overview"]').click();
+    await page.locator(FRAME.pro).waitFor({ state: 'visible', timeout: WAIT });
+    check(new URL(page.url()).hash === '#/pro/overview', `the address is ${new URL(page.url()).hash}`);
+    // Looking at the six pages keeps nothing: the app still opens on Home.
+    check((await state()).interface.view === 'basic', 'a look at the six pages changed where the app opens');
     const product = await page.locator('meta[name="application-name"]').getAttribute('content');
     check(product && (await page.title()).includes(product), `the title does not carry the name of the app: ${await page.title()}`);
     await page.locator('.sidebar .brand .chip').waitFor({ state: 'visible', timeout: WAIT });
     // Once the apps are listed the page knows enough to offer the list for a new vault, and must not.
     await page.locator('.left-list .left-item').first().waitFor({ state: 'visible', timeout: WAIT });
     check((await page.locator('.card-start').count()) === 0, 'the demo shows the list for a new vault');
-    check((await page.locator('.card-guide').count()) === 0, 'the guide of the Basic page stands on a page of Pro');
+    check((await page.locator('.card-guide').count()) === 0, 'the guide of Home stands on one of the six pages');
+    check((await page.locator('#pro-home').count()) === 1, 'the sidebar of the six pages has no way back to Home');
     check(app.lines[0] === `${product} ${(await state()).version}`, `the first line is not the name and the version: ${app.lines[0]}`);
   });
 
@@ -326,12 +341,14 @@ run(async () => {
     await page.click('#demo-pass-fill');
     await eventually(async () => (await field.inputValue()) === passphrase, WAIT, 'the button did not fill the field');
     await page.locator('.gate-card button[type="submit"]').click();
-    await page.locator('aside.sidebar').waitFor({ state: 'visible', timeout: 40000 });
+    // The demo opens on Home, also after it was locked on one of the six pages.
+    await page.locator(FRAME.simple).waitFor({ state: 'visible', timeout: 40000 });
+    check(new URL(page.url()).hash === '#/home', `after "Unlock" the address is ${new URL(page.url()).hash}`);
     check((await state()).locked === false, 'the vault did not unlock');
   });
 
   await step('unlocked again, the played agent goes on, and what was decided before the lock is in the record', async () => {
-    // The passage was decided on the Basic page. The played app, which has read it, asks a light question from time to time.
+    // The passage was decided on Home. The played app, which has read it, asks a light question from time to time.
     const question = await eventually(
       async () => (await activity()).find((item) => item.app === HONEST && item.kind === 'release' && item.tool === 'search' && item.seq > lockedHead),
       LIGHT_QUESTION_WAIT,

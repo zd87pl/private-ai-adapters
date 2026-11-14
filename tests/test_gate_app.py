@@ -163,6 +163,9 @@ def test_the_whole_app_over_http_and_the_socket(app: App) -> None:
     assert (status, answer["error"]["code"]) == (409, "duplicate")
     status, answer = browser.call("POST", upload_path("home", "photo.png"), upload=b"\x89PNG")
     assert (status, answer["error"]["code"]) == (400, "invalid")
+    # Beside the sentence, one word says why, for the page to word in its own language.
+    assert answer["error"]["reason"] == "unsupported"
+    assert answer["error"]["message"].startswith("this type of file is not supported")
     names = [c["name"] for c in browser.ok("GET", "/api/documents")["collections"]]
     assert names == ["home", "medical", "tax"]
 

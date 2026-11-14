@@ -2,7 +2,8 @@
 // Copyright 2025 Enclave
 //
 // The pieces every screen is made of: buttons, chips, meters, switches, sheets,
-// toasts, the choice of the language, and one row of activity.
+// toasts, the choice of the language, a text to copy, the bar that says what is wrong,
+// and one row of activity as the six pages show it.
 
 import { el, icon, render } from "./dom.js";
 import { agoShort, num, sentence, whenFull } from "./format.js";
@@ -492,6 +493,88 @@ export async function copyText(text) {
   }
   area.remove();
   return done;
+}
+
+/**
+ * A configuration or a command as words and the spaces between them, so that a long
+ * line wraps at a space and never inside an option such as "--store". Only a word that
+ * is longer than a whole line wraps inside itself (the style sheet sees to that).
+ */
+export function codeWords(text) {
+  return String(text)
+    .split(/(\s+)/)
+    .filter(Boolean)
+    .map((part) => (/^\s+$/.test(part) ? part : el("span", { class: "code-word" }, part)));
+}
+
+/**
+ * "Copy", which says "Copied" for a moment. `id` tells the buttons of the page apart.
+ * `what` names the text for a screen reader; `words` is said in place of "Copy".
+ */
+export function copyButton(ctx, id, text, what, words = null) {
+  const copied = ctx.ui.copied === id;
+  const said = words || t("common.button.copy");
+  return button(copied ? t("common.button.copied") : said, {
+    small: true,
+    id,
+    glyph: copied ? "check" : "copy",
+    label: copied ? t("common.button.copied") : `${said}: ${what}`,
+    onclick: async () => {
+      const done = await copyText(text);
+      ctx.ui.copied = done ? id : null;
+      ctx.render();
+      if (!done) toast(t("common.error.copy"), "red");
+      setTimeout(() => {
+        if (ctx.ui.copied === id) {
+          ctx.ui.copied = null;
+          ctx.render();
+        }
+      }, 2000);
+    },
+  });
+}
+
+/** A line of text to copy: the text in a box, the button beside it. */
+export function copyLine(ctx, id, text, what) {
+  return el(
+    "div",
+    { class: "copy-line" },
+    // The text wraps at its spaces and never inside an option; copied, it is one unbroken line.
+    el("pre", { class: "code code-wrap", tabindex: 0, "aria-label": what }, el("code", null, codeWords(text))),
+    copyButton(ctx, id, text, what),
+  );
+}
+
+// -- the bar that says what is wrong ---------------------------------------------------
+
+/**
+ * The bar that says what is wrong with an open page, for the block of the page that
+ * stays in view. While the app does not answer it says so, and where the state named
+ * a command it shows the command that starts the app again: never in a demo, which
+ * that command would not bring back. `problem` is true when a list of the page could
+ * not be loaded. Null when nothing is wrong. It promises nothing about the page
+ * itself: started again, the app has a new address unless it was given its port.
+ */
+export function problemBar(ctx, problem) {
+  if (ctx.offline) {
+    const launch = (ctx.state && ctx.state.launch) || {};
+    const command = ctx.state && ctx.state.demo ? null : launch.command;
+    return el(
+      "div",
+      { class: "offline-bar", role: "alert", key: "offline" },
+      icon("warning"),
+      el(
+        "div",
+        { class: "bar-text" },
+        el("p", null, t("bar.say.1")),
+        command ? [el("p", null, t("bar.say.2")), copyLine(ctx, "bar-launch-copy", command, t("bar.label.command"))] : null,
+      ),
+    );
+  }
+  if (problem) {
+    return el("div", { class: "offline-bar", role: "alert", key: "load-error" }, icon("warning"), el("span", null, t("bar.status.load")));
+  }
+  return null;
 }
 
 // -- activity ---------------------------------------------------------------------

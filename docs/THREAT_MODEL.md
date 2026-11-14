@@ -459,10 +459,13 @@ code. One machine, one run: an observation, not a proof.
 
 ### The two views, and what came with them
 
-The page has two views of the same vault. Basic is one page for every day:
-approvals, what left, documents and apps. Pro has every page and every setting.
-A new vault and the demo open in Basic; a vault made before the two views
-existed opens in Pro. With the views came one file beside the vault, three
+The page has two sets of pages over the same vault. Home, with Documents,
+Activity and Settings beside it, is for every day: approvals, what left,
+documents and apps. Six pages under Settings have every setting. Earlier
+versions called the two the views Basic and Pro, and this part keeps those
+names: "Basic" is Home and the pages beside it, "Pro" the six pages. A new
+vault and the demo open on Home; a vault made before the two existed opens on
+Overview, the first of the six. With the views came one file beside the vault, three
 routes of the page's API, a few fields in its answers and one flag of the
 command line. None of them is a mechanism. This part says what each gives to
 an adversary. [GATE_FORMAT.md](GATE_FORMAT.md#the-interface-file) has the
@@ -475,8 +478,8 @@ showed that for all three. What is left is whoever holds the session, and a
 program that runs under the owner's account.
 
 **The view is not a boundary.** The two views are two sets of pages over one
-API. Every page of Pro and the Basic page has an address of its own and opens
-by it, whichever view is kept. The kept view decides only which page opens when
+API. Every page has an address of its own and opens by it, whichever view is
+kept. The kept view decides only which page opens when
 the address names none. The state has a field that says which view is kept;
 no other answer of the API depends on the view, and no rule about grants,
 limits, approval or owner mode reads it. Choosing a view never lets more
@@ -546,7 +549,10 @@ has hidden no release and no stop of the last day. It has moved older entries
 and the changes one press away, and it has taken the head of the record out of
 sight until the owner switches to Pro. An owner who wrote the head down to
 notice a rollback has to look for it in Pro. The record is the same in both
-views.
+views. The page Activity, beside Home, shows more than Home does: what apps
+were given and the calls that were stopped, back to the first entry, twenty
+at a time. The owner's own changes, the sessions and the head of the record
+are on the six pages only.
 
 The list of stops has one bound. It is made from the 120 newest refusals in
 the record, those of waiting passages included. The record takes one entry an
@@ -608,8 +614,8 @@ tells.
 **The command the page shows.** Every answer about the state now carries the
 command line that starts Locktender again, with the full paths of the Python
 that runs it and of the vault's folder. The page shows it to be copied into a
-terminal: at the foot of the Basic page, at the end of setting up, in the
-guide of a demo, and on the Basic page when Locktender stops answering.
+terminal: on the page Settings, at the end of setting up, in the guide of a
+demo, and in the bar a page shows when Locktender stops answering.
 Locktender composes it at start, from its own interpreter and the arguments it
 was started with. Nothing from a request, from the interface file, from a
 document or from an AI app goes into it. Whoever holds the session learns the
@@ -992,8 +998,8 @@ in Basic, and the passages that wait for approval. They can press "Release
 once" for a waiting passage: an approval does not ask for the passphrase, lifts
 no limit and is recorded. They can add documents, remove documents (which
 deletes them from the vault), lower limits, take grants away and lock the
-vault. They can switch between Basic and Pro and put the card "Finish setting
-up" away, which leaves no entry in the record. During the ten minutes of owner
+vault. They can choose on which page the vault opens and put the card "Finish
+setting up" away, which leaves no entry in the record. During the ten minutes of owner
 mode they can do everything. There is no lock-out after wrong passphrases.
 
 **Left over.** Owner mode is a pause for thought, not a wall. Lock the vault
@@ -1157,7 +1163,7 @@ vault cannot do, the computer has to: a screen lock and full-disk encryption.
   and with every call the session of the run that ended, which opens nothing any
   more. A review described this from the code and did not reproduce it. With
   the two views the tab also shows a command to run. While nothing answers,
-  the Basic page says "To start it again, run this in Terminal:" over the
+  the page says "To start Locktender again, run this in a terminal:" over the
   command that Locktender last gave it. Once a program answers on that port,
   the page takes the command from that program's answer, and shows it at its
   foot as the way to open Locktender again. Any local program can take a free

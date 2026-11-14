@@ -20,11 +20,12 @@
 // starts uses.
 //
 // The walk pairs, creates the vault, skips the two steps of the first run that can be
-// skipped, and switches from the Basic page, where a new vault opens, to Pro. From
-// there on it is a walk through the six pages of Pro: documents, apps, grants, an
+// skipped, and from Home, where a new vault opens, goes to Settings: there it has the
+// app open on "All settings" and opens Overview. From there on it is a walk through
+// the six pages with every setting (Pro, under "#/pro/…"): documents, apps, grants, an
 // agent's calls, approvals, the passphrase asked for again, lock and unlock, Ctrl-C
-// and a restart. The first run as the page offers it, and the Basic page, are walked
-// by journey_basic.js.
+// and a restart, and at its end the addresses those pages had before. The first run
+// as the page offers it, Home and the plain pages are walked by journey_basic.js.
 //
 // On its way it chooses Polish four times: on the pairing screen, on the passphrase
 // screen, for an approval card and on the locked screen. Each time everything that can
@@ -56,6 +57,8 @@ const {
   notOfTable,
   note,
   openBrowser,
+  openOn,
+  openPage,
   pageReachedApp,
   pressCopy,
   readOptions,
@@ -67,7 +70,6 @@ const {
   started,
   step,
   stopApp,
-  switchView,
   textTable,
   textsIn,
   withdraw,
@@ -183,9 +185,10 @@ run(async () => {
   const agent = (directory, client, ...rest) => agentCall(options, directory, client, ...rest);
   const picture = (name) => shot(page, name);
   const count = (selector) => page.locator(selector).count();
+  /** Open one of the six pages by its entry in their sidebar. Their addresses begin with "#/pro/". */
   const go = async (route) => {
-    await page.click(`a.nav-item[href="#/${route}"]`);
-    await page.locator(`.page-body[data-key="view-${route}"]`).waitFor({ state: 'attached', timeout: WAIT });
+    await page.click(`a.nav-item[href="#/pro/${route}"]`);
+    await page.locator(`.page-body[data-key="view-pro/${route}"]`).waitFor({ state: 'attached', timeout: WAIT });
   };
   /** The open sheet that holds the element `selector` names. */
   const sheetWith = (selector) => page.locator('dialog[open]', { has: page.locator(selector) });
@@ -384,26 +387,35 @@ run(async () => {
     check(new URL(page.url()).hash === '#/setup/documents', `skipping the app step leads to ${page.url()}`);
     await picture('04-first-run-documents');
     await second.locator('.gate-actions .btn-quiet').click();
-    // A new vault opens in the Basic view, where one line says what setting up still lacks. Skipping
+    // A new vault opens on Home, where one line says what setting up still lacks. Skipping
     // stored nothing: no app, no document, and setting up still open.
-    await page.locator(FRAME.basic).waitFor({ state: 'visible', timeout: WAIT });
-    check(new URL(page.url()).hash === '#/basic', `skipping both steps leads to ${page.url()}`);
+    await page.locator(FRAME.simple).waitFor({ state: 'visible', timeout: WAIT });
+    check(new URL(page.url()).hash === '#/home', `skipping both steps leads to ${page.url()}`);
     const skipped = await state();
     check(skipped.interface.view === 'basic' && skipped.interface.setup === 'open', `after skipping: ${JSON.stringify(skipped.interface)}`);
     check(skipped.encryption.documents === 0 && (await get('/api/apps')).apps.length === 0, 'skipping added something to the vault');
     const next = page.locator('.card-setup[data-key="setup"] #setup-continue');
     await next.waitFor({ state: 'visible', timeout: WAIT });
     check((await next.getAttribute('href')) === '#/setup/app', `the line about setting up leads to ${await next.getAttribute('href')}`);
-    // The walk from here on is through Pro: the view is switched once, without a message, and the
-    // six pages are where they were.
-    await switchView(page, 'pro');
-    check((await state()).interface.view === 'pro', 'the switch did not keep the view');
-    check((await count('.visit-bar')) === 0 && (await count('#toasts .toast')) === 0, 'the switch to Pro left a bar or a message');
+    // The walk from here on is through the six pages with every setting. On Settings the app is
+    // told once to open on them, without a message; then "Overview" is one of six rows.
+    await openPage(page, 'settings');
+    check((await page.locator('input[name="start"]:checked').getAttribute('value')) === 'basic', '"Open on" does not show that a new vault opens on Home');
+    await openOn(page, 'pro');
+    await eventually(async () => (await state()).interface.view === 'pro', WAIT, '"Open on" did not keep the choice');
+    check((await count('#toasts .toast')) === 0, 'choosing where the app opens left a message');
+    check(new URL(page.url()).hash === '#/settings', `choosing where the app opens moved the page to ${page.url()}`);
+    await page.locator('a.row-link[href="#/pro/overview"]').click();
+    await page.locator(FRAME.pro).waitFor({ state: 'visible', timeout: WAIT });
+    check(new URL(page.url()).hash === '#/pro/overview', `the row "Overview" leads to ${page.url()}`);
+    // The six pages have one entry above their six, which leads back to Home, and no switch of a view.
+    check((await page.locator('aside.sidebar nav a').count()) === 7 && (await page.locator('aside.sidebar nav a').first().getAttribute('href')) === '#/home', 'the sidebar of the six pages does not begin with the way back to Home');
+    check((await count('input[name="view"]')) === 0 && (await count('.visit-bar')) === 0, 'a switch of the view or the bar of a visit is still there');
     await page.locator('.card-start').waitFor({ state: 'visible', timeout: WAIT });
-    await startIsAt(1, '#/documents');
+    await startIsAt(1, '#/pro/documents');
     check((await count('.start-step.is-next a.btn')) === 1, 'more than one next step is offered');
     // No app yet: the card of what was sent offers to add one, and nothing waits.
-    await page.locator('.card[data-key="left"] .empty a[href="#/apps"]').waitFor({ state: 'visible', timeout: WAIT });
+    await page.locator('.card[data-key="left"] .empty a[href="#/pro/apps"]').waitFor({ state: 'visible', timeout: WAIT });
     await page.locator('.card[data-key="waiting"] .quiet-line').waitFor({ state: 'visible', timeout: WAIT });
     await picture('05-overview-empty');
   });
@@ -473,7 +485,7 @@ run(async () => {
 
   await step('the overview now points at step 2', async () => {
     await go('overview');
-    await startIsAt(2, '#/apps');
+    await startIsAt(2, '#/pro/apps');
   });
 
   // ------------------------------------------------------------------ apps
@@ -557,7 +569,8 @@ run(async () => {
     await closed.locator('.grant-closed').waitFor({ state: 'visible', timeout: WAIT });
     check((await closed.locator('.segmented').count()) === 0, 'a closed collection can be granted');
     await closed.locator('.grant-closed a').click();
-    await page.locator('.page-body[data-key="view-documents"]').waitFor({ state: 'attached', timeout: WAIT });
+    await page.locator('.page-body[data-key="view-pro/documents"]').waitFor({ state: 'attached', timeout: WAIT });
+    check(new URL(page.url()).hash === '#/pro/documents', `the link of a closed collection leads to ${page.url()}`);
     for (const name of ['documents', 'tax']) {
       await page.locator(`label[for="hosted-${name}"]`).click();
       const confirm = sheetWith('.sheet-foot');
@@ -593,7 +606,7 @@ run(async () => {
     check(grants.documents === 'read' && grants.tax === 'approve', `grants: ${JSON.stringify(grants)}`);
     await picture('14-apps-granted');
     await go('overview');
-    await startIsAt(4, '#/apps');
+    await startIsAt(4, '#/pro/apps');
     await picture('15-overview-step-4');
   });
 
@@ -909,6 +922,30 @@ run(async () => {
     check(stopped, 'the record does not say that the app was stopped');
     await row(stopped.seq).waitFor({ state: 'visible', timeout: WAIT });
     await picture('25-after-restart');
+  });
+
+  await step('the addresses from before lead where their pages are now, and the short ones are the simple pages', async () => {
+    const opens = async (typed, address, shown) => {
+      await page.goto(`${base}${typed}`);
+      await page.locator(shown).first().waitFor({ state: 'visible', timeout: WAIT });
+      await eventually(async () => new URL(page.url()).hash === address, WAIT, `"${typed}" does not become "${address}": ${page.url()}`);
+    };
+    // Four of the six pages keep their word, under "#/pro/".
+    await opens('#/overview', '#/pro/overview', '.page-body[data-key="view-pro/overview"]');
+    await opens('#/apps', '#/pro/apps', '.page-body[data-key="view-pro/apps"]');
+    await opens('#/vault', '#/pro/vault', '.page-body[data-key="view-pro/vault"]');
+    await opens('#/approvals', '#/pro/approvals', '.page-body[data-key="view-pro/approvals"]');
+    // "#/documents" and "#/activity" meant two of the six pages and are the simple pages now.
+    await opens('#/documents', '#/documents', '.simple .page-body[data-key="view-documents"]');
+    await opens('#/activity', '#/activity', '.simple .page-body[data-key="view-activity"]');
+    check((await count(FRAME.pro)) === 0, 'a simple page stands in the frame of the six pages');
+    // The six pages of the same words are one press away: the link at the foot of the simple page.
+    await page.locator('#activity-full').click();
+    await page.locator('.page-body[data-key="view-pro/activity"]').waitFor({ state: 'attached', timeout: WAIT });
+    // The page that was called Basic is Home.
+    await opens('#/basic', '#/home', '.simple .page-body[data-key="view-home"]');
+    // An address that names no page is decided by what the app keeps: this vault opens on the six pages.
+    await opens('#/nothing-of-that-name', '#/nothing-of-that-name', '.page-body[data-key="view-pro/overview"]');
   });
 
   await step('stopped once more, the app again quits with status 0 and an empty standard error', async () => {

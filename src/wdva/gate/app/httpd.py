@@ -158,6 +158,7 @@ _SERVER_HEADER = "-".join(re.sub(r"[^A-Za-z0-9 ]", "", brand.PRODUCT).split()) o
 _LENGTH = re.compile(r"[0-9]{1,12}")
 _WHOLE_NUMBER = re.compile(r"[0-9]{1,15}")
 _NAME_SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+_REASON = re.compile(r"[a-z][a-z0-9_]{0,31}")
 _SAME_SITE_VALUES = frozenset({"same-origin", "none"})
 
 _KIND_WORDS = {
@@ -373,9 +374,18 @@ def _json_response(value: Any) -> _Response:
     return _Response(200, _JSON, body.encode("ascii"))
 
 
-def _error_response(status: int, code: str, message: str) -> _Response:
-    body = json.dumps({"error": {"code": code, "message": message}}, separators=(",", ":"))
+def _error_response(status: int, code: str, message: str, reason: str | None = None) -> _Response:
+    error = {"code": code, "message": message}
+    if reason is not None:
+        error["reason"] = reason
+    body = json.dumps({"error": error}, separators=(",", ":"))
     return _Response(status, _JSON, body.encode("ascii"), code=code)
+
+
+def _reason_word(error: ServiceError) -> str | None:
+    """The word a service error carries beside its code, if it is a word and nothing else."""
+    reason = getattr(error, "reason", None)
+    return reason if isinstance(reason, str) and _REASON.fullmatch(reason) else None
 
 
 def _invalid(message: str) -> _Refused:
@@ -822,7 +832,9 @@ class _Handler(BaseHTTPRequestHandler):
             return _json_response(result)
         except ServiceError as error:
             if isinstance(error.status, int) and 400 <= error.status <= 599:
-                return _error_response(error.status, str(error.code), str(error.message))
+                return _error_response(
+                    error.status, str(error.code), str(error.message), _reason_word(error)
+                )
             _report(error, route.call)
         except Exception as error:
             _report(error, route.call)

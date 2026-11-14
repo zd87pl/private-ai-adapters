@@ -520,8 +520,6 @@ NOT_BUILT_YET = {
     "ask.say.2",
     "home.new.say.1",
     "home.wait.title",
-    "docs.say.2",
-    "docs.say.2.general",
     "connect.offer.say.2",
     "connect.offer.say.2.read",
     "connect.offer.say.2.groups",
@@ -531,7 +529,6 @@ NOT_BUILT_YET = {
     "custom.say.1",
     "custom.say.2",
     "home.connect.say.1",
-    "settings.say.1",
     "how.connect.6",
 }
 

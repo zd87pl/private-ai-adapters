@@ -19,17 +19,19 @@ files.
 | --- | --- |
 | store | the vault |
 | client | an app (the owner's name for one AI application) |
-| collection | a collection; in the Basic view, a group of documents |
-| ledger | the record. The Pro view shows all of it as Activity; the Basic view shows what was released under "What left the vault" and what was refused under "Stopped in the last 24 hours" |
+| collection | a collection; on Home and on the page Documents, a group of documents |
+| ledger | the record. The six pages under Settings show all of it as Activity; Home shows what was released under "What left the vault" and what was refused under "Stopped in the last 24 hours", and the page Activity has both as "Given to apps" and "Stopped" |
 | grant with mode `read` | "Can read" |
 | grant with mode `approve` | "Ask me each time" |
-| `hosted` true, `hosted` false | a hosted app, a local app; in the Basic view, an app that sends text to a provider, an app on this computer |
+| `hosted` true, `hosted` false | a hosted app, a local app; on Home, an app that sends text to a provider, an app on this computer |
 | `allow_hosted` | "Open to hosted apps" |
 | `redact_literals`, listed strings | "Words to replace" |
 | pool | all hosted apps together, or all local apps together |
 
-The interface has two views of the same store, Basic and Pro. Which one is in use is not a
-setting of the store: it is kept in [a file beside the sealed ones](#the-interface-file).
+The interface opens on Home, or on Overview, the first of six pages with every setting. Earlier
+versions called the two the views Basic and Pro, and this page still calls the six pages "the
+Pro view" in places. Which of the two a store opens on is not a setting of the store: it is kept
+in [a file beside the sealed ones](#the-interface-file).
 
 Elsewhere in this repository a vault is one `.wdva` file ([FORMAT.md](FORMAT.md)). A store is a
 directory of such files.
@@ -517,8 +519,8 @@ change, unlock and lock is one sealed file there, and each names the hash of the
 
 The head of a record is the number of its newest entry and the SHA-256 of that file. The Pro view
 of the interface shows it as the number and the first eight characters of the hash, for example
-`#33 6187a0f8`: on Overview, on the Vault page and, while Pro is the view that is kept, on the
-locked screen. The Basic view does not show it.
+`#33 6187a0f8`: on Overview, on the Vault page and, while the store opens on Overview, on the
+locked screen. Home and the pages beside it do not show it.
 
 ### Times
 
@@ -803,7 +805,7 @@ Two things a refusal still tells a caller are listed in the threat model under
 
 `<store>/run/interface.json` holds two or three words about the owner's page and nothing from the
 store. It is the only file the app keeps in plain text and the only one it overwrites. It is not
-sealed because the page has to know which view to open before a passphrase is typed. The third
+sealed because the page has to know which page to open on before a passphrase is typed. The third
 word, a language for the page, is kept beside the two for the screens that come before the
 passphrase and before pairing. This is the file of a new store for which no language was chosen,
 35 bytes, the last of them a line feed; and below it the file once a language was chosen, 53
@@ -819,8 +821,8 @@ bytes.
 
 | Key | Values | Meaning |
 | --- | --- | --- |
-| `view` | `"basic"` or `"pro"` | The view the owner's page opens in. The page describes Basic as "The everyday view: approvals, what left, documents and apps." and Pro as "Every page and every setting." |
-| `setup` | `"open"` or `"done"` | Whether the first run is still unfinished. While it is `open`, the Basic page names the next step under "Finish setting up". |
+| `view` | `"basic"` or `"pro"` | Where the owner's page opens. `basic`: the page opens on Home; `pro`: on Overview of the six pages. The owner chooses it on the page Settings, under "Open on", as "Home" or "All settings" |
+| `setup` | `"open"` or `"done"` | Whether the first run is still unfinished. While it is `open`, Home names the next step under "Finish setting up". |
 | `language` | `"en"` or `"pl"`; absent until one was chosen | The language kept for the owner's page: English or Polish. A file without this key says that none was chosen. The key is never written with `null` or an empty text, and nothing sent to the app takes a language away once one is kept |
 
 | The file holds | It counts as |
@@ -918,9 +920,10 @@ like the state's.
 | Owner mode | Never needed: the route lets nothing leave and changes nothing that is sealed. In a run for this page, after owner mode had run out, registering a client was refused with `reauth_required` and this route was answered |
 | The record | No entry |
 
-The page sends `view` when the owner chooses a view, and `setup` when the owner leaves the last
-step of the first run with "Open my vault" or "Add a document of your own", or hides the card
-"Finish setting up". One request it sends by itself, without a press: `{"setup": "done"}`,
+The page sends `view` when the owner chooses under "Open on" where the page opens, or follows
+"Set everything up yourself in Pro" from a step of the first run, and `setup` when the owner
+leaves the last step of the first run with "Open my vault" or "Add a document of your own", or
+hides the card "Finish setting up". One request it sends by itself, without a press: `{"setup": "done"}`,
 once a store that is being set up has a client and a document and a call has come under the
 name of one of its clients. It sends `setup` only for a store whose file says `open`.
 
@@ -979,7 +982,14 @@ The pairing code has eight characters from `ABCDEFGHJKMNPQRSTVWXYZ23456789` and 
 403 `forbidden`, `wrong_code`, `wrong_passphrase` or `reauth_required` (the change lets more
 leave and owner mode has run out); 404 `not_found`; 405 `invalid`; 409 `locked`, `conflict`,
 `busy`, `changed` or `duplicate`; 413 `too_large`; 429 `pairing_disabled`; 500 `internal`; 503
-`unavailable`. Every response, of the page's files too, carries these headers among its own, and
+`unavailable`. An error may carry a third member, `reason`: one word of lower-case letters,
+digits and `_`, at most 32 characters, for a page that words the error itself. One route sends
+it today: `POST /api/documents` with 400 `invalid`, when a file is not added. The words are
+`unsupported` (not a kind of file that is read), `empty`, `no_text`, `too_large` (more text than
+one document may hold), `not_utf8`, `no_pdf_support` (this installation cannot read PDFs),
+`pdf_unreadable`, `pdf_encrypted`, `pdf_no_text` (pictures of pages), `pdf_too_much` and
+`pdf_too_slow`. `message` stays the sentence it was. Every response, of the page's files too,
+carries these headers among its own, and
 never a `Set-Cookie` or a header that lets another site read it:
 
 ```text
@@ -1015,7 +1025,7 @@ run for this page all 29 were called against a locked store.
 | `GET /api/approvals` | The passages that wait, each with the text that would be released, and the approvals not yet used | |
 | `POST /api/approvals/release` `{app, ref, body_sha256}` | Approves one passage for one client, once; 409 `changed` when its text is no longer the one with that hash | |
 | `POST /api/approvals/dismiss` `{app, ref}` | Takes a passage off the waiting list, or withdraws an approval that was not used | |
-| `GET /api/documents` | The collections with their documents, and what can be uploaded | |
+| `GET /api/documents` | The collections with their documents, and what can be uploaded: `upload` holds the suffixes, the greatest size, whether PDFs can be read, and `install`, the command line that adds what reads PDFs to this installation | |
 | `POST /api/documents?collection=&name=` | Adds one document. The body is the file's bytes, not JSON | |
 | `DELETE /api/documents/<id>` | Removes a document | |
 | `POST /api/collections` `{name, note?, allow_hosted?, show_titles?}` | Creates a collection or changes the fields given. Closing it to hosted clients also removes their grants for it | For `allow_hosted` or `show_titles` becoming true |

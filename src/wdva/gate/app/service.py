@@ -254,7 +254,7 @@ def _refused_document(error: DocumentRefusedError) -> ServiceError:
     if error.reason == REASON_TOO_LARGE:
         return ServiceError(413, "too_large", "the file holds more text than a vault takes")
     if error.reason == "empty":
-        return _invalid("the file holds no text")
+        return ServiceError(400, "invalid", "the file holds no text", "no_text")
     return _invalid("the text of the file cannot be read")
 
 
@@ -1962,6 +1962,9 @@ class GateService:
                 "max_bytes": extract.MAX_UPLOAD_BYTES,
                 "types": list(extract.SUPPORTED_SUFFIXES),
                 "pdf": extract.pdf_available(),
+                # The command that adds what reads PDFs to this installation, for the page to
+                # show where it says that a PDF cannot be read here.
+                "install": hostconfig.install_line("pdf"),
             },
         }
 
@@ -1972,6 +1975,11 @@ class GateService:
         The title is the file name without its suffix. The file's bytes are
         sealed along with its text. A collection that does not exist yet is
         created, not open to hosted apps.
+
+        A file that cannot be taken is answered 400 ``invalid`` with the
+        sentence that says why and, beside it, one word for that reason
+        (:data:`wdva.gate.extract.REFUSALS`), which the page words in its own
+        language.
         """
         session = self._unlocked()
         if not is_name(collection):
@@ -1987,6 +1995,8 @@ class GateService:
             text = extract.text_from_upload(file_name, bytes(data))
         except UnicodeEncodeError:
             raise _invalid("the name of the file cannot be read") from None
+        except extract.UploadRefused as refused:
+            raise ServiceError(400, "invalid", str(refused), refused.reason) from None
         except ValueError as exc:
             raise _invalid(str(exc)) from None
         stem = PurePosixPath(file_name).stem.strip()

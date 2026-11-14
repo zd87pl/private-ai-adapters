@@ -2,25 +2,32 @@
 // Copyright 2025 Enclave
 //
 // The interface of the app. This module holds what the page knows, asks for the
-// state every two seconds, and decides which screen is shown.
+// state every two seconds, and decides which screen is shown. An open vault is shown
+// in one of two frames: the simple one (a sidebar of four entries, which at 720 px
+// and narrower becomes a bar at the top and one at the bottom) for Home, Documents,
+// Activity, Settings and "How it works"; and the frame of the six pages with every
+// setting, under "#/pro/…", which keeps its English.
 
 import { ApiError, api, configure } from "./api.js";
-import { basicBars, basicView, freshGuide, settleSetup } from "./basic.js";
+import { basicView, freshGuide, settleSetup } from "./basic.js";
 import { PRODUCT } from "./brand.js";
 import { el, icon, render } from "./dom.js";
-import { at, num, parseTime } from "./format.js";
+import { at, clock, num, parseTime } from "./format.js";
 import { bootScreen, createScreen, freshFirstRun, lockedScreen, offlineScreen, openStep, pairingScreen, setupScreen, stepApp } from "./gateway.js";
 import { appsView, documentsView, vaultView } from "./manage.js";
-import { button, chip, closeAllSheets, iconButton, languageSwitch, segmented, toast, toastError, watchSheets } from "./parts.js";
+import { activityPage, documentsPage, howPage, settingsPage } from "./pages.js";
+import { button, chip, closeAllSheets, languageSwitch, problemBar, toast, toastError, watchSheets } from "./parts.js";
 import { requestReauth } from "./sheets.js";
 import { chooseLanguage, chosenLanguage, keptLanguage, t } from "./texts.js";
 import { activityView, approvalCardKey, approvalsView, detailPanel, overviewView } from "./views.js";
 
 const POLL_MS = 2000;
 const PAGE = 50;
-/** The Basic page: how many answers that left it shows at first, and how many "Show more" adds. */
+/** Home: how many answers that left it shows at first, and how many "Show more" adds. */
 const LEFT_FIRST = 5;
 const LEFT_MORE = 20;
+/** The page Activity: how many rows it asks for at a time. */
+const ROWS_PAGE = 20;
 /** The step "First question": how many of the newest calls of the app that is being connected it lists. */
 const ASKED_FIRST = 5;
 /** How the stopped calls of the last 24 hours are asked for: a page, and how many older pages at most. */
@@ -29,7 +36,24 @@ const STOPS_MORE_PAGES = 5;
 const DAY_MS = 86400000;
 const root = document.getElementById("app");
 
+/** The four entries of the simple frame: the page each opens, the key of its word, its glyph. */
 const NAV = [
+  ["home", "nav.home", "home"],
+  ["documents", "nav.documents", "documents"],
+  ["activity", "nav.activity", "activity"],
+  ["settings", "nav.settings", "gear"],
+];
+
+/** The pages of the simple frame beside Home, by the word of their address. */
+const PAGES = {
+  documents: documentsPage,
+  activity: activityPage,
+  settings: settingsPage,
+  how: howPage,
+};
+
+/** The six pages with every setting, in their own frame and in English: the word after "#/pro/", its name, its glyph. */
+const PRO_NAV = [
   ["overview", "Overview", "overview"],
   ["activity", "Activity", "activity"],
   ["approvals", "Approvals", "approvals"],
@@ -47,15 +71,23 @@ const VIEWS = {
   vault: vaultView,
 };
 
-/** What each screen needs to be told. */
+/** Of the six pages, those whose address from before ("#/apps") is not the address of a simple page. */
+const OLD_ADDRESSES = ["overview", "approvals", "apps", "vault"];
+
+/** What each screen needs to be told, by its route. */
 const NEEDS = {
-  overview: ["apps", "approvals", "latest"],
-  activity: ["apps", "approvals", "activity"],
-  approvals: ["approvals"],
-  documents: ["documents"],
-  apps: ["apps", "settings"],
-  vault: ["settings"],
-  basic: ["apps", "approvals", "settings", "documents", "left", "stops"],
+  "pro/overview": ["apps", "approvals", "latest"],
+  "pro/activity": ["apps", "approvals", "activity"],
+  "pro/approvals": ["approvals"],
+  "pro/documents": ["documents"],
+  "pro/apps": ["apps", "settings"],
+  "pro/vault": ["settings"],
+  // Home shows, for now, what the page that was called Basic showed, and needs what that needed.
+  home: ["apps", "approvals", "settings", "documents", "left", "stops"],
+  documents: ["documents", "apps"],
+  activity: ["apps", "rows"],
+  settings: [],
+  how: [],
   // The step "First question" also needs what its app asked for: see `needs`.
   setup: ["apps", "approvals", "settings", "documents", "stops"],
 };
@@ -63,18 +95,18 @@ const NEEDS = {
 /** The steps of setting up that are addresses: "#/setup/app" and so on. */
 const SETUP_STEPS = ["app", "documents", "connect"];
 
-const VIEW_OPTIONS = [
-  { value: "basic", label: "Basic", title: "The everyday view: approvals, what left, documents and apps." },
-  { value: "pro", label: "Pro", title: "Every page and every setting." },
-];
-
 function freshActivity() {
   return { items: new Map(), order: [], nextBefore: null, filters: { app: "", kind: "" }, loaded: false, loadingMore: false, error: "", latest: null };
 }
 
-/** The answers that left, newest first, as the Basic page lists them. */
+/** A list of entries of one kind, newest first, as far as it was loaded: the answers that left, as Home lists them. */
 function freshLeft() {
   return { items: new Map(), order: [], nextBefore: null, loaded: false, loadingMore: false };
+}
+
+/** The page Activity: which of its two lists is shown, and each as far as it was loaded. */
+function freshRows(tab = "release") {
+  return { tab, release: freshLeft(), refusal: freshLeft() };
 }
 
 function freshUi() {
@@ -103,20 +135,18 @@ function freshUi() {
     focusApproval: null,
     focusPanel: false,
     focusId: null,
-    focusView: false,
     anchorKey: null,
     locking: false,
-    // The Basic page: whether every waiting passage is shown, what was last said to a screen
-    // reader about how many wait, what is unfolded, and which "Copy" was just pressed.
+    // Home: whether every waiting passage is shown, what was last said to a screen reader
+    // about how many wait, what is unfolded, and which "Copy" was just pressed.
     allApprovals: false,
     waitingCount: null,
     waitingSaid: "",
-    docsOpen: false,
     panelMore: false,
     copied: null,
-    // How many sheets lie over the page. The Basic page has its cards and its sheets on one page.
+    // How many sheets lie over the page. Home has its cards and its sheets on one page.
     sheets: 0,
-    // The demo's guide on the Basic page: what was hidden, unfolded and answered.
+    // The demo's guide on Home: what was hidden, unfolded and answered.
     guide: freshGuide(),
   });
 }
@@ -126,15 +156,17 @@ const ctx = {
   state: null,
   phase: "boot", // boot, pair, stuck, ready
   offline: false,
-  route: "overview",
+  route: "pro/overview",
   // The step of setting up that the address names, and on its last step the app it is about.
   setupStep: "app",
   setupApp: "",
   data: { apps: null, approvals: null, documents: null, settings: null },
   activity: freshActivity(),
-  // What the Basic page lists: the answers that left, and the calls that were stopped.
+  // What Home lists: the answers that left, and the calls that were stopped.
   left: freshLeft(),
   stops: null,
+  // What the page Activity lists: what was given to apps, and what was stopped.
+  rows: freshRows(),
   // The newest calls under the name of the app that is being connected, for the step "First question":
   // the app's name, the entries, and whether the app has older ones.
   asked: null,
@@ -153,6 +185,9 @@ const ctx = {
   setActivityFilters,
   loadMoreActivity,
   loadMoreLeft,
+  showRows,
+  moreRows,
+  keepView,
   setUpInPro,
   start,
   chooseLanguage: pressLanguage,
@@ -171,22 +206,16 @@ function schedule() {
   });
 }
 
-/** The choice between the two views. The one that is on screen is the one selected. */
-function viewChoice(shown) {
-  return segmented({ name: "view", legend: "View", value: shown, options: VIEW_OPTIONS, onchange: chooseView });
+/** The mark, the name and, in a demo, its chip: the head of both sidebars. */
+function brandMark() {
+  return [
+    el("img", { src: "favicon.svg", width: 24, height: 24, alt: "" }),
+    el("span", { class: "brand-name" }, PRODUCT),
+    ctx.state.demo ? chip(t("common.chip.demo"), "accent") : null,
+  ];
 }
 
-/** The view control of Pro, at the foot of the sidebar: the choice, or one button where the sidebar is icons. */
-function viewSwitch() {
-  return el(
-    "div",
-    { class: "view-switch", key: "view" },
-    el("span", { class: "view-label" }, "View"),
-    viewChoice("pro"),
-    iconButton("view", "Switch to Basic view", { id: "view-basic", onclick: () => chooseView("basic") }),
-  );
-}
-
+/** The sidebar of the six pages with every setting. Its first entry leads back to Home. */
 function sidebar() {
   const state = ctx.state;
   const waiting = state.today ? state.today.approvals_waiting : 0;
@@ -196,23 +225,19 @@ function sidebar() {
   return el(
     "aside",
     { class: "sidebar", key: "sidebar" },
-    el(
-      "div",
-      { class: "brand" },
-      el("img", { src: "favicon.svg", width: 24, height: 24, alt: "" }),
-      el("span", { class: "brand-name" }, PRODUCT),
-      state.demo ? chip("Demo", "accent") : null,
-    ),
+    el("div", { class: "brand" }, brandMark()),
     el(
       "nav",
       { class: "nav", "aria-label": "Sections" },
-      NAV.map(([name, label, glyph]) =>
+      // One entry above the six: the way back to the simple pages.
+      el("a", { class: "nav-item nav-home", id: "pro-home", href: "#/home", key: "home" }, icon("home"), el("span", { class: "nav-home-label" }, t("pro.button.home"))),
+      PRO_NAV.map(([name, label, glyph]) =>
         el(
           "a",
           {
-            class: ["nav-item", ctx.route === name && "is-current"],
-            href: `#/${name}`,
-            "aria-current": ctx.route === name ? "page" : null,
+            class: ["nav-item", ctx.route === `pro/${name}` && "is-current"],
+            href: `#/pro/${name}`,
+            "aria-current": ctx.route === `pro/${name}` ? "page" : null,
             title: label,
             key: name,
           },
@@ -228,7 +253,6 @@ function sidebar() {
       "div",
       { class: "sidebar-foot" },
       languageSwitch(pressLanguage),
-      viewSwitch(),
       el(
         "div",
         {
@@ -279,25 +303,9 @@ function loadProblem() {
   return name ? ctx.loadErrors[name] : "";
 }
 
-/**
- * While the view that is kept is Basic and a page of Pro is shown, the owner is on a
- * visit: they followed a link from Basic, or typed an address. The bar offers both
- * ways on, so that nobody has to press an option that is already selected.
- */
-function visitBar() {
-  const kept = ctx.state.interface;
-  if (!kept || kept.view !== "basic") return null;
-  return el(
-    "nav",
-    { class: "visit-bar", key: "visit", "aria-label": "Back to Basic" },
-    el("a", { class: "btn btn-default btn-small", id: "visit-back", href: "#/basic" }, el("span", { class: "btn-label" }, "← Back to Basic")),
-    el("span", { class: "visit-text" }, "You are in Pro, where every setting is. Your view stays Basic."),
-    button("Stay in Pro", { kind: "quiet", small: true, id: "visit-stay", onclick: stayInPro }),
-  );
-}
-
+/** The frame of the six pages with every setting: today's sidebar, the page, the side panel. */
 function shell() {
-  const view = VIEWS[ctx.route](ctx);
+  const view = VIEWS[ctx.route.slice("pro/".length)](ctx);
   return el(
     "div",
     { class: ["shell", ctx.panel && "has-panel"], key: "shell" },
@@ -305,16 +313,11 @@ function shell() {
     el(
       "main",
       { class: "main", id: "main", tabindex: -1 },
-      visitBar(),
       // What is wrong with the page stands above its title, in the block that stays in view.
       el(
         "div",
         { class: "page-top", key: "top" },
-        ctx.offline
-          ? el("div", { class: "offline-bar", role: "alert", key: "offline" }, icon("warning"), el("span", null, `${PRODUCT} is not answering. Is it still running in its terminal? What you see may be out of date.`))
-          : loadProblem()
-            ? el("div", { class: "offline-bar", role: "alert", key: "load-error" }, icon("warning"), el("span", null, `This page could not be brought up to date: ${loadProblem()} Trying again.`))
-            : null,
+        problemBar(ctx, loadProblem()),
         el(
           "header",
           { class: "page-head", key: "head" },
@@ -333,54 +336,85 @@ function shell() {
   );
 }
 
-function topbar() {
+/**
+ * The sidebar of the simple frame: the mark and the name, the four entries, and at
+ * its foot the language, until when the vault is unlocked, and "Lock now". At 720 px
+ * and narrower the stylesheet lays the same parts out as a bar at the top (the mark,
+ * the name, the two languages as "EN" and "PL", "Lock now" as a button with an icon)
+ * and a bar at the bottom of the window with the four entries.
+ */
+function simpleSidebar() {
   const state = ctx.state;
-  // While the app does not answer, the bar says that it does not know, not what it knew.
+  const waiting = state.today ? state.today.approvals_waiting : 0;
+  // While the app does not answer, what this page last heard of the vault may no longer
+  // hold: the foot then says that it does not know, not what it knew.
   const unknown = ctx.offline;
-  let lock = "Unlocked until you lock it";
-  if (unknown) lock = "State unknown";
-  else if (state.locks_at) lock = `Unlocked until ${at(state.locks_at, ctx.now).replace(/^(at|on) /, "")}`;
+  let lock = t("nav.status.open");
+  if (unknown) lock = t("nav.status.unknown");
+  else if (state.locks_at) lock = t("nav.status.until", { time: clock(state.locks_at, ctx.now) });
   return el(
-    "header",
-    { class: "topbar", key: "topbar" },
+    "aside",
+    { class: "side", key: "side" },
+    el("div", { class: "side-brand brand" }, brandMark()),
     el(
-      "div",
-      { class: "brand" },
-      el("img", { src: "favicon.svg", width: 24, height: 24, alt: "" }),
-      el("span", { class: "brand-name" }, PRODUCT),
-      state.demo ? chip("Demo", "accent") : null,
+      "nav",
+      { class: "side-nav", "aria-label": t("nav.label") },
+      NAV.map(([name, key, glyph]) =>
+        el(
+          "a",
+          { class: ["side-item", ctx.route === name && "is-current"], href: `#/${name}`, "aria-current": ctx.route === name ? "page" : null, key: name },
+          icon(glyph),
+          el("span", { class: "side-label" }, t(key)),
+          // What waits for the owner is on Home: its entry carries the number.
+          name === "home" && waiting > 0 ? el("span", { class: "nav-count", "aria-label": t("nav.count.waiting", { n: waiting }) }, num(waiting)) : null,
+        ),
+      ),
     ),
-    languageSwitch(pressLanguage, { short: true }),
     el(
       "div",
-      { class: "topbar-lock" },
-      el("span", { class: ["lock-state", unknown && "is-unknown"] }, lock),
+      { class: "side-foot" },
+      languageSwitch(pressLanguage),
+      el("p", { class: ["side-lock", unknown && "is-unknown"], id: "side-lock" }, lock),
       el(
         "button",
-        { type: "button", class: ["btn", "btn-default", "lock-now", ctx.ui.locking && "is-busy"], onclick: lockNow, disabled: ctx.ui.locking },
+        { type: "button", class: ["btn", "btn-default", "btn-block", "lock-now", ctx.ui.locking && "is-busy"], onclick: lockNow, disabled: ctx.ui.locking, "aria-label": t("nav.button.lock") },
         icon("lock"),
-        el("span", { class: "btn-label" }, "Lock now"),
+        el("span", { class: "btn-label" }, t("nav.button.lock")),
       ),
     ),
   );
 }
 
-/** The frame of the Basic page: one column under a top bar, the view at its foot. */
-function basicShell() {
+/**
+ * The frame of the simple pages: the sidebar, one column, the side panel. The block
+ * at the head of the column stays in view: it holds the bar that says what is wrong,
+ * while there is one, and under it the title of the page.
+ */
+function simpleShell() {
   const problem = loadProblem();
-  const bar = basicBars(ctx, problem);
+  // Home shows, for now, the body of the page that was called Basic: its headline is its title.
+  const page = ctx.route === "home" ? { title: null, aside: null, body: basicView(ctx, problem) } : PAGES[ctx.route](ctx);
   return el(
     "div",
-    { class: ["basic", ctx.panel && "has-panel"], key: "basic" },
-    // The top bar and, while there is one, the bar that says what is wrong: both stay in view.
-    el("div", { class: "basic-top", key: "top" }, topbar(), bar ? el("div", { class: "basic-bar", key: "bar" }, bar) : null),
-    el("main", { class: "basic-main", id: "main", tabindex: -1 }, el("div", { class: "page-body", key: "view-basic" }, basicView(ctx, problem))),
+    { class: ["simple", ctx.panel && "has-panel"], key: "simple" },
+    simpleSidebar(),
     el(
-      "footer",
-      { class: "viewbar", key: "viewbar" },
-      el("span", { class: "view-label" }, "View"),
-      viewChoice("basic"),
-      el("p", { class: "viewbar-text" }, "Basic shows what you use every day; Pro shows every setting. Both show the same vault."),
+      "main",
+      { class: "column", id: "main", tabindex: -1 },
+      el(
+        "div",
+        { class: "column-top", key: "top" },
+        problemBar(ctx, problem),
+        page.title
+          ? el(
+              "header",
+              { class: "column-head", key: "head" },
+              el("h1", { class: "column-title", id: "page-title", tabindex: -1 }, page.title),
+              page.aside ? el("span", { class: "column-aside", id: "page-count" }, page.aside) : null,
+            )
+          : null,
+      ),
+      el("div", { class: "page-body", key: `view-${ctx.route}` }, page.body),
     ),
     detailPanel(ctx),
   );
@@ -409,8 +443,8 @@ function screen() {
   if (ctx.state.locked) return lockedScreen(ctx);
   // A step of setting up is an address. Nothing of the first run lives in this page's memory.
   if (ctx.route === "setup") return setupScreen(ctx, loadProblem());
-  if (ctx.route === "basic") return basicShell();
-  return shell();
+  if (ctx.route.startsWith("pro/")) return shell();
+  return simpleShell();
 }
 
 /**
@@ -451,7 +485,7 @@ function paint() {
   const tabIcon = document.querySelector('link[rel="icon"]');
   const wanted = waiting > 0 ? "favicon-waiting.svg" : "favicon.svg";
   if (tabIcon && tabIcon.getAttribute("href") !== wanted) tabIcon.setAttribute("href", wanted);
-  const showsCards = ctx.route === "approvals" || ctx.route === "basic" || ctx.route === "setup";
+  const showsCards = ctx.route === "pro/approvals" || ctx.route === "home" || ctx.route === "setup";
   if (ctx.ui.focusApproval && showsCards && ctx.data.approvals) {
     focusApproval(ctx.ui.focusApproval);
     ctx.ui.focusApproval = null;
@@ -469,14 +503,6 @@ function paint() {
       ctx.ui.focusId = null;
       if (!document.querySelector("dialog[open]")) next.focus();
     }
-  }
-  if (ctx.ui.focusView) {
-    // After a switch the focus stays on the control that made it, which is in the same corner in both views.
-    ctx.ui.focusView = false;
-    const chosen = document.querySelector('input[name="view"]:checked');
-    const narrow = document.getElementById("view-basic");
-    const next = chosen && chosen.offsetParent !== null ? chosen : narrow;
-    if (next && !document.querySelector("dialog[open]")) next.focus();
   }
 }
 
@@ -497,7 +523,7 @@ function focusApproval(wanted) {
   }
   const target = card ? card.querySelector('[data-key="dismiss"]') : null;
   if (!target) {
-    // The last card was decided. On the Basic page the headline says so and takes the focus; on
+    // The last card was decided. On Home the headline says so and takes the focus; on
     // the step "First question" the outcome does. Never a button.
     const headline = document.getElementById("basic-status") || document.getElementById("ask-end-title");
     if (headline && typeof wanted.after === "number") headline.focus({ preventScroll: true });
@@ -519,12 +545,19 @@ const fetchers = {
   settings: () => api.settings(),
   latest: () => api.activity({ limit: 8 }),
   activity: () => api.activity({ limit: PAGE, app: ctx.activity.filters.app, kind: ctx.activity.filters.kind }),
-  // The two lists of the Basic page are asked for by kind. Neither is made by picking from the newest entries.
+  // The two lists of Home are asked for by kind. Neither is made by picking from the newest entries.
   left: () => api.activity({ limit: LEFT_FIRST, kind: "release" }),
   stops: loadStops,
+  // The list of the page Activity that is shown, by its kind: what was given to apps, or what was stopped.
+  rows: loadRows,
   // What one app asked for, by its name: for the step that waits for the first request of that app.
   asked: loadAsked,
 };
+
+async function loadRows() {
+  const tab = ctx.rows.tab;
+  return { tab, page: await api.activity({ limit: ROWS_PAGE, kind: tab }) };
+}
 
 async function loadAsked() {
   const app = ctx.setupApp;
@@ -605,6 +638,8 @@ const adopt = {
   stops: (value) => {
     ctx.stops = value;
   },
+  // The answer belongs to the list it was asked for, whichever of the two is shown by now.
+  rows: (value) => mergeHead(ctx.rows[value.tab], value.page),
   asked: (value) => {
     ctx.asked = value;
   },
@@ -664,6 +699,7 @@ function forget() {
   ctx.activity = freshActivity();
   ctx.left = freshLeft();
   ctx.stops = null;
+  ctx.rows = freshRows(ctx.rows.tab);
   ctx.asked = null;
   ctx.passages = new Map();
   ctx.panel = null;
@@ -699,9 +735,9 @@ function applyState(next, force = false) {
   if (next.interface) keptLanguage(next.interface.language);
   // Which page an address opens that names none is decided by the view that is kept, once the app has said it.
   if (next.interface && !(previous && previous.interface)) settleRoute();
-  // Whenever the Basic page opens, the focus goes to its headline, never to a button of a card.
+  // Whenever Home opens, the focus goes to its headline, never to a button of a card.
   // A step of setting up starts on its title.
-  if (isOpen && !wasOpen && ctx.route === "basic") ctx.ui.focusId = "basic-status";
+  if (isOpen && !wasOpen && ctx.route === "home") ctx.ui.focusId = "basic-status";
   if (isOpen && !wasOpen && ctx.route === "setup") ctx.ui.focusId = "setup-title";
   const retry = Object.keys(ctx.loadErrors).length > 0;
   if (isOpen && (force || retry || !wasOpen || previous.cursor !== next.cursor)) lastLoad = loadRoute();
@@ -774,7 +810,7 @@ async function loadMoreActivity() {
   schedule();
 }
 
-/** "Show more" on the Basic page: the next answers that left, older than the oldest shown. */
+/** "Show more" on Home: the next answers that left, older than the oldest shown. */
 async function loadMoreLeft() {
   const left = ctx.left;
   if (left.loadingMore || left.nextBefore === null || !left.order.length) return;
@@ -794,6 +830,38 @@ async function loadMoreLeft() {
   schedule();
 }
 
+/** The page Activity shows the other of its two lists. The address says which, so that a reload shows the same one. */
+function showRows(tab) {
+  if ((tab !== "release" && tab !== "refusal") || ctx.rows.tab === tab) return;
+  ctx.rows.tab = tab;
+  // The details that are open belong to a row of the list that goes.
+  ctx.panel = null;
+  if (ctx.route === "activity") window.history.replaceState(null, "", tab === "refusal" ? "#/activity?show=stopped" : "#/activity");
+  schedule();
+  load(["rows"]);
+}
+
+/** "Show more" on the page Activity: the next rows of the list that is shown, older than the oldest one. */
+async function moreRows() {
+  const tab = ctx.rows.tab;
+  const rows = ctx.rows[tab];
+  if (rows.loadingMore || rows.nextBefore === null || !rows.order.length) return;
+  rows.loadingMore = true;
+  schedule();
+  try {
+    const page = await api.activity({ limit: ROWS_PAGE, kind: tab, before: rows.order[rows.order.length - 1] });
+    if (ctx.rows[tab] === rows) {
+      for (const item of page.items || []) rows.items.set(item.seq, item);
+      rows.nextBefore = page.next_before === undefined ? null : page.next_before;
+      sortList(rows);
+    }
+  } catch (error) {
+    toastError(error);
+  }
+  rows.loadingMore = false;
+  schedule();
+}
+
 let panelOpener = null;
 
 function openPanel(seq, viaKeyboard = false) {
@@ -802,7 +870,8 @@ function openPanel(seq, viaKeyboard = false) {
     return;
   }
   const active = document.activeElement;
-  if (active && active.classList && (active.classList.contains("act-row") || active.classList.contains("stop-row"))) panelOpener = active;
+  const opens = ["act-row", "stop-row", "row-open"];
+  if (active && active.classList && opens.some((name) => active.classList.contains(name))) panelOpener = active;
   const panel = { seq, detail: null, error: "" };
   ctx.panel = panel;
   ctx.ui.panelMore = false;
@@ -841,27 +910,52 @@ function hashParts() {
   return { name, step, query: new URLSearchParams(query) };
 }
 
-/** The page that opens when the address names none: Basic where that is the view that is kept. */
+/** The page that opens when the address names none: Home where that is what the app keeps, else Overview of the six pages. */
 function defaultRoute() {
   const kept = ctx.state ? ctx.state.interface : null;
-  return kept && kept.view === "basic" ? "basic" : "overview";
+  return kept && kept.view === "basic" ? "home" : "pro/overview";
 }
 
 /**
- * The route the address names. The six pages of Pro are always Pro pages and "#/basic"
- * is always the Basic page, whatever view is kept. "#/setup/…" names a step of setting
- * up; its second part is kept in `ctx.setupStep`.
+ * The route the address names. "#/home", "#/documents", "#/activity", "#/settings"
+ * and "#/how" are the simple pages, and "#/pro/…" the six pages with every setting,
+ * whatever the app keeps. An address from before leads where its page is now:
+ * "#/basic" is Home, and "#/overview", "#/approvals", "#/apps" and "#/vault" are
+ * pages under "#/pro/". "#/setup/…" names a step of setting up; its second part is
+ * kept in `ctx.setupStep`. Only an address that names no page is decided by what the
+ * app keeps.
  */
 function routeFromHash() {
   const { name, step, query } = hashParts();
-  if (Object.prototype.hasOwnProperty.call(VIEWS, name)) return name;
-  if (name === "basic") return "basic";
+  if (name === "home" || Object.prototype.hasOwnProperty.call(PAGES, name)) return name;
+  if (name === "pro") return Object.prototype.hasOwnProperty.call(VIEWS, step) ? `pro/${step}` : "pro/overview";
+  if (name === "basic") return "home";
+  if (OLD_ADDRESSES.includes(name)) return `pro/${name}`;
   if (name === "setup") {
     ctx.setupStep = SETUP_STEPS.includes(step) ? step : "app";
     ctx.setupApp = ctx.setupStep === "connect" ? query.get("app") || "" : "";
     return "setup";
   }
   return defaultRoute();
+}
+
+/**
+ * Where the address named a page by an address from before, the address becomes the
+ * one the page has now, with what followed its "?". An address that names no page
+ * is left as it is. Nothing is loaded for it and no entry is added to the history.
+ */
+function settleAddress() {
+  const { name } = hashParts();
+  if (name !== "basic" && !OLD_ADDRESSES.includes(name)) return;
+  const query = window.location.hash.includes("?") ? window.location.hash.slice(window.location.hash.indexOf("?")) : "";
+  window.history.replaceState(null, "", `#/${ctx.route}${query}`);
+}
+
+/** Which of its two lists the page Activity shows, as the address says: "#/activity?show=stopped" is the second. */
+function settleRows() {
+  if (ctx.route !== "activity") return;
+  const tab = hashParts().query.get("show") === "stopped" ? "refusal" : "release";
+  if (tab !== ctx.rows.tab) ctx.rows.tab = tab;
 }
 
 /** The screen the address names, in one text: the route and, for a step of setting up, the step and its app. */
@@ -874,6 +968,7 @@ function settleRoute() {
   const before = placeNow();
   const name = routeFromHash();
   ctx.route = name;
+  settleRows();
   if (placeNow() === before) return;
   ctx.panel = null;
   ctx.ui.focusApproval = null;
@@ -890,30 +985,40 @@ function approvalFromHash() {
 function onRoute() {
   const before = placeNow();
   const from = ctx.route;
+  const shown = ctx.rows.tab;
   const name = routeFromHash();
   ctx.route = name;
+  settleAddress();
+  settleRows();
   if (placeNow() === before) {
-    if (name === "approvals" && hashParts().query.get("ref")) {
+    if (name === "pro/approvals" && hashParts().query.get("ref")) {
       ctx.ui.focusApproval = approvalFromHash();
       schedule();
     }
+    if (name === "activity" && ctx.rows.tab !== shown) {
+      // The address names the other list of the page Activity.
+      ctx.panel = null;
+      schedule();
+      lastLoad = loadRoute();
+    }
     return;
   }
-  // The details of an entry stay open between Overview and Activity, and nowhere else.
-  if (name === "basic" || from === "basic" || (name !== "overview" && name !== "activity")) ctx.panel = null;
+  // The details of an entry stay open between Overview and Activity of the six pages, and nowhere else.
+  const keeps = (route) => route === "pro/overview" || route === "pro/activity";
+  if (!keeps(name) || !keeps(from)) ctx.panel = null;
   ctx.ui.focusApproval = null;
   // What was to take the focus on the screen that is left is not looked for on the next one.
   ctx.ui.focusId = null;
-  if (name === "approvals") {
+  if (name === "pro/approvals") {
     // The cards appear anew, so "Release once" waits again before it can be pressed.
     ctx.ui.focusApproval = approvalFromHash();
     ctx.ui.approvalSignature = null;
   }
-  if (name === "basic" || name === "setup") {
+  if (name === "home" || name === "setup") {
     // Here too the cards appear anew. The focus goes to the headline, never to a button of a card.
     ctx.ui.approvalSignature = null;
     ctx.ui.allApprovals = false;
-    if (name === "basic") ctx.ui.focusId = "basic-status";
+    if (name === "home") ctx.ui.focusId = "basic-status";
     if (name === "setup") {
       // What an app asked for belongs to the app the step is about.
       ctx.asked = null;
@@ -927,9 +1032,9 @@ function onRoute() {
 }
 
 /**
- * Open a page by its address without the "#/": "basic", "setup/documents",
- * "setup/connect?app=…". The route changes at once, not when the browser has told of
- * the new address.
+ * Open a page by its address without the "#/": "home", "pro/overview",
+ * "setup/documents", "setup/connect?app=…". The route changes at once, not when the
+ * browser has told of the new address.
  */
 function navigate(address) {
   const [path] = address.split("?");
@@ -939,7 +1044,11 @@ function navigate(address) {
   onRoute();
 }
 
-/** Keep the view the owner chose. Resolves to whether it was kept. Nothing is said when it was: the screen is the answer. */
+/**
+ * Keep the page the app opens on, as the owner chose it under "Open on": "basic" is
+ * Home, "pro" is Overview of the six pages. Resolves to whether it was kept. Nothing
+ * is said when it was: the screen is the answer.
+ */
 async function keepView(view) {
   try {
     applyState(await api.setInterface({ view }));
@@ -951,33 +1060,15 @@ async function keepView(view) {
 }
 
 /**
- * The owner pressed "Basic" or "Pro" in the view control. The choice is kept and its
- * page opens: the Basic page, or Overview. On a visit to Pro the view that is kept is
- * Basic already, so going back keeps nothing new.
- */
-async function chooseView(view) {
-  const kept = ctx.state ? ctx.state.interface : null;
-  const known = Boolean(kept && kept.stored && kept.view === view);
-  if (!known && !(await keepView(view))) return;
-  ctx.ui.focusView = view === "pro";
-  navigate(view === "basic" ? "basic" : "overview");
-}
-
-/** "Stay in Pro" on the bar of a visit: Pro becomes the view that is kept, and the bar goes. */
-async function stayInPro() {
-  if (await keepView("pro")) ctx.ui.focusId = "main";
-  schedule();
-}
-
-/**
- * "Set everything up yourself in Pro", at the foot of a step of setting up: Pro becomes
- * the view that is kept, and Overview opens. Whether setting up is over is not touched.
+ * "Set everything up yourself in Pro", at the foot of a step of setting up: the six
+ * pages become where the app opens, and Overview opens. Whether setting up is over is
+ * not touched.
  */
 async function setUpInPro() {
   const kept = ctx.state ? ctx.state.interface : null;
   const known = Boolean(kept && kept.stored && kept.view === "pro");
   if (!known && !(await keepView("pro"))) return;
-  navigate("overview");
+  navigate("pro/overview");
   ctx.ui.focusId = "main";
   schedule();
 }
@@ -1111,7 +1202,9 @@ window.addEventListener(
   { passive: true },
 );
 
-// Until the app has said which view is kept, an address that names no page counts as Overview.
+// Until the app has said on which page it opens, an address that names no page counts as Overview.
 ctx.route = routeFromHash();
-ctx.ui.focusApproval = ctx.route === "approvals" ? approvalFromHash() : null;
+settleAddress();
+settleRows();
+ctx.ui.focusApproval = ctx.route === "pro/approvals" ? approvalFromHash() : null;
 start();

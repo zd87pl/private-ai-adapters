@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.util
 import json
@@ -9,7 +10,7 @@ import os
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -46,6 +47,20 @@ def stand_in(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> StandIn:
         return notes
 
     return install
+
+
+@contextlib.contextmanager
+def refused(word: str, match: str) -> Iterator[pytest.ExceptionInfo[ValueError]]:
+    """The file is refused: with a sentence that holds ``match``, and with the word ``word``.
+
+    The refusal is a :class:`ValueError`, as it was before it carried a word, and
+    its text is the sentence that belongs to the word.
+    """
+    with pytest.raises(ValueError, match=match) as caught:
+        yield caught
+    assert isinstance(caught.value, extract.UploadRefused)
+    assert caught.value.reason == word
+    assert str(caught.value) == extract.REFUSALS[word]
 
 
 def no_child_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -100,6 +115,32 @@ print(json.dumps({"ok": True, "text": f"{len(data)} {hashlib.sha256(data).hexdig
 # -- text files -----------------------------------------------------------------
 
 
+def test_every_refusal_has_a_word_and_the_sentence_it_always_had() -> None:
+    # The word is for a page that says the reason in its own language; the sentence is what a
+    # caller that only knows ValueError shows, and it is the one from before there was a word.
+    sentences = {
+        "unsupported": "this type of file is not supported; use "
+        ".txt, .md, .markdown, .rst, .text, .pdf",
+        "empty": "the file is empty",
+        "no_text": "the file holds no text",
+        "too_large": "the file is larger than 20 MiB",
+        "not_utf8": "the file is not UTF-8 text",
+        "no_pdf_support": "PDF support is not installed; install it with: "
+        + hostconfig.install_line("pdf"),
+        "pdf_unreadable": "the PDF cannot be read",
+        "pdf_encrypted": "the PDF is protected with a password",
+        "pdf_no_text": "the PDF holds no text that can be read; scanned pages are not converted",
+        "pdf_too_much": "the PDF holds more text than can be taken in",
+        "pdf_too_slow": "reading the PDF took too long and was stopped",
+    }
+    assert sentences == extract.REFUSALS
+    assert issubclass(extract.UploadRefused, ValueError)
+    refusal = extract.UploadRefused("empty")
+    assert (refusal.reason, str(refusal)) == ("empty", "the file is empty")
+    with pytest.raises(KeyError):
+        extract.UploadRefused("a word that is none")
+
+
 def test_supported_types_are_text_files_and_pdf() -> None:
     assert extract.SUPPORTED_SUFFIXES == (".txt", ".md", ".markdown", ".rst", ".text", ".pdf")
     assert extract.MAX_UPLOAD_BYTES == 20 * 1024 * 1024
@@ -134,7 +175,7 @@ def test_byte_order_mark_is_dropped() -> None:
     ],
 )
 def test_text_that_is_not_utf8_is_refused(data: bytes) -> None:
-    with pytest.raises(ValueError, match="not UTF-8"):
+    with refused("not_utf8", "not UTF-8"):
         extract.text_from_upload("a.txt", data)
 
 
@@ -143,7 +184,7 @@ def test_text_that_is_not_utf8_is_refused(data: bytes) -> None:
 )
 def test_unsupported_type_is_refused(name: str, monkeypatch: pytest.MonkeyPatch) -> None:
     no_child_allowed(monkeypatch)
-    with pytest.raises(ValueError, match="not supported") as caught:
+    with refused("unsupported", "not supported") as caught:
         extract.text_from_upload(name, b"%PDF-1.4 hello")
     assert ".txt" in str(caught.value)
     assert ".pdf" in str(caught.value)
@@ -152,12 +193,12 @@ def test_unsupported_type_is_refused(name: str, monkeypatch: pytest.MonkeyPatch)
 @pytest.mark.parametrize("name", ["a.txt", "a.pdf"])
 def test_empty_file_is_refused(name: str, monkeypatch: pytest.MonkeyPatch) -> None:
     no_child_allowed(monkeypatch)
-    with pytest.raises(ValueError, match="empty"):
+    with refused("empty", "empty"):
         extract.text_from_upload(name, b"")
 
 
 def test_text_file_with_only_blanks_is_refused() -> None:
-    with pytest.raises(ValueError, match="no text"):
+    with refused("no_text", "no text"):
         extract.text_from_upload("a.txt", b"\xef\xbb\xbf \n\t\n")
 
 
@@ -166,7 +207,7 @@ def test_file_over_the_limit_is_refused(name: str, monkeypatch: pytest.MonkeyPat
     no_child_allowed(monkeypatch)
     monkeypatch.setattr(extract, "MAX_UPLOAD_BYTES", 10)
     assert extract.text_from_upload("a.txt", b"0123456789") == "0123456789"
-    with pytest.raises(ValueError, match="larger than"):
+    with refused("too_large", "larger than"):
         extract.text_from_upload(name, b"0123456789x")
 
 
@@ -229,7 +270,7 @@ def test_child_that_takes_too_long_is_ended(
     )
     monkeypatch.setattr(extract, "CHILD_TIMEOUT_SECONDS", 3.0)
     started = time.monotonic()
-    with pytest.raises(ValueError, match="too long"):
+    with refused("pdf_too_slow", "too long"):
         extract.text_from_upload("a.pdf", b"%PDF-1.4")
     assert time.monotonic() - started < 30
     assert not is_running(int(notes.read_text()))
@@ -247,7 +288,7 @@ def test_child_that_prints_too_much_is_ended(
     )
     monkeypatch.setattr(extract, "MAX_CHILD_OUTPUT_BYTES", 1024 * 1024)
     started = time.monotonic()
-    with pytest.raises(ValueError, match="more text than"):
+    with refused("pdf_too_much", "more text than"):
         extract.text_from_upload("a.pdf", b"%PDF-1.4")
     assert time.monotonic() - started < 30
     assert not is_running(int(notes.read_text()))
@@ -265,7 +306,7 @@ def test_output_just_inside_the_limit_is_taken(
     monkeypatch.setattr(extract, "MAX_CHILD_OUTPUT_BYTES", answer)
     assert extract.text_from_upload("a.pdf", b"%PDF-1.4") == "x" * 4000
     monkeypatch.setattr(extract, "MAX_CHILD_OUTPUT_BYTES", answer - 1)
-    with pytest.raises(ValueError, match="more text than"):
+    with refused("pdf_too_much", "more text than"):
         extract.text_from_upload("a.pdf", b"%PDF-1.4")
 
 
@@ -285,7 +326,7 @@ def test_output_just_inside_the_limit_is_taken(
 )
 def test_garbage_from_the_child_is_a_failure(printed: str, stand_in: StandIn) -> None:
     stand_in(f"import sys\nsys.stdin.buffer.read()\nsys.stdout.write({printed!r})\n")
-    with pytest.raises(ValueError, match="cannot be read"):
+    with refused("pdf_unreadable", "cannot be read"):
         extract.text_from_upload("a.pdf", b"%PDF-1.4")
 
 
@@ -298,13 +339,13 @@ def test_child_that_ends_with_an_error_is_a_failure(stand_in: StandIn) -> None:
         "sys.stdout.flush()\n"
         "sys.exit(3)\n"
     )
-    with pytest.raises(ValueError, match="cannot be read"):
+    with refused("pdf_unreadable", "cannot be read"):
         extract.text_from_upload("a.pdf", b"%PDF-1.4")
 
 
 def test_child_that_ends_without_reading_is_a_failure(stand_in: StandIn) -> None:
     stand_in("import sys\nsys.exit(1)\n")
-    with pytest.raises(ValueError, match="cannot be read"):
+    with refused("pdf_unreadable", "cannot be read"):
         extract.text_from_upload("a.pdf", b"%PDF-" + bytes(2 * 1024 * 1024))
 
 
@@ -313,35 +354,37 @@ def test_child_that_cannot_be_started_is_a_failure(
 ) -> None:
     monkeypatch.setattr(extract, "child_argv", lambda: [str(tmp_path / "no-such-program")])
     monkeypatch.setattr(extract, "_pdf_checked", True)
-    with pytest.raises(ValueError, match="cannot be read"):
+    with refused("pdf_unreadable", "cannot be read"):
         extract.text_from_upload("a.pdf", b"%PDF-1.4")
 
 
 @pytest.mark.parametrize(
-    ("reason", "expected"),
+    ("reason", "expected", "word"),
     [
-        ("no_pdf_support", "PDF support is not installed"),
-        ("encrypted", "protected with a password"),
-        ("unreadable", "cannot be read"),
-        ("the lease says: pay 1,240 EUR", "cannot be read"),
-        (17, "cannot be read"),
+        ("no_pdf_support", "PDF support is not installed", "no_pdf_support"),
+        ("encrypted", "protected with a password", "pdf_encrypted"),
+        ("unreadable", "cannot be read", "pdf_unreadable"),
+        ("the lease says: pay 1,240 EUR", "cannot be read", "pdf_unreadable"),
+        ("pdf_too_slow", "cannot be read", "pdf_unreadable"),  # a word of ours is not the child's
+        (17, "cannot be read", "pdf_unreadable"),
     ],
 )
 def test_child_reasons_become_fixed_sentences(
-    reason: object, expected: str, stand_in: StandIn
+    reason: object, expected: str, word: str, stand_in: StandIn
 ) -> None:
     answer = json.dumps({"ok": False, "reason": reason, "text": "ignored"})
     stand_in(f"import sys\nsys.stdin.buffer.read()\nsys.stdout.write({answer!r})\n")
-    with pytest.raises(ValueError, match=expected) as caught:
+    with refused(word, expected) as caught:
         extract.text_from_upload("a.pdf", b"%PDF-1.4")
     assert "1,240" not in str(caught.value)  # the child's own words are never passed on
+    assert "1,240" not in caught.value.reason  # type: ignore[attr-defined]
 
 
 def test_pdf_without_text_is_refused(stand_in: StandIn) -> None:
     stand_in(
         'import sys\nsys.stdin.buffer.read()\nprint(\'{"ok": true, "text": " \\\\n\\\\n "}\')\n'
     )
-    with pytest.raises(ValueError, match="scanned pages are not converted"):
+    with refused("pdf_no_text", "scanned pages are not converted"):
         extract.text_from_upload("a.pdf", b"%PDF-1.4")
 
 
@@ -382,7 +425,7 @@ def test_pdf_is_refused_without_pdf_support_before_any_child_reads_it(
 ) -> None:
     notes = stand_in("import sys\nopen(NOTES, 'a').write('started\\n')\nsys.exit(1)\n")
     monkeypatch.setattr(extract, "_pdf_checked", False)
-    with pytest.raises(ValueError, match="PDF support is not installed") as raised:
+    with refused("no_pdf_support", "PDF support is not installed") as raised:
         extract.text_from_upload("a.pdf", b"%PDF-1.4")
     assert not notes.exists()
     # The package is not on PyPI, so the line names the repository, as the one for the
@@ -409,7 +452,7 @@ def test_real_child_reads_a_real_pdf() -> None:
 
 def test_real_child_refuses_what_is_not_a_pdf() -> None:
     pytest.importorskip("pypdf")
-    with pytest.raises(ValueError, match="cannot be read"):
+    with refused("pdf_unreadable", "cannot be read"):
         extract.text_from_upload("lease.pdf", b"these bytes are not a PDF at all")
 
 
@@ -420,7 +463,7 @@ def test_real_child_says_when_the_parser_is_missing() -> None:
         extract.child_argv(), input=make_pdf("anything"), capture_output=True, check=True
     )
     assert json.loads(done.stdout) == {"ok": False, "reason": "no_pdf_support"}
-    with pytest.raises(ValueError, match="PDF support is not installed"):
+    with refused("no_pdf_support", "PDF support is not installed"):
         extract.text_from_upload("lease.pdf", make_pdf("anything"))
 
 

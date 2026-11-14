@@ -398,22 +398,14 @@
   display: none;
 }
 
-/* The view, at the foot of the sidebar above the lock state: the same corner as on the Basic page. */
-.view-switch {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-}
-
-.view-label {
+/* The first entry of this sidebar leads back to Home. Its word carries an arrow, so the
+   glyph is kept for the sidebar that shows glyphs only. */
+.nav-home {
+  margin-bottom: 6px;
   color: var(--text-2);
-  font-size: var(--fs-s);
-  font-weight: 600;
 }
 
-.view-switch .icon-btn {
+.nav-home .icon {
   display: none;
 }
 
@@ -421,26 +413,6 @@
   min-width: 0;
   padding: 0 var(--gutter) 72px;
   outline: none;
-}
-
-/* On a visit from Basic: the way back and the way to stay, above the page's head. */
-.visit-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 12px;
-  max-width: 1120px;
-  margin: 10px auto 0;
-  padding: 7px 8px 7px 10px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--surface);
-}
-
-.visit-text {
-  flex: 1 1 260px;
-  min-width: 0;
-  color: var(--text-2);
 }
 
 /* The title of the page and, while there is one, the bar above it: both stay in view. */
@@ -1722,6 +1694,18 @@
   justify-content: flex-end;
 }
 
+/* Under files that were refused because PDFs cannot be read here: the command that adds that. */
+.upload-install {
+  display: grid;
+  gap: 4px;
+  padding: 2px 0 4px 24px;
+}
+
+.upload-install-label {
+  color: var(--text-2);
+  font-size: var(--fs-s);
+}
+
 /* -- Apps ---------------------------------------------------------------------- */
 
 .strip {
@@ -2243,16 +2227,8 @@
     font-size: 0.5625rem;
   }
 
-  /* The view control becomes one button, as the six links became icons. */
-  .view-switch .view-label,
-  .view-switch .segmented {
-    display: none;
-  }
-
-  .view-switch .icon-btn {
-    display: inline-flex;
-    width: 40px;
-    height: 32px;
+  .nav-home .icon {
+    display: block;
   }
 
   .sidebar .brand-name,
@@ -2456,68 +2432,7 @@
   padding-top: 4px;
 }
 
-/* -- the Basic page ----------------------------------------------------------------- */
-
-.basic {
-  --panel-width: 440px;
-  --column: 760px;
-  --gutter: 24px;
-  display: flex;
-  flex-direction: column;
-  min-height: 100vh;
-}
-
-/* The top bar and, while there is one, the bar that says what is wrong: both stay in view. */
-.basic-top {
-  position: sticky;
-  top: 0;
-  z-index: 5;
-  padding: 0 var(--gutter);
-  border-bottom: 1px solid var(--line);
-  background: var(--bg-veil);
-  -webkit-backdrop-filter: blur(20px) saturate(1.6);
-  backdrop-filter: blur(20px) saturate(1.6);
-}
-
-.topbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px 16px;
-  max-width: var(--column);
-  margin: 0 auto;
-  padding: 10px 0;
-}
-
-.topbar .brand {
-  padding: 0;
-}
-
-.topbar-lock {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-left: auto;
-}
-
-.topbar .lock-state {
-  display: inline;
-  color: var(--text-2);
-  font-variant-numeric: tabular-nums;
-}
-
-.topbar .lock-state.is-unknown {
-  color: var(--red);
-  font-weight: 500;
-}
-
-/* The bar stands in the page's column, under the top bar. */
-.basic-bar {
-  max-width: var(--column);
-  margin: -8px auto 0;
-  padding-bottom: 10px;
-}
+/* -- Home, for now: the body of the page that was called Basic ----------------------- */
 
 .bar-text {
   display: grid;
@@ -2548,19 +2463,6 @@
 .copy-line .btn {
   flex: none;
   min-width: 82px;
-}
-
-.basic-main {
-  flex: 1;
-  min-width: 0;
-  padding: 0 var(--gutter) 40px;
-  outline: none;
-}
-
-.basic-main .page-body {
-  gap: 30px;
-  max-width: var(--column);
-  margin-top: 22px;
 }
 
 .basic-section {
@@ -2718,28 +2620,9 @@
   color: var(--text-3);
 }
 
-.basic-fold,
 .panel-more {
   display: flex;
   margin-left: -8px;
-}
-
-.basic-docs {
-  padding: 12px 18px 8px;
-}
-
-.basic-doc-table .col-left {
-  width: 250px;
-  white-space: normal;
-}
-
-.doc-group {
-  display: block;
-  overflow: hidden;
-  color: var(--text-3);
-  font-size: var(--fs-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .basic-app-list {
@@ -2859,11 +2742,6 @@
   gap: 6px;
 }
 
-.basic-foot .gate-foot {
-  max-width: none;
-  text-align: left;
-}
-
 /* A button that reads as a link: it opens a sheet and goes nowhere. */
 button.link {
   padding: 0;
@@ -2874,15 +2752,6 @@ button.link {
 }
 
 /* -- the controls of the Basic page and their sheets ------------------------------- */
-
-/* The sample letter: what it is, and the button that removes it, on one line where both fit. */
-.basic-sample {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 10px;
-  color: var(--text-2);
-}
 
 /* Under the files that were sealed: which apps can ask for them from now on. */
 .upload-said {
@@ -2960,79 +2829,13 @@ button.link {
   text-align: left;
 }
 
-/* The view, in the bottom-left corner at every width. */
-.viewbar {
-  position: sticky;
-  bottom: 0;
-  z-index: 5;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 12px;
-  padding: 8px var(--gutter);
-  border-top: 1px solid var(--line);
-  background: var(--bg-veil);
-  -webkit-backdrop-filter: blur(20px) saturate(1.6);
-  backdrop-filter: blur(20px) saturate(1.6);
-}
-
-.viewbar-text {
-  flex: 1 1 300px;
-  min-width: 0;
-  color: var(--text-2);
-  font-size: var(--fs-s);
-}
-
-/* Messages stand above the bar with the view, not over it. */
-body:has(.viewbar) .toasts {
-  bottom: 64px;
-}
-
-@media (max-width: 640px) {
-  .basic-doc-table .col-added {
-    display: none;
-  }
-
-  .basic-doc-table .col-left {
-    width: 190px;
-  }
-}
-
 @media (max-width: 560px) {
-  .basic {
-    --gutter: 16px;
-  }
-
-  /* Two lines: the name; the lock state and "Lock now". */
-  .topbar .brand {
-    flex-basis: 100%;
-  }
-
-  .topbar-lock {
-    justify-content: space-between;
-    width: 100%;
-    margin-left: 0;
-  }
-
   .basic-status {
     min-block-size: 2.4em;
   }
 
   .basic-app-used .meter {
     flex-basis: 100%;
-  }
-
-  /* The sentence goes under the switch, so the bar is taller and the messages stand higher. */
-  .viewbar-text {
-    flex-basis: 100%;
-  }
-
-  body:has(.viewbar) .toasts {
-    bottom: 104px;
-  }
-
-  .basic .panel {
-    width: 100vw;
   }
 }
 
@@ -3571,13 +3374,9 @@ h2.ask-end-title {
   display: inline;
 }
 
-/* At the foot of the sidebar, above the view; in the top bar of the Basic page, beside the name. */
+/* At the foot of the sidebar of the six pages. */
 .sidebar-foot .lang {
   margin-left: -2px;
-}
-
-.topbar .lang {
-  margin-right: auto;
 }
 
 @media (max-width: 880px) {
@@ -3597,16 +3396,6 @@ h2.ask-end-title {
 }
 
 @media (max-width: 560px) {
-  /* The name and the languages share the first line of the top bar; the lock has the second. */
-  .topbar .brand {
-    flex: 1 1 0;
-    min-width: 0;
-  }
-
-  .topbar .lang {
-    margin-right: 0;
-  }
-
   /* A card as narrow as a phone: the two answers share its width, and a long text scrolls inside its box. */
   .approval {
     padding: 16px 16px 10px;

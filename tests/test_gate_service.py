@@ -836,6 +836,86 @@ def test_upload_refusals(service: GateService) -> None:
     assert [c["name"] for c in service.documents()["collections"]] == ["home"]
 
 
+def test_a_refused_file_says_why_in_a_word(
+    service: GateService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The sentence of a refusal is English. The word beside it is what the page words in the
+    # owner's language: one for each reason a file is not taken.
+    service.create_store(passphrase=gs.PASSPHRASE)
+    before = service.state()["record"]["head_seq"]
+
+    def stand_in(source: str) -> None:
+        """Replace the child that reads PDFs by a script; PDF support counts as installed."""
+        script = tmp_path / "stand_in.py"
+        script.write_text(source, encoding="utf-8")
+        monkeypatch.setattr(extract, "child_argv", lambda: [sys.executable, str(script)])
+        monkeypatch.setattr(extract, "_pdf_checked", True)
+
+    seen: dict[str, str] = {}
+
+    def refuse(name: str, data: bytes) -> None:
+        with refused(400, "invalid") as caught:
+            service.add_document(collection="home", name=name, data=data)
+        assert isinstance(caught[0].reason, str)
+        assert caught[0].reason not in seen, "two cases of this test gave the same word"
+        seen[caught[0].reason] = caught[0].message
+
+    refuse("letter.docx", b"PK\x03\x04 a Word file")
+    refuse("empty.txt", b"")
+    refuse("blank.txt", b" \n\t\n")
+    refuse("latin.txt", "Gr\u00fc\u00dfe".encode("latin-1"))
+    monkeypatch.setattr(extract, "_pdf_checked", False)
+    refuse("unread.pdf", b"%PDF-1.4")
+    answer = '{"ok": false, "reason": "encrypted"}'
+    stand_in(f"import sys\nsys.stdin.buffer.read()\nsys.stdout.write({answer!r})\n")
+    refuse("locked.pdf", b"%PDF-1.4")
+    answer = '{"ok": true, "text": " \\n "}'
+    stand_in(f"import sys\nsys.stdin.buffer.read()\nsys.stdout.write({answer!r})\n")
+    refuse("scan.pdf", b"%PDF-1.4")
+    stand_in("import sys\nsys.stdin.buffer.read()\nsys.stdout.write('not an answer')\n")
+    refuse("broken.pdf", b"%PDF-1.4")
+    monkeypatch.setattr(extract, "MAX_CHILD_OUTPUT_BYTES", 4096)
+    stand_in("import sys\nsys.stdin.buffer.read()\nsys.stdout.write('x' * 65536)\n")
+    refuse("endless.pdf", b"%PDF-1.4")
+    monkeypatch.setattr(extract, "CHILD_TIMEOUT_SECONDS", 1.0)
+    stand_in("import time\ntime.sleep(60)\n")
+    refuse("slow.pdf", b"%PDF-1.4")
+    monkeypatch.setattr(extract, "MAX_UPLOAD_BYTES", 10)
+    refuse("long.txt", b"0123456789x")
+
+    # Every word of the module was seen once, each beside the sentence that belongs to it.
+    assert seen == extract.REFUSALS
+    assert set(seen) == {
+        "unsupported",
+        "empty",
+        "no_text",
+        "not_utf8",
+        "no_pdf_support",
+        "pdf_encrypted",
+        "pdf_no_text",
+        "pdf_unreadable",
+        "pdf_too_much",
+        "pdf_too_slow",
+        "too_large",
+    }
+    assert service.state()["record"]["head_seq"] == before  # and nothing was written for any
+    # A refusal for which the page has a text by its code, or that is not about the file, has
+    # no word.
+    monkeypatch.setattr(extract, "MAX_UPLOAD_BYTES", 20 * 1024 * 1024)
+    service.add_document(collection="home", name="bank.txt", data=gs.BANK_TEXT.encode())
+    with refused(409, "duplicate") as twice:
+        service.add_document(collection="home", name="again.txt", data=gs.BANK_TEXT.encode())
+    assert twice[0].reason is None
+    with refused(400, "invalid") as named:
+        service.add_document(collection="Not A Name", name="a.txt", data=b"Some text.")
+    assert named[0].reason is None
+    # Where the page says that PDFs cannot be read here, it shows the command that adds what
+    # reads them: the one the sentence of that refusal ends with.
+    install = service.documents()["upload"]["install"]
+    assert install == hostconfig.install_line("pdf")
+    assert extract.REFUSALS["no_pdf_support"].endswith(install)
+
+
 def test_a_file_name_that_cannot_be_a_title_gets_a_plain_one(service: GateService) -> None:
     service.create_store(passphrase=gs.PASSPHRASE)
     answer = service.add_document(collection="home", name="\u200b.txt", data=b"Some text here.")
@@ -854,6 +934,7 @@ def test_upload_of_a_real_pdf(service: GateService) -> None:
         "max_bytes": 20 * 1024 * 1024,
         "types": [".txt", ".md", ".markdown", ".rst", ".text", ".pdf"],
         "pdf": True,
+        "install": hostconfig.install_line("pdf"),
     }
     data = make_pdf("The pelican invoice of March is due on the ninth.")
     document = service.add_document(collection="home", name="invoice-march.pdf", data=data)[

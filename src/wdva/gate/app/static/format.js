@@ -179,6 +179,13 @@ export function dayShort(text, now = new Date()) {
   return sentence(dayName(moment, now) || relative("auto", "long").format(0, "day"));
 }
 
+/** The day of a moment for a row ("added {date}"): "12 Nov", and with its year when that is not this one. */
+export function day(text, now = new Date()) {
+  const moment = parseTime(text);
+  if (!moment) return "–";
+  return moment.getFullYear() === now.getFullYear() ? dayFormat().format(moment) : dayYearFormat().format(moment);
+}
+
 /**
  * A future moment for an English sentence: "at 01:00", "tomorrow at 01:00", "on 3 Nov
  * at 09:02". English words, for the pages that stay English: the name of the day is

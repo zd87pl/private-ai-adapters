@@ -15,6 +15,7 @@ import {
   card,
   chip,
   confirmSheet,
+  copyLine,
   destinationChip,
   emptyState,
   errorText,
@@ -43,7 +44,7 @@ import {
 import { t } from "./texts.js";
 
 export function loadingBlock() {
-  return el("div", { class: "loading", role: "status" }, el("span", { class: "spinner" }), "Loading…");
+  return el("div", { class: "loading", role: "status" }, el("span", { class: "spinner" }), t("common.status.loading"));
 }
 
 // -- adding files -------------------------------------------------------------------
@@ -60,14 +61,40 @@ function extension(name) {
 }
 
 /**
- * Why the app did not take a file, as the line of that file. The page has words for a
- * document that is there already. Any other reason is the app's own sentence, in
- * English: also "too large" when it comes from the app, which then speaks of the text
- * in the file and not of its size, a size the page has checked before it sent the file.
+ * Why a file could not be read: the word the app sends beside its English sentence,
+ * and the key of the line that says the same in the language of the page.
  */
-function refusedWords(error) {
+const REFUSED = {
+  unsupported: "docs.error.type",
+  empty: "docs.error.empty",
+  no_text: "docs.error.notext",
+  not_utf8: "docs.error.encoding",
+  no_pdf_support: "docs.error.pdf",
+  pdf_encrypted: "docs.error.password",
+  pdf_no_text: "docs.error.scan",
+  pdf_unreadable: "docs.error.unreadable",
+  pdf_too_much: "docs.error.toomuch",
+  pdf_too_slow: "docs.error.slow",
+};
+
+/**
+ * Why the app did not take a file, as the line of that file. The page has words for a
+ * document that is there already and for every reason the app names by a word. Where
+ * the app sent no word, or one this page does not know, the line holds the app's own
+ * sentence, in English: also for the code "too large", which speaks of the text in the
+ * file and not of its size, a size the page has checked before it sent the file.
+ */
+function refusedWords(error, rules) {
   if (error.code === "duplicate") return () => t("docs.error.duplicate");
+  const reason = error.code === "invalid" && typeof error.reason === "string" ? error.reason : "";
+  if (reason === "too_large") return () => t("docs.error.large", { size: megabytes(rules.max_bytes) });
+  if (Object.prototype.hasOwnProperty.call(REFUSED, reason)) return () => t(REFUSED[reason]);
   return () => t("docs.error.other", { reason: errorText(error) });
+}
+
+/** Whether a file was refused because this installation cannot read PDFs: the line then comes with the command that adds that. */
+function needsPdfSupport(error) {
+  return error.code === "invalid" && error.reason === "no_pdf_support";
 }
 
 /**
@@ -94,6 +121,7 @@ export async function uploadFiles(ctx, collection, files) {
       refuse(() => t("docs.error.type"));
     } else if (kind === ".pdf" && rules.pdf === false) {
       refuse(() => t("docs.error.pdf"));
+      item.install = true;
     } else if (item.file.size > rules.max_bytes) {
       refuse(() => t("docs.error.large", { size: megabytes(rules.max_bytes) }));
     } else if (item.file.size === 0) {
@@ -108,7 +136,8 @@ export async function uploadFiles(ctx, collection, files) {
         item.words = () => t("docs.result.sealed", { n: passages });
         added += 1;
       } catch (error) {
-        refuse(refusedWords(error));
+        refuse(refusedWords(error, rules));
+        item.install = needsPdfSupport(error);
         if (error.status === 401 || error.code === "locked") break;
       }
     }
@@ -130,21 +159,6 @@ function sealedCount(state) {
 /** The lines of the files that were chosen for one collection since this page was loaded. */
 export function sessionFiles(ctx, collection) {
   return uploadState(ctx, collection).items;
-}
-
-/**
- * Which apps may use one collection, each with what it may do, as "name (words)".
- * `readWords` is what stands for "Can read" in the place that asks. An app that is not
- * answered right now is listed with that said: it has the access and cannot use it yet.
- */
-export function whoMayAsk(apps, collection, readWords) {
-  return apps
-    .filter((app) => app.grants[collection] === "approve" || app.grants[collection] === "read")
-    .map((app) => {
-      const access = app.grants[collection] === "read" ? readWords : GRANT_LABEL.approve;
-      const idle = app.served ? "" : app.paused ? "; paused" : "; not answered in this session";
-      return `${app.name} (${access}${idle})`;
-    });
 }
 
 /**
@@ -170,7 +184,9 @@ export function whoLine(ctx, collection) {
  *
  * `options.large` is the zone of an empty vault, and with `options.filled` its button
  * is the filled one of its screen. `options.who` says, under the files that were
- * sealed, which apps can ask for them from now on. `options.take(files)`
+ * sealed, which apps can ask for them from now on. `options.said` is for a page that
+ * itself says, above the zone, that the file which was added stays where it was, not
+ * encrypted: the zone then does not say it a second time. `options.take(files)`
  * is handed the files in place of sending them to `collection`: for a vault with
  * several groups, where the owner is asked first which group they go to. `collection`
  * is then only the name of the zone, and `options.lists` names the collections whose
@@ -183,6 +199,8 @@ export function dropZone(ctx, collection, options = {}) {
   const lists = (options.lists || [collection]).map((name) => ({ name, list: uploadState(ctx, name) }));
   const state = { items: [].concat(...lists.map((entry) => entry.list.items)), busy: lists.some((entry) => entry.list.busy) };
   const rules = (ctx.data.documents && ctx.data.documents.upload) || { types: [], max_bytes: 20971520 };
+  // The command that adds what reads PDFs, shown once under the files where one was refused for the lack of it.
+  const install = state.items.some((item) => item.install) && typeof rules.install === "string" ? rules.install : "";
   const inputId = `files-${collection}`;
   const hasFiles = (event) => event.dataTransfer && Array.from(event.dataTransfer.types || []).includes("Files");
   const accept = (files) => (held ? options.take(Array.from(files)) : uploadFiles(ctx, collection, files));
@@ -266,9 +284,17 @@ export function dropZone(ctx, collection, options = {}) {
             // Said under the files of each collection, since each has its own apps.
             options.who && sealedCount(entry.list) ? whoLine(ctx, entry.name) : null,
           ]),
+          install
+            ? el(
+                "li",
+                { class: "upload-install", key: "install" },
+                el("span", { class: "upload-install-label" }, t("docs.label.install")),
+                copyLine(ctx, `install-copy-${collection}`, install, t("docs.label.install")),
+              )
+            : null,
           // Said once per list: a sealed copy is in the vault, and the file that was chosen is
           // still where it was, not encrypted. Where it lies is not something the app is told.
-          sealedCount(state) ? el("li", { class: "upload-outside", key: "outside" }, note("amber", t("docs.say.1"))) : null,
+          sealedCount(state) && !options.said ? el("li", { class: "upload-outside", key: "outside" }, note("amber", t("docs.say.1"))) : null,
           !state.busy
             ? el(
                 "li",
@@ -646,7 +672,7 @@ function grantRow(ctx, app, collection) {
           "span",
           { class: "grant-closed" },
           "Not open to hosted apps. ",
-          el("a", { href: "#/documents", class: "link" }, "Open it under Documents"),
+          el("a", { href: "#/pro/documents", class: "link" }, "Open it under Documents"),
         )
       : segmented({
           name: `grant-${app.name}-${collection.name}`,
@@ -717,7 +743,7 @@ function appCard(ctx, app, collections, ceilings) {
         el("h3", { class: "mini-title" }, "Collections"),
         collections.length
           ? collections.map((collection) => grantRow(ctx, app, collection))
-          : el("p", { class: "muted" }, "There are no collections yet. ", el("a", { href: "#/documents", class: "link" }, "Add documents")),
+          : el("p", { class: "muted" }, "There are no collections yet. ", el("a", { href: "#/pro/documents", class: "link" }, "Add documents")),
       ),
       el(
         "div",
@@ -779,7 +805,7 @@ export function appsView(ctx) {
           kinds.hosted ? groupCard("Hosted apps together", data.groups.hosted, "Every hosted app counts toward this, so a second name does not double what can leave.") : null,
           kinds.local ? groupCard("Local apps together", data.groups.local, "Counted apart from hosted apps.") : null,
         ),
-        { key: "groups", action: el("a", { href: "#/vault", class: "link" }, "Change in Vault") },
+        { key: "groups", action: el("a", { href: "#/pro/vault", class: "link" }, "Change in Vault") },
       ),
     ],
   };
@@ -1067,7 +1093,7 @@ export function vaultView(ctx) {
           fact("Inside", `${count(facts.documents, "document", "documents")} in ${count(facts.collections, "collection", "collections")} · ${num(facts.characters)} characters`),
           fact("Copies of the files you added", facts.originals_kept > 0 ? `${num(facts.originals_kept)}, sealed like the text` : "None"),
           fact("Last entry of the record", `#${record.head_seq} ${record.head_hash}`, { mono: true }),
-          fact("Kept beside the vault, not sealed", "Which view you use, whether setup was finished, and your language once you chose one"),
+          fact("Kept beside the vault, not sealed", "Your language, the page it opens on, and whether the first steps are done"),
         ),
         { key: "location" },
       ),

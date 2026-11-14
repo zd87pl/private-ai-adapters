@@ -1855,6 +1855,45 @@ def test_a_service_error_becomes_its_status_and_code(
         assert_headers(answer)
 
 
+@pytest.mark.parametrize(
+    ("reason", "sent"),
+    [
+        ("pdf_no_text", "pdf_no_text"),
+        ("unsupported", "unsupported"),
+        (None, None),
+        # Only a word is passed on: nothing else can ride along in this place.
+        ("", None),
+        ("the lease says: pay 1,240 EUR", None),
+        ("Unsupported", None),
+        ("a" * 33, None),
+        ("no-hyphen", None),
+        (17, None),
+        (["unsupported"], None),
+    ],
+)
+def test_a_service_error_may_carry_one_word_for_its_reason(
+    reason: Any, sent: str | None, paired: Browser, service: FakeService
+) -> None:
+    error = ServiceError(400, "invalid", "the file holds no text", reason)
+    assert error.reason is reason
+    service.error = error
+    answer = paired.call("POST", "/api/lock")
+    assert answer.status == 400
+    expected = {"code": "invalid", "message": "the file holds no text"}
+    if sent is not None:
+        expected["reason"] = sent
+    assert answer.json() == {"error": expected}
+    assert_headers(answer)
+
+
+def test_an_error_without_a_reason_has_two_members(paired: Browser, service: FakeService) -> None:
+    # An error made the way every error was made before the word existed.
+    service.error = ServiceError(409, "duplicate", "this document is already in the vault")
+    assert service.error.reason is None
+    answer = paired.call("POST", "/api/lock")
+    assert sorted(answer.json()["error"]) == ["code", "message"]
+
+
 def test_what_the_service_returns_is_sent_as_json(paired: Browser, service: FakeService) -> None:
     service.answer = {
         "text": "Zażółć\n\u201cquoted\u201d \u2028 </script>",

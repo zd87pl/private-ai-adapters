@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025 Enclave
 //
-// The Basic page: one column that says what waits for the owner, what left the
-// vault, which documents it holds and which apps may ask. It states the vault as
-// it is. Where one value does not describe the whole vault it has no control:
-// it says what is in force in a sentence and links to the place in Pro. Every
-// line about a setting is made from an answer of the app; this file holds no
-// copy of the values of a new vault.
+// What Home shows for now: the body of the page that was called Basic, inside the
+// frame of the simple interface. One column that says what waits for the owner,
+// what left the vault and which apps may ask. It states the vault as it is. Where
+// one value does not describe the whole vault it has no control: it says what is
+// in force in a sentence and links to the place in Pro. Every line about a
+// setting is made from an answer of the app; this file holds no copy of the
+// values of a new vault. Documents have a page of their own, and what stood at
+// the foot of this page is on the pages Settings and "How it works".
 //
-// What it changes: documents are added and removed, an app is removed, and where
-// the vault has one group of documents an app's access to it is set. Nothing else
-// of the vault. Beside the vault it changes one word: that setting up is over.
+// What it changes: an app is removed, and where the vault has one group of
+// documents an app's access to it is set. Nothing else of the vault. Beside the
+// vault it changes one word: that setting up is over.
 //
 // In a demo the page also holds the guide. Its one request changes nothing of the
 // owner's: it has the app that is played ask once more, as a person would tell a
@@ -19,16 +21,15 @@
 import { api } from "./api.js";
 import { PRODUCT } from "./brand.js";
 import { el, icon } from "./dom.js";
-import { ago, at, count, dayShort, num, parseTime, percent, whenFull } from "./format.js";
-import { cannotList, dropZone, isSample, loadingBlock, removeApp, removeDocument, uploadFiles, versionLine, whoMayAsk } from "./manage.js";
+import { ago, at, count, num, parseTime, percent, whenFull } from "./format.js";
+import { loadingBlock, removeApp } from "./manage.js";
 import {
   UNANSWERED,
   activityRow,
   button,
   chip,
-  copyText,
+  copyLine,
   destinationChip,
-  iconButton,
   meter,
   openSheet,
   sheetFoot,
@@ -36,7 +37,8 @@ import {
   toast,
   toastError,
 } from "./parts.js";
-import { GENERAL_SENTENCE, GRANT_LABEL, basicGrantSentence, codeWords, grantSentence } from "./sheets.js";
+import { GRANT_LABEL, basicGrantSentence } from "./sheets.js";
+import { t } from "./texts.js";
 import { approvalCards, warningList } from "./views.js";
 
 /** How many waiting passages are shown as cards before "Show the other N" is pressed. */
@@ -91,41 +93,7 @@ function section(key, title, aside, content, fold = null) {
   );
 }
 
-/** "Copy", which says "Copied" for a moment. `id` tells the buttons of the page apart. `words` is said in place of "Copy". */
-export function copyButton(ctx, id, text, what, words = "Copy") {
-  const copied = ctx.ui.copied === id;
-  return button(copied ? "Copied" : words, {
-    small: true,
-    id,
-    glyph: copied ? "check" : "copy",
-    label: copied ? "Copied" : `Copy: ${what}`,
-    onclick: async () => {
-      const done = await copyText(text);
-      ctx.ui.copied = done ? id : null;
-      ctx.render();
-      if (!done) toast("Copying is not allowed here. Select the text and copy it yourself.", "red");
-      setTimeout(() => {
-        if (ctx.ui.copied === id) {
-          ctx.ui.copied = null;
-          ctx.render();
-        }
-      }, 2000);
-    },
-  });
-}
-
-/** A line of text to copy: the text in a box, the button beside it. */
-export function copyLine(ctx, id, text, what) {
-  return el(
-    "div",
-    { class: "copy-line" },
-    // The text wraps at its spaces and never inside an option; copied, it is one unbroken line.
-    el("pre", { class: "code code-wrap", tabindex: 0, "aria-label": what }, el("code", null, codeWords(text))),
-    copyButton(ctx, id, text, what),
-  );
-}
-
-/** A link from Basic into Pro. It is a visit: the address changes and nothing is stored. */
+/** A link from Home into Pro, the six pages with every setting: an address, and nothing is stored. */
 function proLink(text, href, props = {}) {
   return el("a", Object.assign({ class: "link", href }, props), text);
 }
@@ -138,56 +106,6 @@ function unlockedAt(ctx) {
 /** Whether starting the app with this command opens a page by itself. The flag, when there, ends the command. */
 function opensPage(command) {
   return !/ --no-browser( --window)?$/.test(command);
-}
-
-// -- the bars -----------------------------------------------------------------------
-
-/**
- * The bar that says what is wrong, between the top bar and the page. `problem` is
- * the sentence of a list that could not be loaded, or "". While the app does not
- * answer, the bar also holds the command that starts it again: the one this page
- * was last told. A demo is not started again by that command, so a demo gets the
- * sentence alone.
- */
-export function basicBars(ctx, problem) {
-  if (ctx.offline) {
-    const launch = ctx.state.launch || {};
-    const command = ctx.state.demo ? null : launch.command;
-    return el(
-      "div",
-      { class: "offline-bar", role: "alert", key: "offline" },
-      icon("warning"),
-      el(
-        "div",
-        { class: "bar-text" },
-        el("p", null, `${PRODUCT} is not answering. Is it still running in its terminal? What you see may be out of date.`),
-        command
-          ? [
-              el("p", null, "To start it again, run this in Terminal:"),
-              copyLine(ctx, "bar-launch-copy", command, "the command that starts it again"),
-              el(
-                "p",
-                null,
-                launch.port_fixed === true
-                  ? "This page continues by itself."
-                  : opensPage(command)
-                    ? "It opens a new page. This one can then be closed."
-                    : "It prints the address of a new page. Open that one; this one can then be closed.",
-              ),
-            ]
-          : null,
-      ),
-    );
-  }
-  if (problem) {
-    return el(
-      "div",
-      { class: "offline-bar", role: "alert", key: "load-error" },
-      icon("warning"),
-      el("span", null, `This page could not be brought up to date: ${problem} Trying again.`),
-    );
-  }
-  return null;
 }
 
 // -- Approvals ----------------------------------------------------------------------
@@ -355,7 +273,7 @@ function setupCard(ctx) {
         onclick: async () => {
           const failed = await setupDone(ctx);
           if (failed) toastError(failed);
-          else toast("Setup is hidden. Adding an app, adding documents and the connection steps stay on this page.", "plain");
+          else toast("Setup is hidden. Adding an app and the connection steps stay on this page; documents are added under Documents.", "plain");
         },
       }),
     ),
@@ -398,10 +316,10 @@ function guideOpen(ctx) {
 }
 
 /**
- * While the guide is open, "Documents", "Apps" and "Also set for this vault, in Pro"
- * are folded to their headings: the demo's vault has several groups, several apps and
- * both kinds of app, which is not what a new owner will have. Each heading has a
- * button that unfolds its part. Null when nothing is folded: outside a demo, and once
+ * While the guide is open, "Apps" and "Also set for this vault, in Pro" are folded
+ * to their headings: the demo's vault has several groups, several apps and both
+ * kinds of app, which is not what a new owner will have. Each heading has a button
+ * that unfolds its part. Null when nothing is folded: outside a demo, and once
  * the guide is hidden.
  */
 function foldOf(ctx, name) {
@@ -538,7 +456,7 @@ async function askAgain(ctx) {
     // The button goes once the passage waits again or was read. Where it had the focus, what
     // says so takes it: the headline of the page, or the title of the guide. Never a button of a card.
     const held = document.activeElement;
-    if (ctx.route === "basic" && guideOpen(ctx) && (!held || held === document.body || held.id === "demo-again")) {
+    if (ctx.route === "home" && guideOpen(ctx) && (!held || held === document.body || held.id === "demo-again")) {
       const beat = guideBeat(ctx);
       if (beat === "turn") ctx.ui.focusId = "basic-status";
       else if (beat === "read") ctx.ui.focusId = "guide-title";
@@ -823,225 +741,6 @@ function leftSection(ctx, stops) {
   ]);
 }
 
-// -- Documents ----------------------------------------------------------------------
-
-/** How much of a document has left so far, by the kind of app that received it. */
-function leftSoFar(released) {
-  const parts = [];
-  if (released.hosted > 0) parts.push(`${num(released.hosted)} characters to apps that send text to a provider`);
-  if (released.local > 0) parts.push(`${num(released.local)} characters to apps on this computer`);
-  return parts.length ? parts.map((part) => el("span", { class: "released-part" }, part)) : "Nothing yet";
-}
-
-function documentsTable(ctx, groups) {
-  const several = groups.length > 1;
-  return el(
-    "div",
-    { class: "table-wrap", key: "table" },
-    el(
-      "table",
-      { class: "table doc-table basic-doc-table" },
-      el("caption", { class: "sr-only" }, "The documents in the vault"),
-      el(
-        "thead",
-        null,
-        el(
-          "tr",
-          null,
-          el("th", { scope: "col", class: "col-title" }, "Title"),
-          el("th", { scope: "col", class: "num col-passages" }, "Passages"),
-          el("th", { scope: "col", class: "col-added" }, "Added"),
-          el("th", { scope: "col", class: "col-left" }, "Left so far"),
-          el("th", { scope: "col", class: "col-action" }, el("span", { class: "sr-only" }, "Remove")),
-        ),
-      ),
-      el(
-        "tbody",
-        null,
-        groups.map((group) =>
-          group.documents.map((document) =>
-            el(
-              "tr",
-              { key: document.id },
-              el(
-                "th",
-                { scope: "row", class: "doc-title" },
-                el("span", { class: "doc-name", title: document.title }, document.title),
-                several ? el("span", { class: "doc-group" }, group.name) : null,
-              ),
-              el("td", { class: "num" }, num(document.passages)),
-              el("td", { class: "col-added", title: whenFull(document.added) }, dayShort(document.added, ctx.now)),
-              el("td", { class: ["col-left", document.released.hosted + document.released.local > 0 ? null : "muted"] }, leftSoFar(document.released)),
-              // Removing narrows what apps can get, so it is offered whatever else the vault holds.
-              el("td", { class: "col-action" }, iconButton("trash", `Remove ${document.title}`, { onclick: () => removeDocument(ctx, document) })),
-            ),
-          ),
-        ),
-      ),
-    ),
-  );
-}
-
-/** "3 files: a.txt, b.txt, c.txt" and, past three names, "and 2 more". */
-function fileNames(files) {
-  const names = files.slice(0, 3).map((file) => file.name).join(", ");
-  const more = files.length > 3 ? ` and ${num(files.length - 3)} more` : "";
-  return `${count(files.length, "file", "files")}: ${names}${more}`;
-}
-
-/**
- * The sheet that asks which group the files go to, in a vault with several. No
- * group is chosen for the owner. Each group says who can ask for what is in it, and
- * once one is chosen that an app which sends text to a provider can use, the
- * sentence about that stands above the buttons. "Cancel" drops the files: nothing
- * is sent. It is built from the lists as they are when it opens.
- */
-async function addToWhichGroup(ctx, files) {
-  if (!files.length || !ctx.data.apps || !ctx.data.documents) return;
-  const apps = ctx.data.apps.apps;
-  const groups = ctx.data.documents.collections.map((group) => group.name);
-  const form = { group: null };
-  const sheet = openSheet(
-    (self) => {
-      const senders = form.group === null ? [] : apps.filter((app) => app.hosted && grantOf(app, form.group) !== "none");
-      return el(
-        "div",
-        { class: "sheet-content" },
-        sheetHead("Add to which group?"),
-        el("p", { class: "sheet-files" }, fileNames(files)),
-        el(
-          "div",
-          { class: "choice-list choice-stack", role: "radiogroup", "aria-label": "Add to which group?" },
-          groups.map((group, index) => {
-            const names = whoMayAsk(apps, group, `${GRANT_LABEL.read}: passages can leave without asking`);
-            return el(
-              "label",
-              { class: ["choice", form.group === group && "is-selected"], key: `group-${group}` },
-              el("input", {
-                type: "radio",
-                name: "basic-group",
-                value: group,
-                checked: form.group === group,
-                "aria-labelledby": `basic-group-${index}-name`,
-                "aria-describedby": `basic-group-${index}-who`,
-                onchange: () => {
-                  form.group = group;
-                  self.update();
-                },
-              }),
-              el(
-                "span",
-                { class: "choice-text" },
-                el("span", { class: "choice-label", id: `basic-group-${index}-name` }, group),
-                el("span", { class: "choice-hint", id: `basic-group-${index}-who` }, names.length ? names.join(", ") : "No app can ask for what is in it."),
-              ),
-            );
-          }),
-        ),
-        senders.length
-          ? el(
-              "p",
-              { class: "note note-amber", role: "note" },
-              icon("warning"),
-              el("span", { class: "note-text" }, senders.length === 1 ? grantSentence(senders[0], form.group) : GENERAL_SENTENCE),
-            )
-          : null,
-        sheetFoot(
-          button("Cancel", { onclick: () => self.close(null), autofocus: true }),
-          // Only this press sends the files: a key pressed on a choice does not.
-          button("Add", {
-            kind: "primary",
-            disabled: form.group === null,
-            onclick: () => {
-              if (form.group !== null) self.close(form.group);
-            },
-          }),
-        ),
-      );
-    },
-    { label: "Add to which group?" },
-  );
-  const group = await sheet.closed;
-  if (typeof group === "string") await uploadFiles(ctx, group, files);
-}
-
-function documentsSection(ctx) {
-  const fold = foldOf(ctx, "documents");
-  if (fold && !fold.open) return section("basic-documents", "Documents", null, null, fold);
-  const data = ctx.data.documents;
-  const apps = ctx.data.apps ? ctx.data.apps.apps : [];
-  if (!data) return section("basic-documents", "Documents", null, loadingBlock(), fold);
-  const groups = data.collections;
-  const total = groups.reduce((sum, group) => sum + group.documents.length, 0);
-  const sample = groups.reduce((found, group) => found || group.documents.find(isSample) || null, null);
-  let counted;
-  if (groups.length > 1) {
-    const each = groups.map((group) => `${group.name} (${num(group.documents.length)})`).join(", ");
-    counted = `${count(total, "document", "documents")} in ${num(groups.length)} groups (collections in Pro): ${each}.`;
-  } else if (total === 0) counted = "No documents yet.";
-  else counted = total === 1 ? "1 document, sealed in the vault." : `${num(total)} documents, sealed in the vault.`;
-  // Said wherever documents are added while an app that sends text to a provider may use them.
-  const senders = apps.filter((app) => app.hosted && Object.keys(app.grants || {}).length > 0);
-  const open = ctx.ui.docsOpen === true;
-  return section("basic-documents", "Documents", null, [
-    el("p", { class: "basic-count", key: "count" }, counted),
-    sample
-      ? el(
-          "p",
-          { class: "basic-sample", key: "sample" },
-          el("span", null, "1 of them is the invented sample letter."),
-          button("Remove it", { small: true, id: "sample-remove", onclick: () => removeDocument(ctx, sample) }),
-        )
-      : null,
-    senders.length
-      ? el(
-          "p",
-          { class: "note note-amber", id: "docs-sentence", key: "sentence", role: "note" },
-          icon("warning"),
-          el("span", { class: "note-text" }, senders.length === 1 ? basicGrantSentence(senders[0]) : GENERAL_SENTENCE),
-        )
-      : null,
-    // The one place on this page that takes files. It is drawn once the apps are known, so
-    // that it never stands without the sentence above it or the line about who can ask.
-    !ctx.data.apps
-      ? loadingBlock()
-      : groups.length > 1
-        ? // Several groups: the files are held, and the owner is asked which group they go to.
-          dropZone(ctx, "basic", { who: true, lists: groups.map((group) => group.name), take: (files) => addToWhichGroup(ctx, files) })
-        : dropZone(ctx, groups.length ? groups[0].name : FIRST_GROUP, { who: true }),
-    total > 0
-      ? el(
-          "div",
-          { class: "basic-fold", key: "fold" },
-          button(open ? "Hide the documents" : "Show the documents", {
-            kind: "quiet",
-            small: true,
-            id: "basic-docs-toggle",
-            expanded: open ? "true" : "false",
-            onclick: () => {
-              ctx.ui.docsOpen = !open;
-              ctx.render();
-            },
-          }),
-        )
-      : null,
-    total > 0 && open
-      ? [
-          el("div", { class: "card basic-docs", key: "documents" }, documentsTable(ctx, groups)),
-          groups
-            .filter((group) => !group.show_titles)
-            .map((group) =>
-              el(
-                "p",
-                { class: "basic-hint", key: `titles-${group.name}` },
-                groups.length > 1 ? `In “${group.name}”, apps are shown a document's number, not its file name.` : "Apps are shown a document's number, not its file name.",
-              ),
-            ),
-        ]
-      : null,
-  ], fold);
-}
-
 // -- Apps ---------------------------------------------------------------------------
 
 /** Whether an app has a limit that is not the one every app gets. */
@@ -1291,7 +990,7 @@ function appRow(ctx, app, groups, settings, stops) {
       app.paused ? chip("Paused", "amber", "pause") : !app.served ? chip("Not answered in this session", "quiet") : null,
       // With one group the access is one value, and the control that changes it stands here.
       // With several it is one value for each: Basic says them and changes none.
-      groups.length > 1 ? proLink("Change in Pro", "#/apps", { key: `change-${app.name}`, class: "link basic-app-change" }) : changeButton(ctx, app, settings),
+      groups.length > 1 ? proLink("Change in Pro", "#/pro/apps", { key: `change-${app.name}`, class: "link basic-app-change" }) : changeButton(ctx, app, settings),
     ),
     access.lines.length ? el("ul", { class: "basic-app-groups" }, access.lines.map((line) => el("li", null, line))) : null,
     el(
@@ -1342,7 +1041,7 @@ function appsSection(ctx, stops) {
       expressible
         ? // The step that adds an app gives it "Ask me each time" for the vault's one group, and says so on its button.
           el("a", { class: "btn btn-default", id: "basic-add-app", href: "#/setup/app" }, el("span", { class: "btn-label" }, apps.length ? "Add an app" : "Choose your AI app"))
-        : proLink("Add an app (in Pro)", "#/apps", { id: "basic-add-app" }),
+        : proLink("Add an app (in Pro)", "#/pro/apps", { id: "basic-add-app" }),
     ),
   ], fold);
 }
@@ -1415,7 +1114,7 @@ function alsoSection(ctx) {
       el(
         "div",
         { class: "also-group", key: `also-group-${page}` },
-        el("div", { class: "also-head" }, el("h3", { class: "mini-title" }, title), proLink("Open in Pro", `#/${page}`, { key: `also-${page}` })),
+        el("div", { class: "also-head" }, el("h3", { class: "mini-title" }, title), proLink("Open in Pro", `#/pro/${page}`, { key: `also-${page}` })),
         el("ul", { class: "also-list" }, under[page].map((line) => el("li", null, line))),
       ),
     ),
@@ -1424,27 +1123,11 @@ function alsoSection(ctx) {
 
 // -- the foot -----------------------------------------------------------------------
 
-/** The sheet that says what the product is not: the statements of the Vault page, and the line about this version. */
-function openCannot(ctx) {
-  const title = `What ${PRODUCT} cannot do`;
-  openSheet(
-    (self) =>
-      el(
-        "div",
-        { class: "sheet-content" },
-        sheetHead(title),
-        cannotList(),
-        el("p", { class: "version" }, versionLine(ctx.state)),
-        sheetFoot(button("Close", { onclick: () => self.close(), autofocus: true })),
-      ),
-    { label: title, wide: true },
-  );
-}
-
 /**
  * How the vault is opened again on another day: the command this page was told, and
  * what running it brings. Null in a demo, which is not opened again by that command:
- * its guide has the one for a vault of one's own.
+ * its guide has the one for a vault of one's own. The step "First question" shows it;
+ * on an ordinary day the command is on the page Settings.
  */
 export function launchBlock(ctx) {
   const launch = ctx.state.launch || {};
@@ -1465,28 +1148,14 @@ export function launchBlock(ctx) {
   );
 }
 
-function foot(ctx) {
-  const state = ctx.state;
-  return el(
-    "footer",
-    { class: "basic-foot", key: "basic-foot" },
-    launchBlock(ctx),
-    state.record && state.record.verified ? el("p", { key: "record" }, "The record of what left was checked when you unlocked.") : null,
-    el("p", { key: "cannot" }, el("button", { type: "button", class: "link", id: "basic-cannot", onclick: () => openCannot(ctx) }, `What ${PRODUCT} cannot do`)),
-    el(
-      "p",
-      { key: "words" },
-      "A name or number that must never leave? Add it under “",
-      proLink("Words to replace", "#/vault", { id: "basic-words" }),
-      "” in Pro.",
-    ),
-    el("p", { class: "gate-foot", key: "version" }, `Version ${state.version}. Everything on this page comes from ${PRODUCT} on this computer.`),
-  );
+/** The foot of Home: the way to the page that says how all of this works and what it cannot do. */
+function foot() {
+  return el("footer", { class: "basic-foot", key: "basic-foot" }, el("p", { key: "how" }, el("a", { class: "link", id: "home-how", href: "#/how" }, t("home.button.how"))));
 }
 
 // -- the page -----------------------------------------------------------------------
 
-/** Everything between the top bar and the bar with the view: the content of `#/basic`. */
+/** Everything in the column of Home, under the bar that says what is wrong: the content of `#/home`. */
 export function basicView(ctx, problem) {
   const stops = stopsOfTheDay(ctx);
   return [
@@ -1497,9 +1166,8 @@ export function basicView(ctx, problem) {
     setupCard(ctx),
     demoGuide(ctx, stops),
     leftSection(ctx, stops),
-    documentsSection(ctx),
     appsSection(ctx, stops),
     alsoSection(ctx),
-    foot(ctx),
+    foot(),
   ];
 }
