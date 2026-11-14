@@ -372,16 +372,13 @@ was tried and held, the figures come from those reports. They are the project's
 own work, not an audit.
 
 Several things those reviews found were changed afterwards, and no review has
-attacked the changes yet. The two views of the page, its first run, and the
-file and the three routes that came with them were built after the reviews
-too, and no review has attacked them either:
-[a part of this section](#the-two-views-and-what-came-with-them) says what
-they add. The third word of that file, a language for the page, and the
-answer that tells it to a page before pairing came later still, and no review
-has attacked them. The same holds for the route that answers the owner's
-trial question, which was built after all of these ("The trial" in that
-part), and for the write into an AI app's settings file with its three
-routes, built later still ("The settings file of an AI app" in that part).
+attacked the changes yet. Everything that
+[a part of this section](#home-settings-and-what-came-with-them) describes
+was built after the reviews too: the two sets of pages, the file that keeps
+three words about the page and the routes that came with it, and the answer
+that tells the page's language before pairing. Home, the write into an AI
+app's settings file, the box that asks the owner's documents, and the second
+language were built later still. No review has attacked any of them.
 Where a sentence says "in a run for this page", the figure comes
 from a run made on Linux with Python 3.11 while this page was held against the
 code. One machine, one run: an observation, not a proof.
@@ -390,13 +387,13 @@ code. One machine, one run: an observation, not a proof.
 
 | Asset | Where it is | What protects it |
 | --- | --- | --- |
-| **Document text in the vault** | Sealed in the store directory. In the memory of Locktender while the vault is unlocked. On the owner's trial question, one passage of it in the answer to the page. | The lock. For that passage: session, and the passphrase typed within ten minutes. |
+| **Document text in the vault** | Sealed in the store directory. In the memory of Locktender while the vault is unlocked. On the owner's question in the box "Ask your documents", one passage of it in the page. | The lock. For that passage: session, and the passphrase typed within ten minutes. |
 | **The store key and the passphrase** | The key: sealed with the passphrase in `keyslot.wdva`, and in Locktender's memory while the vault is unlocked. The passphrase: typed into Locktender's page, sent to Locktender on the loopback address, never stored. | scrypt, and the key being in memory only. |
 | **The settings**: which apps exist, what each may read, the limits, the words to replace | In the record, sealed. Changed through Locktender's page. | Pairing code, session, owner mode. |
-| **Two or three words about the page**: which of its two views is in use, whether setting up was finished, and a language for the page once one is kept | In `run/interface.json` in the store directory, in plain text. | File modes only. They are not sealed, and changing them never asks for the passphrase. They decide which page opens first and whether the page still offers to finish setting up, and nothing about what may leave. The language is protected by less than the other two: the page's port tells it to whoever asks, before pairing. |
+| **Two or three words about the page**: on which page it opens, whether the first steps are done, and the language once one was chosen | In `run/interface.json` in the store directory, in plain text. | File modes only. They are not sealed, and changing them never asks for the passphrase. They decide which page opens first and whether Home still shows the cards "Start here", and nothing about what may leave. The language is protected by less than the other two: the page's port tells it to whoever asks, before pairing. |
 | **What was released** | In the record, sealed, with its exact text. Outside the vault: in the AI app, in that AI app's own files and, for a hosted one, at its provider. | Inside the vault, the lock. Outside, nothing. |
 | **The files the documents came from** | Wherever the owner keeps them. Locktender seals a copy. Adding a document neither moves nor deletes the file. | Nothing Locktender does. A file that stays in a folder an AI app can read can be read there by that app, without Locktender ("Where the original lies" under [Known limits](#known-limits)). |
-| **The settings file of an AI app**, which may hold the entries of other tools, with their keys | In the owner's home folder. It belongs to the AI app. Locktender reads it when a request asks for a look, and writes its own entry into it, or takes that entry out, when a request asks for that ("The settings file of an AI app" below). | For the look: pairing and session; the answer holds fixed words about the file and nothing from it. For the write: pairing, session and owner mode; the rules of the write; a copy before each change. Nothing protects it from programs of the owner's account, before or after. |
+| **The settings file of an AI app**, which may hold the entries of other tools, with their keys | In the owner's home folder. It belongs to the AI app. Locktender reads it on the press that opens a connect sheet, and writes its own entry into it, or takes that entry out, on "Connect" and "Disconnect" ("The settings file of an AI app" below). | For the look: pairing and session; the answer holds fixed words about the file and nothing from it. For the write: pairing, session and owner mode; the rules of the write; a copy before each change. Nothing protects it from programs of the owner's account, before or after. |
 | **The copies of that file**, `….before-locktender` and `….last-locktender` | Beside the settings file, mode 0600. They hold whatever the settings file held, the keys of other tools included, and keep it after those are gone from the settings file. They stay until the owner removes them. | File modes only. A folder kept under version control that leaves out the settings file by its name will pick them up. |
 
 ### The mechanisms, by name
@@ -436,12 +433,12 @@ code. One machine, one run: an observation, not a proof.
   contact nothing but Locktender, runs no inline script, and may not be shown in
   a frame.
 - **Owner mode.** For ten minutes after the passphrase was typed for it, the
-  page accepts changes that let more text leave, and a request that changes
-  an AI app's settings file. After that such a request asks for the
-  passphrase again.
-- **The trial's permission.** The route that answers the owner's trial
-  question needs the passphrase typed within ten minutes too, and keeps its
-  own time: typing the passphrase for a question does not open owner mode.
+  page accepts changes that let more text leave, and a press that changes an
+  AI app's settings file. After that such a press asks for the passphrase
+  again.
+- **The trial's permission.** The box "Ask your documents" needs the
+  passphrase typed within ten minutes too, and keeps its own time: typing the
+  passphrase for the box does not open owner mode.
 - **Turns and places.** Requests that carry a passphrase are checked one at a
   time, whichever connection they come on, and a wrong one is answered a second
   after its turn began at the earliest. The page's server serves at most 64
@@ -466,62 +463,70 @@ code. One machine, one run: an observation, not a proof.
   approval, change and session, written before the text is handed over
   ([The record](GATE_FORMAT.md#the-record)).
 
-### The two views, and what came with them
+### Home, Settings, and what came with them
 
 The page has two sets of pages over the same vault. Home, with Documents,
-Activity and Settings beside it, is for every day: approvals, what left,
-documents and apps. Six pages under Settings have every setting. Earlier
-versions called the two the views Basic and Pro, and this part keeps those
-names: "Basic" is Home and the pages beside it, "Pro" the six pages. A new
-vault and the demo open on Home; a vault made before the two existed opens on
-Overview, the first of the six. With the views came one file beside the vault, three
-routes of the page's API, a few fields in its answers and one flag of the
-command line. None of them is a mechanism. This part says what each gives to
-an adversary. [GATE_FORMAT.md](GATE_FORMAT.md#the-interface-file) has the
-details of the file and of the routes.
+Activity and Settings beside it, is for every day: what waits for the owner, a
+box that asks the owner's documents, tiles that connect an AI app, and what
+left last. Six pages under Settings have every setting. The interface file
+and the command line call the two `basic` and `pro`, the names that earlier
+versions gave them. A new vault and the demo open on Home; a vault made
+before the two existed opens on Overview, the first of the six.
+With them came one file beside the vault that holds three words, some routes
+of the page's API, a few fields in its answers and one flag of the command
+line. The routes: one keeps the three words; three deal with the settings file
+of an AI app (a look, a write, a removal); one answers the owner's trial
+question; and one, in a demo, tells the played app to ask again. None of them
+is a mechanism. This part says what each gives to an adversary.
+[GATE_FORMAT.md](GATE_FORMAT.md#the-interface-file) has the details of the
+file and of the routes.
 
-The checks named above stand in front of the new routes as in front of every
+The checks named above stand in front of these routes as in front of every
 other. A web page on another site (position 1) can call none of them. A local
-program without the session (position 2) is answered 401: a run for this page
-showed that for all three. What is left is whoever holds the session, and a
-program that runs under the owner's account.
+program without the session (position 2) is answered 401: in a run for this
+page all 32 routes behind the session answered so. What is left is whoever
+holds the session, and a program that runs under the owner's account.
 
-**The view is not a boundary.** The two views are two sets of pages over one
-API. Every page has an address of its own and opens by it, whichever view is
-kept. The kept view decides only which page opens when
-the address names none. The state has a field that says which view is kept;
-no other answer of the API depends on the view, and no rule about grants,
-limits, approval or owner mode reads it. Choosing a view never lets more
-leave, and never less.
+**The page that opens is not a boundary.** The two sets of pages are served by
+one API. Every page has an address of its own and opens by it, whatever is
+kept. What is kept decides only which page opens when the address names none.
+The state has a field that says what is kept; no other answer of the API
+depends on it, and no rule about grants, limits, approval or owner mode reads
+it. Choosing the page to open on never lets more leave, and never less.
 
 **The interface file is not sealed, and cheap to change.**
-`run/interface.json` holds two or three words: the view, whether setting up
-was finished, and a language for the page once one is kept. It has to be
+`run/interface.json` holds two or three words: on which page the app opens,
+whether the first steps are done, and a language for the page once one is
+kept. It has to be
 readable before the passphrase is typed, so it is plain text. A program of the
 owner's account can write the file. Whoever holds the session can change it
 through the page's API, also while the vault is locked, and is never asked for
 the passphrase. What that gains:
 
-- The page opens in the other view: when it is next loaded with an address
-  that names no page, and, where Basic is now kept, after the next unlock. A
+- The page opens on the other page: when it is next loaded with an address
+  that names no page, and, where Home is now kept, after the next unlock. A
   page that is open stays on the page it shows. A change written into the
   file, and not sent through the API, is taken up when the vault is next
   unlocked or Locktender is next started.
-- With Basic kept, the locked screen leaves out the figures of the sealed
+- With Home kept, the locked screen leaves out the figures of the sealed
   files and the head of the record ("Sealed files", "Size", "Last entry").
-- The card "Finish setting up" goes away. Through the file it can also be made
-  to come back, which the API does not allow.
+- The cards "Start here" go away. Through the file they can also be made to
+  come back, which the API does not allow. While they are shown, Home does not
+  list what was given to apps; the waiting passages, the notices and the count
+  of stopped calls stay, and the page Activity has the list. The cards do not
+  last where there is something to hide: the page ends them by itself as soon
+  as the vault has a document and an app and an app has called.
 - The language that is kept changes, or one is kept where none was. Through
   the file it can also be taken away, which the API does not allow. A page
   on which the owner has not pressed a language shows the kept one from its
-  next question to the app on: the screens before the vault is open, the
-  approval card and the other parts that follow the language say in Polish
-  what they said in English, or the other way round.
+  next question to the app on: every screen of Home and of the pages beside
+  it says in Polish what it said in English, or the other way round.
 - Nothing else. Nothing leaves, nothing sealed changes, and the record is not
   touched: in a run for this page the head of the record and the number of
-  sealed files were the same before and after a change of the view, and in a
-  later run before and after a change of the language. A file that is broken
-  on purpose counts as no file, and the vault then opens in Pro. It never
+  sealed files were the same before and after a change of the page to open
+  on, and in a later run before and after a change of the language. A file
+  that is broken on purpose counts as no file, and the vault then opens on
+  Overview. It never
   keeps a vault from unlocking: in a run for this page a vault was unlocked
   with nine different things in the file's place, among them text that is not
   JSON, a language that does not exist, a symbolic link and a directory.
@@ -536,43 +541,47 @@ that cannot list the vault's folder (position 2), learns which of two
 languages was chosen for the page, or that none is kept. A language is told
 only where a vault exists, so a word also says that one does. The answer
 `null` says neither: it is given where there is no vault and where no language
-was chosen. The answer holds nothing else from the folder: not the view, and
-nothing the folder's listing would show. Asking locks nothing, ends no session
-and writes no entry.
+was chosen. The answer holds nothing else from the folder: not the page the
+app opens on, and nothing the folder's listing would show. Asking locks
+nothing, ends no session and writes no entry.
 
-**So Basic must not hide what the owner has to notice.** Since a program of
-the same account can put the owner into Basic, Basic may leave out settings,
-and may not leave out signs of trouble. It shows the passages that wait, on
-the same cards as Pro (three at first, and a button for the others); every
-release, newest first, under "What left the vault", each with its exact text
-one press away; the same notices as Pro; and the calls that were stopped in
-the last 24 hours, one line for each app and kind of stop, under "Stopped in
-the last 24 hours". Calls under a name that is not answered are among them
-("3 calls came under a name that is not answered here, and got nothing.").
+**So Home must not hide what the owner has to notice.** Since a program of
+the same account can make Home the page that opens, Home may leave out
+settings, and may not leave out signs of trouble. It shows the passages that
+wait, on the same cards as the page Approvals (three at first, and a button
+for the others); the three newest releases, with every release one press away
+on the page Activity and its exact text one press further; the notices of the
+six pages, each in one sentence; and one line that counts the calls stopped in
+the last 24 hours, with the list one press away under "Stopped". Calls under a
+name that is not answered are counted among them.
 
-What Basic leaves to Pro: stops older than 24 hours, the owner's own changes,
-the sessions and the other entries of the Activity page; "Verify now"; pausing
-an app; the limits; and the head of the record, which Basic shows nowhere,
-also not on the locked screen. So a program that has put the owner into Basic
-has hidden no release and no stop of the last day. It has moved older entries
-and the changes one press away, and it has taken the head of the record out of
-sight until the owner switches to Pro. An owner who wrote the head down to
-notice a rollback has to look for it in Pro. The record is the same in both
-views. The page Activity, beside Home, shows more than Home does: what apps
-were given and the calls that were stopped, back to the first entry, twenty
-at a time. The owner's own changes, the sessions and the head of the record
-are on the six pages only.
+This is less than the first page showed before: it listed every release, and
+one line for each app and kind of stop. A release older than the newest three,
+and what kind of stop it was, are now one press away.
 
-The list of stops has one bound. It is made from the 120 newest refusals in
+What Home leaves to the six pages: which access an app has beyond "Ask me each
+time", and its limits; which kinds of apps are answered, beyond a notice when
+the choice is open or both are answered; pausing an app, beyond the word
+"Paused" on a tile; the owner's own changes, the sessions and the other
+entries of the page Activity there; "Verify now"; the words to replace; and
+the head of the record, which Home shows nowhere, also not on the locked
+screen. So a program that has made Home the page that opens has hidden no
+waiting passage and no notice. It has moved older releases, the kinds of
+stops and the owner's changes one press away, and it has taken the head of
+the record out of sight until the owner opens the six pages. An owner who
+wrote the head down to notice a rollback has to look for it there. The record
+is the same whatever page shows it.
+
+The count of stops has one bound. It is made from the 120 newest refusals in
 the record, those of waiting passages included. The record takes one entry an
 hour for each app and each kind of refusal, so a day has more than 120 only
 when several names are refused in several ways around the clock. The oldest
-stops of such a day are missing from the list in Basic, and are on the
-Activity page of Pro.
+stops of such a day are missing from the count on Home, and are in the list
+on the page Activity.
 
 **The settings file of an AI app: the look and the write.** Locktender reads
-one kind of file that is neither its own nor in the vault's folder, and from
-this version on it can write it: the settings file of an AI app. That is
+one kind of file that is neither its own nor in the vault's folder, and it
+can write it: the settings file of an AI app. That is
 `claude_desktop_config.json` for Claude Desktop, `~/.codex/config.toml` for
 the ChatGPT desktop app and for Codex, and `~/.grok/config.toml` for Grok
 Build. Such a file may hold the entries of other tools, with their keys.
@@ -582,10 +591,12 @@ that makes the AI app start Locktender's program. One removes the app from
 the vault and takes that entry out again.
 [GATE_FORMAT.md](GATE_FORMAT.md#the-settings-file-of-an-ai-application) has
 every rule. This is where a promise ends: until this version Locktender
-wrote nothing outside the vault's folder. No page of this version calls the
-three routes yet. Its button "Check the file", in the step "First question"
-of setting up, still asks the look that came before them, which reads the
-same files for an app that is registered and answers one word.
+wrote nothing outside the vault's folder. The page calls the three routes
+from the sheets of the tiles "Claude", "ChatGPT" and "Grok" on Home: the look
+on the press that opens a sheet and on "Look again", the write on "Connect",
+the removal on "Disconnect". The look that came before them, which answered
+one word about the file for an app that was registered, is gone with its
+route.
 
 - **A fixed place.** Where the file lies follows from the AI app, the system,
   the home folder of the account, and two variables of the environment
@@ -595,43 +606,38 @@ same files for an app that is registered and answers one word.
   the write. `CODEX_HOME` is not followed, and while it is set the file of
   the ChatGPT desktop app is not written at all: its maker's page does not
   say which file is read then. A request to the three routes picks one of
-  three names of AI apps (a request to the older look, one of eleven) and
-  nothing more of the place. No part of a path comes from it: in a run for
-  this page the names `../../etc/passwd` and `codex` were answered 404, and a
-  request with a field `path` 400.
+  three names of AI apps and nothing more of the place. No part of a path
+  comes from it: in a run for this page the names `../../etc/passwd` and
+  `codex` were answered 404, and a request with a field `path` 400.
 - **Read with care.** Only a regular file of at most 1 MiB is opened, without
   following a link and without waiting. A symbolic link, a directory, a named
-  pipe and a larger file were each answered `not_read` in a run of the older
-  look, in a millisecond or two. From this version on a folder is not gone
-  through either when it is a symbolic link: each folder below the home
-  folder (or below the folder a variable names) is looked at and opened
-  without following a link, and the file is reached through the folder that
-  was opened. A version before this one followed such a link, and so read
-  whatever the link led to. In a run for this version, with the right entry
-  behind a linked settings folder and again behind a linked `~/.config`, the
-  older look answered `not_read` and nothing behind the link was read; the
-  three routes say `linked` there, and where the link leads. The home folder
-  itself, and a folder a variable names, are taken as the system resolves
-  them.
-- **Never a byte of the file in an answer.** The older look answers one of
-  nine words; beside `other`, one of three more; the place of the file; and a
-  line of text that Locktender composed without the file. The three routes
-  answer more, and still nothing that is read out of the file but fixed
-  words and two yes-or-no facts: one of thirteen words about the file, one of
-  three about why the entry could not be written, whether the entry is
-  switched off, under which other name it calls; and beside these the place
-  of the file, the places of up to two copies with the time each was last
-  changed, and the command the entry holds or would hold, which names the
-  Python that runs Locktender and the place of the vault (as the command to
-  start Locktender again does, in every answer about the state). So the look
-  tells whoever holds the session, for each of the three files, whether a
-  copy lies beside it, which is to say whether Locktender ever changed it;
-  and it tells that for a vault with no app at all, where the older look
-  answered only for a registered app. In a run for this page a marker was
-  written into three settings files as a value, as the token of another tool
-  and in a comment, and the app was asked through the three routes for each
-  of them: the marker was in none of its 55 answers, and neither was the name
-  of another entry.
+  pipe and a larger file were each answered `not_read`, in a millisecond or
+  two, in a run of the look that came before these routes, which read through
+  the same reader. A folder is not gone through either when it is a symbolic
+  link: each folder below the home folder (or below the folder a variable
+  names) is looked at and opened without following a link, and the file is
+  reached through the folder that was opened. An earlier version followed
+  such a link, and so read whatever the link led to. In a run of the reader,
+  with the right entry behind a linked settings folder and again behind a
+  linked `~/.config`, nothing behind the link was read; the three routes say
+  `linked` there, and where the link leads. The home folder itself, and a
+  folder a variable names, are taken as the system resolves them.
+- **Never a byte of the file in an answer.** The three routes answer nothing
+  that is read out of the file but fixed words and two yes-or-no facts: one
+  of thirteen words about the file, one of three about why the entry could
+  not be written, whether the entry is switched off, under which other name
+  it calls. Beside these stand the place of the file, the places of up to two
+  copies with the time each was last changed, and the command the entry holds
+  or would hold, which names the Python that runs Locktender and the place of
+  the vault (as the command to start Locktender again does, in every answer
+  about the state). So the look tells whoever holds the session, for each of
+  the three files, whether a copy lies beside it, which is to say whether
+  Locktender ever changed it; and it tells that for a vault with no app at
+  all, where the look before these routes answered only for a registered app.
+  In a run for this page a marker was written into three settings files as a
+  value, as the token of another tool and in a comment, and the app was asked
+  through the three routes for each of them: the marker was in none of its 55
+  answers, and neither was the name of another entry.
 - **Written under rules.** The write changes one file per request, at the
   fixed place, and keeps at most one copy of it beside it; it touches nothing
   else outside the vault. It writes only a file it has just read through the
@@ -656,39 +662,36 @@ same files for an app that is registered and answers one word.
   back and must hold the entry. An entry of Locktender's name that points
   somewhere else is never removed: the owner was not shown what it holds.
   The write needs owner mode, always; taking the entry out needs it too.
-- **Only on a request.** The file is read when one of these routes is
-  called, and at no other time. Showing the text to copy, listing the apps
-  and the tiles a page can offer, and waiting for a first request read no
-  such file. Locktender does not look whether the AI app is running.
-- **Not in a demo.** A demo refuses the three routes before any file is
-  looked at, and the list of tiles it answers names no place of a settings
-  file. The older look knows no demo and still answers there; see below.
+- **Only on a press.** The file is read when one of these routes is called,
+  and the page calls them on a press and at no other time: the press that
+  opens a tile's sheet, "Look again", "Connect", "Disconnect". No timer, no
+  load of a page and no draw of Home calls them: a tile's line of state is
+  read from the vault. Showing the text to copy and listing the apps and the
+  tiles read no such file. Locktender does not look whether the AI app is
+  running.
+- **Not in a demo.** A demo refuses the look and the write: the three routes
+  answer before any file is looked at, and the list of tiles a demo answers
+  names no place of a settings file. The page of a demo does not ask either:
+  a press on a tile says that nothing can be connected.
 
 What an adversary gains from the look: with the session, fixed words about a
 file that a program of the owner's account can read whole, the places of
-that file and of its copies, and the command. The exception is the older look in a demo, which has no
-pairing. There any program on the computer, also one of another account, can
-ask for it and learn one word about a file in the home folder of the account
-the demo runs under: whether the settings file of Claude Desktop, of Codex
-or of Grok Build is there, whether it is empty, and whether it has an entry
-named `locktender`. With the place of the file it also learns where that home
-folder is. Beside the path of the Python that runs it, this is the one thing
-a demo tells about anything outside its temporary folder. It ends when the
-older look goes.
+that file and of its copies, and the command. A demo, which has no pairing,
+answers no look.
 
 Two more things about the look. It says what the file held at the moment of
 the request; a program of the same account can change the file afterwards,
 and with it what an AI app starts under the name `locktender`. And how long
 the answer takes grows with the size of the file (five milliseconds for a
-file of 1 MiB against one for a small file in a run of the older look);
-nobody measured what that tells.
+file of 1 MiB against one for a small file, in a run of the look that came
+before these routes); nobody measured what that tells.
 
 **What the write gives an adversary.** With the session and inside owner
 mode: a request that writes Locktender's own entry, which starts Locktender's
 own program on this vault. That is nothing the same person could not do by
 registering an app, and a program of the owner's account could always write
 that file itself. A web page on another site and a program without the
-session reach none of the three routes: in a run for this page all 33 routes
+session reach none of the three routes: in a run for this page all 32 routes
 answered 401 without the session. What is new:
 
 1. A fault in the writer could damage a file that is not Locktender's.
@@ -709,7 +712,8 @@ answered 401 without the session. What is new:
    the owner deletes them, and a folder kept under version control that
    leaves out the settings file by its name will pick them up.
 4. A running AI app may write its file again and drop the entry. Nothing
-   notices that until the next look. Nobody tried what the three AI apps do.
+   notices that until the next look, which the page makes only when the owner
+   presses the tile. Nobody tried what the three AI apps do.
 5. The entry makes the AI app start, at each of its starts and with the
    owner's rights, the Python that ran Locktender at the request. The write
    refuses a Python or a vault that lies under a folder for temporary files,
@@ -738,16 +742,16 @@ What it does not give: a way to choose the file, the name of the entry or the
 command. A request carries the name of one of three AI apps and the state
 the owner was shown, and nothing else.
 
-**The trial.** One route of the page's API, `POST /api/try`, hands the page
-one passage of the vault for the owner's own words, with no app involved, no
-entry in the record and no limit counted. It is there so that the owner can
-see what a question would bring before any app is connected; no page of this
-version calls it yet. Like every route it needs the session: in a run for
-this page all 33 routes answered 401 without it. It also needs the passphrase
-typed within ten minutes, a permission apart from owner mode, and answers 20
+**The trial.** "Ask your documents", the box on Home, hands the page one
+passage of the vault for the owner's own words, with no app involved, no
+entry in the record and no limit counted. Its route is `POST /api/try`. It is
+there so that the owner can see what a question would bring before any app
+is connected. Like every route it needs the session: in a run for this page
+all 32 routes answered 401 without it. It also needs the passphrase typed
+within ten minutes, a permission apart from owner mode, and answers 20
 questions a minute at most. Inside those ten minutes, whoever holds the
 session can read up to 200 passages this way, and nothing shows it afterwards
-but a number in the state (`trial.questions`) that is gone at the next lock.
+but a number on Home, under the box, that is gone at the next lock.
 Outside them the route
 answers `trial_reauth_required` before it searches: in a run for this page,
 ten minutes after the passphrase, 200 questions with words that were in the
@@ -780,11 +784,16 @@ can make itself (position 3). Closing this needs an approval that is only
 given for a passage that waits, which is a change to the decision logic that
 was not made.
 
+The box has a cost of its own. It makes the passphrase a daily keystroke: it
+is typed far more often than before, and into a page that can be imitated
+once Locktender has stopped ("A tab left open" under
+[Known limits](#known-limits)).
+
 **The command the page shows.** Every answer about the state now carries the
 command line that starts Locktender again, with the full paths of the Python
 that runs it and of the vault's folder. The page shows it to be copied into a
-terminal: on the page Settings, at the end of setting up, in the guide of a
-demo, and in the bar a page shows when Locktender stops answering.
+terminal: on the page Settings, in the demo's card and in the sheet of a tile
+in a demo, and in the bar a page shows when Locktender stops answering.
 Locktender composes it at start, from its own interpreter and the arguments it
 was started with. Nothing from a request, from the interface file, from a
 document or from an AI app goes into it. Whoever holds the session learns the
@@ -794,18 +803,20 @@ command tells. It is text that the owner is asked to run, and the page shows
 whatever command the newest answer on its address holds. So it matters who
 answers there: see "A tab left open" under [Known limits](#known-limits).
 
-**The first run.** In the Basic view, after "Create the vault", the page leads
-through three more steps: "App", "Documents" and "First question". For the app
-the owner chooses, one press registers the app, opens the vault's one group of
-documents to hosted apps when the app is one, and gives the app "Ask me each
-time". These are three ordinary requests of the page. Those that let more
-leave need owner mode as at any other time: straight after "Create the vault"
-it is fresh, and later the page asks for the passphrase. The first run offers
-no other access: it never gives "Can read". It can add a sample letter, which
-begins "SAMPLE DOCUMENT, INVENTED.", through the same route as any document.
-And once a vault that is being set up has an app and a document, and a call
-has come under the name of one of its apps, the page tells Locktender by
-itself that setting up is finished: one word in the interface file.
+**Connect on Home.** One press on "Connect" in the sheet of a tile registers
+the app, opens the vault's one group of documents to hosted apps, gives the
+app "Ask me each time", and writes the entry: one request, one entry in the
+record, owner mode. It never gives "Can read", and with several groups it
+gives no group. Straight after "Create my vault" owner mode is fresh, and
+later the page asks for the passphrase. Where the write is refused, and behind
+the tile "Other app", the page adds an app without writing a file, by three
+ordinary requests (the app, the group, the grant), each of which needs owner
+mode as at any other time. Home can add a sample document, which says in its
+title and in its first paragraph that it is invented, through the same route
+as any document. And once a vault whose first steps are open has a document
+and an app, and the owner has seen a passage in the box or an app has called,
+the page tells Locktender by itself that the first steps are done: one word
+in the interface file.
 
 **The demo's "again".** In a demo, Locktender plays AI apps against invented
 documents, and the page has a button "Have the played app ask again". Its
@@ -818,7 +829,7 @@ invented text, handed to a thread of Locktender that keeps none of it.
 
 **`--view`.** `wdva gate app --view basic` or `--view pro` writes the same
 file. For a vault that exists it does so at start, while the vault is locked
-and before a passphrase is typed; a new vault is created in the view it names.
+and before a passphrase is typed; a new vault opens on the page it names.
 It gives nothing that the file does not give: whoever can start Locktender on
 a vault's folder can write the file without it. The flag is never part of the
 command the page shows.
@@ -831,10 +842,10 @@ Nine places an adversary can stand in, from far away to at the keyboard.
 | --- | --- | --- |
 | 1 | A web page on another site, open in the owner's browser | Kept out. |
 | 2 | A local program of another user account | Kept out of the files, the socket and the page's API. Can disturb. The demo has no pairing: there it is the owner. |
-| 3 | A local program of the same account that has not seen the pairing code | Kept out of the sealed files and of the owner's page. Metered and recorded at the socket. Can choose which view the page opens in. Not kept out of the account. |
+| 3 | A local program of the same account that has not seen the pairing code | Kept out of the sealed files and of the owner's page. Metered and recorded at the socket. Can choose on which page the owner's page opens. Not kept out of the account. |
 | 4 | An AI app connected through the socket, also one steered by text in a document | Gets what its grants and limits allow, and no more through Locktender. What it gets is with it and its provider. |
 | 5 | A hostile document | Loses its links, markup and hidden characters. Its sentences reach the model, marked as quoted. |
-| 6 | Somebody at the unlocked page who does not know the passphrase | Cannot let more leave than was set up. Can read what was released, approve waiting passages, remove documents and switch the view. |
+| 6 | Somebody at the unlocked page who does not know the passphrase | Cannot let more leave than was set up. Can read what was released, approve waiting passages, remove documents and choose the page to open on. |
 | 7 | The provider of a hosted AI app | Receives everything released to that app. |
 | 8 | Somebody with a copy of the store directory | Has sealed files, their sizes and times, and unlimited tries at the passphrase. |
 | 9 | Somebody at the unlocked computer with a shell | Not protected. |
@@ -881,7 +892,7 @@ reach the port of the page, as every program on the computer can. There it gets
 the page's files and, without the session, what the address that pairing
 starts from tells every caller: the product's name and version, whether this
 is a demo and whether a code is asked for, and the language kept for the page
-([above](#the-two-views-and-what-came-with-them)). It gets nothing else. In a
+([above](#home-settings-and-what-came-with-them)). It gets nothing else. In a
 run for this page,
 31 paths of the API were asked with 11 kinds of missing or made-up session each
 (no header, an empty one, a made-up one, the right one changed in one character,
@@ -906,11 +917,10 @@ a loop for ten seconds, all 2,741 calls of the owner's page were answered, the
 slowest after 1.02 seconds. Other ways of flooding the port were not tried. In
 the demo there is no pairing: any program on the computer is the owner at the
 demo's page, which is why the demo's vault holds invented documents and nothing
-else belongs in it. Two things there are not invented. Such a program is told
-the full path of the Python that runs Locktender. And it can ask the demo for
-[the look at a settings file](#the-two-views-and-what-came-with-them), which
-answers with one word about a file in the home folder of the account the demo
-runs under, a folder it may not be able to read itself. An administrator is
+else belongs in it. One thing there is not invented: such a program is told
+the full path of the Python that runs Locktender. A demo answers no look at a
+settings file, and the list of tiles it answers names no place of one. An
+administrator is
 not "another user": root reads the files, the memory and the loopback traffic.
 
 **Left over.** A program of another account can serve web pages on other ports
@@ -957,12 +967,11 @@ API stays closed to it without the session.
   another, it can read the key while the vault is unlocked.
 - It owns `run/`. It can remove the socket and listen there itself, see the
   queries of the AI apps that connect and answer them with text of its own. It
-  can write `run/interface.json` and so choose which view the page opens in at
-  the next unlock, whether the page still offers to finish setting up, and
-  which language is kept for the page. That changes what the owner sees
-  first, not what may leave; what Basic must
-  show for that reason is said
-  [above](#the-two-views-and-what-came-with-them).
+  can write `run/interface.json` and so choose on which page the page opens
+  at the next unlock, in which language, and whether Home still shows "Start
+  here". That changes what the owner sees first, not what may leave; what
+  Home must show for that reason is said
+  [above](#home-settings-and-what-came-with-them).
 - It can change the settings file of an AI app, also after Locktender looked
   at it or wrote its entry there: it can point the entry elsewhere, remove
   it, or change the copies that lie beside the file. What an AI app starts
@@ -1133,10 +1142,10 @@ un-pausing, switching to the other kind, answering both and raising a limit were
 refused until the passphrase was typed, while pausing, lowering a limit,
 approving a waiting passage and adding a document went through.
 
-Of the routes that came later, these ask for no owner mode, because they let
+Of the routes that came later, three ask for no owner mode, because they let
 nothing leave and write nothing outside the vault: keeping the page's three
-words, the two looks at a settings file, and in a demo telling the played
-app to ask again. The route that takes Locktender's entry out of a settings
+words, the look at a settings file, and in a demo telling the played app to
+ask again. The route that takes Locktender's entry out of a settings
 file asks for owner mode when it would change the file, and where removing
 the app does; when it only stops answering an app and leaves the file as it
 is, it does not. The route that writes the entry always asks. The trial
@@ -1160,12 +1169,12 @@ question finds, for which the passphrase must have been typed within ten
 minutes ("The trial" above). In 956 responses over ten states of a vault, a
 review found, of 42 markers planted in documents, only the five that had been
 released or were shown for approval, and nowhere the passphrase, the words to
-replace or the pairing code. That review was made before the two views and
-before the trial. Of the routes added since, those that deal with a settings
-file read something that must not be passed on: in a run for this page a
-marker written into settings files was in none of the 38 answers of the
-older look, and in a later run in none of the answers of the three routes
-that look, write and remove. The trial question is the one that passes text
+replace or the pairing code. That review was made before Home and before
+the trial. Of the routes added since, those that deal with a settings file
+read something that must not be passed on: in a run for this page a marker
+written into settings files was in none of the 38 answers of the look that
+came first and is gone, and in a later run in none of the answers of the
+three routes that look, write and remove. The trial question is the one that passes text
 on: its answer holds the passage
 with the words to replace already replaced, and no other answer repeats it.
 
@@ -1179,10 +1188,11 @@ pairing code, and in the demo to the page's first question. The passphrase of
 the demo is in every answer about the demo's state, because the demo's page
 shows it. The command that starts Locktender again is in every answer about
 the state, with the full paths of the Python that runs it and of the vault's
-folder, because the Basic page shows it. A look at a settings file answers
+folder, because the page shows it. A look at a settings file answers
 with words about a file of another program, and with the place of that file.
-The three newer routes also name the places of its copies and since when
-they lie there, and the list of tiles names the places of the three files.
+The answers about a settings file also name the places of its copies and
+since when they lie there, and the list of tiles names the places of the
+three files.
 And they hold the command an entry holds or would hold, which names the
 Python and the place of the vault. These two are answered to whoever holds
 the session, for all three programs, also on a vault with no app: the look
@@ -1190,13 +1200,17 @@ before answered one word, and only for a registered app. The trial question
 is answered with one passage of the vault.
 
 **Does not hold.** Without the passphrase that person can read every text that
-was ever released, on the Activity page of Pro and under "What left the vault"
-in Basic, and the passages that wait for approval. They can press "Release
+was ever released, on the page Activity and, for the newest three, on Home,
+and the passages that wait for approval. They can press "Release
 once" for a waiting passage: an approval does not ask for the passphrase, lifts
 no limit and is recorded. They can add documents, remove documents (which
 deletes them from the vault), lower limits, take grants away and lock the
-vault. They can choose on which page the vault opens and put the card "Finish
-setting up" away, which leaves no entry in the record. During the ten minutes of owner
+vault. They can choose the language and the page to open on and hide "Start
+here", which leaves no entry in the record. They can make Locktender stop
+answering an app, with "Disconnect" or under Settings; it is recorded. Once
+owner mode has run out they cannot press "Connect", cannot have "Disconnect"
+change a settings file, and, once the trial's ten minutes are over, cannot
+use "Ask your documents". During the ten minutes of owner
 mode they can do everything. During the ten minutes of the trial's permission
 they can read passages that were never released, 20 a minute, and no entry
 says so ("The trial"). There is no lock-out after wrong passphrases.
@@ -1238,8 +1252,8 @@ passphrase opens. The holder learns what
 [the directory shows](GATE_FORMAT.md#sealed-files): how many documents there are
 and how long each is, how many entries the record has, how long each is and when
 it was written, the scrypt parameters, and the two or three words that are kept
-in plain text: which view of the page was in use, whether setting up was
-finished, and the language kept for the page, if one was.
+in plain text: on which page the owner's page opened, whether the first
+steps were done, and the language kept for the page, if one was.
 No name, title, text, query or setting.
 
 **Does not hold.** The passphrase can be guessed offline, without limit, at the
@@ -1256,8 +1270,9 @@ refused at the right entry, in every variant the review tried: changed bits,
 cut, swapped, copied and deleted entries, entries of another store.
 
 **Left over.** The head of the record, a number and eight characters, is what
-to write down to notice a rollback. The Pro view shows it, on Overview, on the
-Vault page and on the locked screen. The Basic view does not show it.
+to write down to notice a rollback. The six pages under Settings show it, on
+Overview and on the page Vault, and so does the locked screen of a vault that
+opens on Overview. Home and the pages beside it do not show it.
 
 #### 9. Somebody at the unlocked computer with a shell
 
@@ -1304,37 +1319,37 @@ vault cannot do, the computer has to: a screen lock and full-disk encryption.
   it, and the page has no way to hand a file back out of the vault.
 - **The demo has no pairing.** Any program on the computer can act as the owner
   at the demo's page. The demo's vault holds invented documents; real documents
-  do not belong in it. Two things such a program is told there are not
-  invented: the full path of the Python that runs Locktender, and one word
-  about an AI app's settings file in the home folder of the account the demo
-  runs under, with the place of that file
-  ([the look at a settings file](#the-two-views-and-what-came-with-them)). A
+  do not belong in it. One thing such a program is told there is not
+  invented: the full path of the Python that runs Locktender. A demo answers
+  no look at a settings file, and the list of tiles it answers names no place
+  of one: a place could tell where `XDG_CONFIG_HOME` or `GROK_HOME` point. A
   demo that was killed leaves its temporary vault behind. A later demo removes
   it at its start, once the leftover has lain unchanged for a minute and no
   running demo holds the lock on it.
-- **The page's three words are no settings of the vault.** Which of the two
-  views opens, whether the page still offers to finish setting up, and which
+- **The page's three words are no settings of the vault.** On which page the
+  app opens, whether Home still shows the cards "Start here", and which
   language is kept for the page are words in a file that is not sealed. A
   program of the owner's account can write them, and whoever holds the session
   can change them without the passphrase, also while the vault is locked. No
   entry in the record says that they changed. None of them decides anything
   about what may leave. The language is also told to a caller that has not
   paired.
-- **Basic does not show the head of the record,** on the page or on the
-  locked screen, and has no "Verify now". It shows every release, and the
-  calls that were stopped in the last 24 hours as far as the 120 newest
-  refusals in the record reach. Older stops, the owner's own changes and the
-  sessions are in Pro.
-- **Files that are not Locktender's are read and written.** On a request of
-  the page Locktender reads the settings file of Claude Desktop, of the
-  ChatGPT desktop app and Codex, or of Grok Build, at a place that no request
-  chooses, and on a request that needs owner mode it replaces that file with
-  one that differs by its own entry. Before each change it keeps a copy of
-  the file as it was, in one of two files beside it. It writes nothing
-  through a link and removes no entry that points elsewhere. What a look says
-  is what the file held at that moment. It was not tried with the AI apps,
-  nor by hand on a Mac. A program of the owner's account can change the file
-  and the copies afterwards.
+- **Home does not show the head of the record,** on the page or on the
+  locked screen, and has no "Verify now". It shows the newest three releases
+  and the number of calls stopped in the last 24 hours, counted as far as the
+  120 newest refusals in the record reach; all of both are one press away, on
+  the page Activity. The owner's own changes and the sessions are on the six
+  pages under Settings.
+- **Files that are not Locktender's are read and written.** On the owner's
+  press Locktender reads the settings file of Claude Desktop, of the ChatGPT
+  desktop app and Codex, or of Grok Build, at a place that no request
+  chooses, and on "Connect" and "Disconnect" it replaces that file with one
+  that differs by its own entry. Before each change it keeps a copy of the
+  file as it was, in one of two files beside it. It writes nothing through a
+  link and removes no entry that points elsewhere. What a look says is what
+  the file held at that moment. It was not tried with the AI apps, nor by
+  hand on a Mac. A program of the owner's account can change the file and the
+  copies afterwards.
 - **Grok.** By xAI's pages, a project's own settings can define a server of
   the same name, and "a project server with the same name as a user one
   replaces it entirely": in a folder whose settings define an entry named
@@ -1351,6 +1366,12 @@ vault cannot do, the computer has to: a screen lock and full-disk encryption.
   read by the ChatGPT desktop app, Codex and its IDE extension, by OpenAI's
   page. Locktender cannot tell them apart: all call under the one name the
   entry holds.
+- **Two languages.** The page is in English or Polish. The Polish texts say
+  what the English ones say as far as two readings can tell; where they
+  differ, the English one is the specification. Nobody who writes Polish for
+  a living has read them. A test holds that both tables have the same texts
+  by name; no test can hold that they mean the same, and the sentences that
+  warn (where text goes, that a name is a label) are among them.
 - **Five wrong pairing codes switch pairing off** until Locktender is started
   again, and any local program can cause that. They are counted over the whole
   run, whoever sends them. It gains nothing: a page that is paired already goes
@@ -1380,12 +1401,14 @@ vault cannot do, the computer has to: a screen lock and full-disk encryption.
 - **A tab left open after Locktender has stopped** talks to whatever program
   takes the same port next. It would send that program a passphrase typed there,
   and with every call the session of the run that ended, which opens nothing any
-  more. A review described this from the code and did not reproduce it. With
-  the two views the tab also shows a command to run. While nothing answers,
+  more. A review described this from the code and did not reproduce it. The
+  tab also shows a command to run. While nothing answers,
   the page says "To start Locktender again, run this in a terminal:" over the
   command that Locktender last gave it. Once a program answers on that port,
-  the page takes the command from that program's answer, and shows it at its
-  foot as the way to open Locktender again. Any local program can take a free
+  the page takes the command from that program's answer, and shows it on the
+  page Settings as the way to open Locktender again. The box "Ask your
+  documents" has made a sheet that asks for the passphrase an everyday sight,
+  and a program that answers on that port can make the page show it. Any local program can take a free
   port, also one of another user account, and a command that the owner copies
   into a terminal runs under the owner's account. This follows from the
   page's code and was not tried. Close the tab when you stop Locktender. A
@@ -1433,9 +1456,9 @@ vault cannot do, the computer has to: a screen lock and full-disk encryption.
 - **The passphrase cannot be changed, and there is no recovery.** Other programs
   of the same account can capture it the next time it is typed.
 - **Sizes, counts and times are visible** to whoever can list the store
-  directory, and so are the words that are not sealed: which view of the
-  page was in use, whether setting up was finished, and the language kept for
-  the page. The check for synchronised folders knows six folder names and
+  directory, and so are the words that are not sealed: on which page the
+  owner's page opened, whether the first steps were done, and the language
+  kept for the page. The check for synchronised folders knows six folder names and
   nothing else.
 - **Timing was measured, not removed.** The refusal for a waiting passage no
   longer reads the document, and in a run for this page its time did not tell a
@@ -1456,24 +1479,28 @@ Tested:
   and 3.13.
 - Three walk-throughs that drive the page in a real browser against the real
   program (`tests/browser/journey_demo.js`, `journey_real.js` and
-  `journey_basic.js`). CI runs them in headless Chromium on Linux and in
-  WebKit, the engine of Safari, on macOS. They walk the demo with its guide,
-  the first run in its four steps, the Basic page and the pages of Pro.
+  `journey_home.js`). CI runs them in headless Chromium on Linux and in
+  WebKit, the engine of Safari, on macOS. They walk the demo with its card,
+  Home with its box, its tiles and their sheets, the pages beside Home, and
+  the six pages under Settings. For this page they were run in Chromium on
+  Linux.
 - The program an AI app starts: called with the command line of the MCP
   Inspector, and added, listed and read back with Claude Code's
   `claude mcp add`, `claude mcp list` and `claude mcp get`, against the
   running demo. No conversation was held.
-- The three reviews described above, all on Linux, and all made before the
-  two views were built.
+- The three reviews described above, all on Linux, and all made before
+  anything of the part "Home, Settings, and what came with them" was built.
 - The runs this page quotes as made for it, on Linux with Python 3.11 and,
-  where a browser was needed, Chromium. The runs for the two views, the
-  interface file and the three routes used no browser: they called the page's
+  where a browser was needed, Chromium. The runs for the interface file and
+  for the routes that came later used no browser: they called the page's
   API directly. So did the run for the trial question, with a clock it could
   move, and the run for the settings files.
 - The write into a settings file: by Locktender's own tests, against files
   made for them in home folders made for them, on Linux and, in CI, on macOS;
-  and in one run on Linux through the three routes, in a home folder made
-  for it, for a JSON file and two TOML files that held other content.
+  in one run on Linux through the three routes, in a home folder made
+  for it, for a JSON file and two TOML files that held other content; and by
+  the walk-through of Home, which presses "Connect" and "Disconnect" in a
+  browser against settings files it made in a home folder of its own.
 
 Not tested:
 
@@ -1486,13 +1513,14 @@ Not tested:
 - Windows. Locktender needs Unix sockets and is not offered there.
 - A real 24-hour or 30-day boundary: the reviews moved a clock they
   controlled.
-- The two views, the first run, the interface file and the three routes under
-  a hostile review: none has attacked them yet. What this page says of the
-  page's own behaviour there (which view opens, what Basic shows, where the
-  command to start again comes from) was read from the page's code and not
-  tried in a browser for this page.
-- The trial question under a hostile review, and from a page: no page calls
-  it yet.
+- Home, the six pages, the interface file and the routes that came with them
+  under a hostile review: none has attacked them yet. What this page says of
+  the page's own behaviour (which page opens, what Home shows and leaves out,
+  when the cards "Start here" come and go, where the command to start again
+  comes from) was read from the page's code. The walk-throughs cover a part
+  of it, and nobody tried it by hand for this page.
+- The trial question under a hostile review.
+- The Polish texts, read by a person who writes Polish for a living.
 - The write against a settings file that an AI app made, and everything it
   rests on that comes from the makers' pages: whether Claude Desktop, the
   ChatGPT desktop app, Codex and Grok Build read the entry, keep an entry
@@ -1503,8 +1531,7 @@ Not tested:
 - The write by hand on a Mac, and whether macOS asks for a permission before
   a program started from a terminal may read or write the settings folder of
   Claude Desktop.
-- The three routes of the settings file under a hostile review, and from a
-  page: no page calls them yet.
+- The three routes of the settings file under a hostile review.
 
 **Not audited.** Nobody outside the project has reviewed Locktender, its format
 or this page.

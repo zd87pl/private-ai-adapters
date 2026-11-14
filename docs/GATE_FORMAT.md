@@ -20,7 +20,7 @@ files.
 | store | the vault |
 | client | an app (the owner's name for one AI application) |
 | collection | a collection; on Home and on the page Documents, a group of documents |
-| ledger | the record. The six pages under Settings show all of it as Activity; Home shows what was released under "What left the vault" and what was refused under "Stopped in the last 24 hours", and the page Activity has both as "Given to apps" and "Stopped" |
+| ledger | the record. The six pages under Settings show all of it as Activity; Home shows the three newest releases under "Recently given to apps" and counts the calls refused in the last 24 hours, and the page Activity has both in full, as "Given to apps" and "Stopped" |
 | grant with mode `read` | "Can read" |
 | grant with mode `approve` | "Ask me each time" |
 | `hosted` true, `hosted` false | a hosted app, a local app; on Home, an app that sends text to a provider, an app on this computer |
@@ -28,9 +28,9 @@ files.
 | `redact_literals`, listed strings | "Words to replace" |
 | pool | all hosted apps together, or all local apps together |
 
-The interface opens on Home, or on Overview, the first of six pages with every setting. Earlier
-versions called the two the views Basic and Pro, and this page still calls the six pages "the
-Pro view" in places. Which of the two a store opens on is not a setting of the store: it is kept
+The interface opens on Home, or on Overview, the first of six pages with every setting. The
+interface file and the command line call the two `basic` and `pro`, the names that earlier
+versions gave them. Which of the two a store opens on is not a setting of the store: it is kept
 in [a file beside the sealed ones](#the-interface-file).
 
 Elsewhere in this repository a vault is one `.wdva` file ([FORMAT.md](FORMAT.md)). A store is a
@@ -81,10 +81,10 @@ directory of such files.
   run for this page; the page says "The path of the vault is too long for the local socket that
   apps connect to. Choose a shorter place for it.").
 - **`run/interface.json`.** The one file that the app writes in plain text and overwrites. It says
-  which view of the owner's page is in use, whether setting up is finished and, once one was
+  on which page the owner's page opens, whether its first steps are done and, once one was
   chosen, the language of the page, and nothing about the documents.
-  [The interface file](#the-interface-file) describes it. A store made before the two views
-  existed has no such file, and needs none.
+  [The interface file](#the-interface-file) describes it. A store made before this file
+  existed has none, and needs none.
 - **Files nobody listed.** The documents of a store are what the record says: `add` entries minus
   `remove` entries. A file in `docs/` or `originals/` that the record does not list is ignored by
   every reader.
@@ -121,8 +121,8 @@ its payload plus a header and a tag); the number of entries in the record, the s
 the time the file system gives it, which is roughly when and how much was released; the scrypt
 parameters of the key slot. In `run/` it shows the socket, which is there while the store is
 unlocked, and in plain text the two or three words of
-[the interface file](#the-interface-file): which view of the owner's page is in use, whether
-setting up was finished, and the language of the page if one was chosen. It shows no collection
+[the interface file](#the-interface-file): on which page the owner's page opens, whether
+its first steps were done, and the language of the page if one was chosen. It shows no collection
 name, title, file name, text, query, policy or client name. Document ids are random and say
 nothing.
 
@@ -440,8 +440,8 @@ Not in the policy, and the same for every store: 120 calls a minute for all clie
 8,000 characters as the longest result of any kind, 10 results per search, 160 characters per
 snippet. Also not in the policy, and not in the record: which clients the owner paused, and which
 kind is answered while clients of both kinds are registered. Those last for one unlocked session.
-An `unlock` entry lists the names answered at that moment. The view of the owner's page, whether
-setting up was finished and the language of the page are in neither of the two as well. They are
+An `unlock` entry lists the names answered at that moment. The page the owner's page opens on, whether
+its first steps were done and the language of the page are in neither of the two as well. They are
 kept, unsealed, in [the interface file](#the-interface-file), and outlast a session.
 
 ## Limits
@@ -517,10 +517,10 @@ change, unlock and lock is one sealed file there, and each names the hash of the
   that fails when the name is taken. Document text is handed to a caller only after that. When
   the entry cannot be written, the caller gets `UNAVAILABLE` and no document text.
 
-The head of a record is the number of its newest entry and the SHA-256 of that file. The Pro view
-of the interface shows it as the number and the first eight characters of the hash, for example
-`#33 6187a0f8`: on Overview, on the Vault page and, while the store opens on Overview, on the
-locked screen. Home and the pages beside it do not show it.
+The head of a record is the number of its newest entry and the SHA-256 of that file. The six
+pages under Settings show it as the number and the first eight characters of the hash, for
+example `#33 6187a0f8`: on Overview, on the Vault page and, while the store opens on Overview,
+on the locked screen. Home and the pages beside it do not show it.
 
 ### Times
 
@@ -631,7 +631,7 @@ A reader with the store key verifies a record like this, and stops at the first 
    of its `text`.
 
 The app does this at every unlock, before anything is served, and again when the owner presses
-"Verify now" in the Pro view. A reader then knows everything a limit is computed from, because it
+"Verify now" on Overview, under Settings. A reader then knows everything a limit is computed from, because it
 is in the entries: the releases to each client and pool with their times, and the parts of each
 document that were released.
 
@@ -641,7 +641,7 @@ document that were released.
   middle, by anyone who does not have the store key, fails at that entry.
 - **Removing the newest entries is not noticed.** Whoever can delete files can return a store to
   an earlier state: a revoked grant is back, a used-up limit is free again. It shows only against
-  a head that was written down earlier. That is what the head in the Pro view is for.
+  a head that was written down earlier. That is what the head on the six pages under Settings is for.
 - **Somebody with the key can write a whole new chain.** The key comes from the passphrase, so
   the owner, and anybody who has the passphrase, can produce a record that verifies and says
   something else. Against a head noted earlier, the eight characters shown are 32 bits: enough to
@@ -806,7 +806,7 @@ form; none holds text from a document.
 
 ```text
 NEEDS_APPROVAL: the owner must approve this passage before it is released.
-What to do: Ask the user to open "Approvals" in the Locktender app and release d-7a8020250003.1 for claude-desktop, then call locktender_read again with the same ref. Do not ask for further passages until the user has answered.
+What to do: Ask the user to open the Locktender page in their browser and answer the request for d-7a8020250003.1 from claude-desktop there, then call locktender_read again with the same ref. Do not ask for further passages until the user has answered.
 ```
 
 | Code | Meaning |
@@ -845,7 +845,7 @@ bytes.
 | Key | Values | Meaning |
 | --- | --- | --- |
 | `view` | `"basic"` or `"pro"` | Where the owner's page opens. `basic`: the page opens on Home; `pro`: on Overview of the six pages. The owner chooses it on the page Settings, under "Open on", as "Home" or "All settings" |
-| `setup` | `"open"` or `"done"` | Whether the first run is still unfinished. While it is `open`, Home names the next step under "Finish setting up". |
+| `setup` | `"open"` or `"done"` | Whether the first steps of a new store are still open. While it is `open`, Home is drawn as the three cards "Start here". |
 | `language` | `"en"` or `"pl"`; absent until one was chosen | The language kept for the owner's page: English or Polish. A file without this key says that none was chosen. The key is never written with `null` or an empty text, and nothing sent to the app takes a language away once one is kept |
 
 | The file holds | It counts as |
@@ -889,8 +889,8 @@ bytes.
   start. Until then the app goes on with what it last read, and its own next write starts from
   that.
 - **No file, or something else in its place.** The app then takes the view to be `pro` and
-  setting up to be `done`, takes no language to be chosen, and reports `"stored": false` in the
-  state. That is how every store made before the two views existed opens, and nothing is written
+  the first steps to be `done`, takes no language to be chosen, and reports `"stored": false` in the
+  state. That is how every store made before this file existed opens, and nothing is written
   for such a store until its owner chooses a view or a language or starts the app with `--view`.
   Whatever lies in the file's place and is not exactly the file described here counts as no
   file: something that is not a regular file (a symbolic link, a directory), more than 1,024
@@ -904,9 +904,9 @@ bytes.
   said `pro`, `done`, `"language": null` and `"stored": false`, and a page that had not paired
   was told no language.
 - **A version from before the third word** knows two keys and counts a file with three as no
-  file: the store opens in Pro, with setting up done. Nothing of the store is lost by that. The
+  file: the store opens on Overview, with the first steps counted as done. Nothing of the store is lost by that. The
   next choice of a view there writes a file of two keys: the language is gone from it, and
-  setting up counts as done. In a run for this page the code of the commit before this change
+  the first steps count as done. In a run for this page the code of the commit before this change
   did both on a store whose file held `basic`, `open` and `pl`: it left the file as it was while
   it only read, and wrote `{"view": "basic", "setup": "done"}` when a view was chosen.
 - **Readable while the store is locked.** That is its purpose. Whoever can read the directory can
@@ -915,7 +915,7 @@ bytes.
   shown no session, carries the kept language ([below](#the-owners-page)). So this one word
   reaches whoever can ask the app's port on this computer, also a program of another account
   that cannot read the directory. It is one of two words or none; a word also says that a store
-  exists, because none is told where there is no store. The view and the word about setting up
+  exists, because none is told where there is no store. The view and the word about the first steps
   are not in that answer.
 - **Not part of the store.** The file is in no policy and in no entry of the record, is not
   counted among the sealed files, and states no version. Writing it changes nothing that is
@@ -931,7 +931,7 @@ come from a file that counts.
 when a store exists and its file holds one, and else `null`. It is the word the app last read,
 like the state's.
 
-**`POST /api/interface`** keeps a view, a language, or that setting up is finished. It belongs to
+**`POST /api/interface`** keeps the page to open on, a language, or that the first steps are done. It belongs to
 [the API of the owner's page](#the-owners-page) and has to pass every check described there.
 
 | | |
@@ -943,12 +943,12 @@ like the state's.
 | Owner mode | Never needed: the route lets nothing leave and changes nothing that is sealed. In a run for this page, after owner mode had run out, registering a client was refused with `reauth_required` and this route was answered |
 | The record | No entry |
 
-The page sends `view` when the owner chooses under "Open on" where the page opens, or follows
-"Set everything up yourself in Pro" from a step of the first run, and `setup` when the owner
-leaves the last step of the first run with "Open my vault" or "Add a document of your own", or
-hides the card "Finish setting up". One request it sends by itself, without a press: `{"setup": "done"}`,
-once a store that is being set up has a client and a document and a call has come under the
-name of one of its clients. It sends `setup` only for a store whose file says `open`.
+The page sends `view` when the owner chooses under "Open on" on which page to open, `language`
+when the owner chooses one, and `setup` when the owner hides the cards "Start here". One request
+it sends by itself, without a press: `{"setup": "done"}`, once a store whose first steps are
+open has a document and a client, and the owner has seen a passage in the box "Ask your
+documents" or a call has come under the name of one of its clients. It sends `setup` only for a
+store whose file says `open`.
 
 The page sends `language` when the owner presses "English" or "Polski" in its switch, once a
 store exists and the page is paired, for a locked store too. A language pressed before there was
@@ -969,9 +969,9 @@ The owner's interface is a page that the app serves itself, with a JSON API behi
 listens on `127.0.0.1` only, at the port of the `open:` line (`--port`, else any free one), and
 speaks HTTP/1.1 with one request per connection. A request path that does not begin with `/api/`
 is looked up in a table of the page's files that is read once, at start; no part of such a path
-reaches the file system. Four routes of the API deal with one file outside the store's
+reaches the file system. Three routes of the API deal with one file outside the store's
 directory, [the settings file of an AI application](#the-settings-file-of-an-ai-application):
-two read it and two replace it. Where that file lies is not taken from the request either.
+one reads it and two replace it. Where that file lies is not taken from the request either.
 
 **What every request has to pass**, in this order, before its body is read:
 
@@ -1027,15 +1027,15 @@ Cache-Control: no-store
 Connection: close
 ```
 
-**The routes.** There are 33. `POST` bodies are JSON objects; a field that the route does not
+**The routes.** There are 32. `POST` bodies are JSON objects; a field that the route does not
 know is an error. "Owner mode" marks what is refused with `reauth_required` once ten minutes have
 passed since the passphrase was last given for it; an empty cell means that the route never asks
 for it. While the store is locked, `GET /api/state`, `POST /api/unlock`, `POST /api/lock` and
 `POST /api/interface` do their work and every other route answers 409 `locked`, with two
 exceptions that are answered before that question is asked: `POST /api/store/create` answers 409
 `conflict` because the store exists, and `POST /api/demo/again` answers 404 outside a demo. In a
-run for this page all 33 were called against a locked store: four did their work, two were
-these exceptions, and 27 answered 409 `locked`.
+run for this page all 32 were called against a locked store: four did their work, two were
+these exceptions, and 26 answered 409 `locked`.
 
 | Route | Does | Owner mode |
 | --- | --- | --- |
@@ -1046,7 +1046,7 @@ these exceptions, and 27 answered 409 `locked`.
 | `POST /api/reauth` `{passphrase, scope?}` | Checks the passphrase and begins owner mode anew, and with it the permission of [the trial question](#the-trial-question): `{"owner_mode_until": …, "trial_until": …}`. With `"scope": "trial"` only the trial's permission begins anew and owner mode stays where it was. Any other `scope` is 400, before the passphrase is looked at | |
 | `POST /api/serving` `{kinds?, paused?}` | Chooses which kinds of clients are answered (`hosted`, `local`, `both`) and which clients are paused | For `both`, and for every choice after which a client is answered that was not answered before |
 | `POST /api/verify` | Verifies the record again: `{"verified", "head_seq", "head_hash", "records", "seconds"}` | |
-| `POST /api/interface` `{view?, setup?, language?}` | Keeps the view of the page, its language, or that setting up is finished, in [the interface file](#the-interface-file); answers the state. Nothing of the store changes | |
+| `POST /api/interface` `{view?, setup?, language?}` | Keeps the page to open on, the page's language, or that the first steps are done, in [the interface file](#the-interface-file); answers the state. Nothing of the store changes | |
 | `GET /api/activity?limit=&before=&app=&kind=` | A page of the record, newest first, one sentence per entry | |
 | `GET /api/activity/<seq>` | One entry in full, with the exact text of a release | |
 | `GET /api/approvals` | The passages that wait, each with the text that would be released, and the approvals not yet used | |
@@ -1064,7 +1064,6 @@ these exceptions, and 27 answered 409 `locked`.
 | `POST /api/grants` `{app, collection, mode}` | Sets a grant: `read`, `approve` or `none` | For a new grant, and for `approve` becoming `read` |
 | `POST /api/apps/<name>/limits` | Changes limits of one client; the body is the limits object, `null` for "as the defaults" | For a limit in force that rises |
 | `GET /api/apps/<name>/connect?host=` | The configuration that connects one application under this client's name: text for the owner to copy. It looks at no file of that application | |
-| `POST /api/apps/<name>/connect/check` `{host?}` | Looks into the settings file of one application for this client's entry and answers in one word ([below](#the-look-before-these-routes)). It changes nothing. It is the look of the page of this version, and goes with that page | |
 | `POST /api/connect/<host>/look` | Reads the settings file of one of three applications and answers in fixed words what it holds of this store's entry ([below](#the-settings-file-of-an-ai-application)). It changes nothing. 409 `demo` in a demo | |
 | `POST /api/connect/<host>` `{expect}` | Registers the client of that application and writes the store's entry into its settings file, if the file is in the state `expect`. 409 `changed` when it is not; 409 `demo` in a demo | Always |
 | `POST /api/connect/<host>/remove` `{expect}` | Removes that client and takes the store's entry out of the settings file, if the entry is this store's. An entry that points elsewhere is left. 409 `changed`, 409 `demo` as above | When `expect` is `present` or `present_more` (the file would be changed), and as for `DELETE /api/apps/<name>` |
@@ -1127,8 +1126,8 @@ is taken when it is such an id, and `generic` otherwise.
 question's words finds first, as the text an approval for it would show. No client is involved.
 Nothing is released, nothing is appended to the record, and nothing is counted against a limit.
 It is the one route that returns stored text which was neither released nor asked for by a
-client, so it has a condition of its own, apart from owner mode. The page of this version does
-not call the route yet.
+client, so it has a condition of its own, apart from owner mode. The page calls it from the
+box "Ask your documents" on Home, and from nowhere else.
 
 **The request** is `{"question": text}` and nothing else. After the checks that every request
 has to pass, the session among them, these come in a fixed order, and the first that fails
@@ -1218,9 +1217,11 @@ file and `wdva.gate.hostwrite` the one that writes it.
 | `POST /api/connect/<host>` | `{"expect": state}` | Registers the client and writes the entry into the file, if the file is in the state `expect` |
 | `POST /api/connect/<host>/remove` | `{"expect": state}` | Removes the client and, if the entry in the file is this store's, takes it out |
 
-No page of this version calls these three yet. Its button "Check the file" still asks
-[the look that came before them](#the-look-before-these-routes), which stays until that page
-goes.
+The page calls them from the sheets of the tiles "Claude", "ChatGPT" and "Grok" on Home: the
+look on the press that opens a sheet and on "Look again", the write on "Connect", the removal on
+"Disconnect". An earlier look, `POST /api/apps/<name>/connect/check`, is gone with the page
+that called it: the address is answered 404 like any path the API does not know (and 401
+without the session).
 
 **Which file.** `<host>` is one of three ids, and each has one file:
 
@@ -1260,13 +1261,13 @@ and a body with a field `path` 400.
    is `no_access`.
 4. Beside the file, the two places of its [copies](#the-copies) are looked at (`lstat`); what
    lies there is not read.
-5. The file is read when one of the three routes, or the look before them, is called, and at
-   no other time: not for a configuration, not for the list of clients and its `tiles`, not on
-   a timer.
+5. The file is read when one of the three routes is called, and at no other time: not for a
+   configuration, not for the list of clients and its `tiles`, not on a timer. The page calls
+   them on a press only.
 
 **The look** answers 200 with nineteen fields. It needs the session and an unlocked store, and
 nothing else: no owner mode, because it changes nothing and lets nothing leave the store, and no
-registered client. (The look before it answered only for a client that was registered.)
+registered client. (The look that came before it, and is gone, answered only for a client that was registered.)
 
 | Field | What it is |
 | --- | --- |
@@ -1577,10 +1578,14 @@ of tables and a table below another server, mode 0600; for Grok Build TOML of 21
   another entry. The record verified, with nine entries.
 
 **With a clock the run could move**, the same service behind the same server in the run's own
-process: all 33 routes answered 401 without the session. Against the locked store four did
-their work, one answered 404 and one 409 `conflict` (the two exceptions named with
-[the routes](#the-owners-page)), and 27 answered 409 `locked`, the three routes of this part
-among them; the home was as before. Ten minutes after the passphrase the look was answered
+process: all 33 routes that the version of that day had answered 401 without the session.
+Against the locked store four did their work, one answered 404 and one 409 `conflict` (the two
+exceptions named with [the routes](#the-owners-page)), and 27 answered 409 `locked`, the three
+routes of this part among them; the home was as before. (The 33rd was the earlier look. This
+part of the run was made again without it: 32 routes, all 401 without the session; against the
+locked store four did their work, one answered 404, one 409 `conflict` and 26 409 `locked`, and
+the address of the earlier look was answered 404 with the session and 401 without it.) Ten
+minutes after the passphrase the look was answered
 (`present`), and a connect, a removal of that entry and the registration of a client were
 refused with `reauth_required`; so were the first two after the passphrase had been given for
 the trial alone. The file, its time and its folder were as before, and the record had no entry
@@ -1599,48 +1604,20 @@ for the removal after it, and "you saved the settings without a change" for the 
 whose policy was the one before (a `disconnect-kept` with no client left to remove, and the
 `connect-kept`).
 
-#### The look before these routes
-
-`POST /api/apps/<name>/connect/check` is the look that the page of this version calls, from its
-button "Check the file". It reads the same files through the same reader, for a client that is
-registered, and answers less. It goes when that page goes.
-
-The body is `{}` or `{"host": id}`, with `host` chosen as for a configuration; it knows the
-files of four ids, `codex` among them, and answers `unsupported` for every other id without
-looking at a file. The answer is `{"state", "path", "folder", "open_line", "section"}`, with
-nine words for `state`: `present_more` is given as `present`, `present_as` as `differs`,
-`linked` as `not_read` and `no_access` as `unreadable`. `path` and `folder` are `null` for
-`unsupported`. `section` is given for a JSON file in the state `other`. `open_line` is one shell
-line as text, or `null` for `present`, `no_folder` and `unsupported`. It would open the file in
-the system's text editor, after making it where it is missing, and it never changes a file that
-exists. The app runs none of it, and the page of this version does not show it. On Linux a run
-gave these three forms; on macOS, by the code, `open -e` stands in place of `xdg-open`, and for
-`no_file`, `empty` and a TOML file in the state `other` the line goes on to put the text of the
-configuration on the clipboard with `pbcopy`. No Mac ran it.
-
-```text
-no_file, JSON    f=<path>; [ -e "$f" ] || echo '{}' > "$f"; xdg-open "$f"
-no_file, TOML    f=<path>; [ -e "$f" ] || : > "$f"; xdg-open "$f"
-other states     xdg-open <path>
-```
-
-404 `not_found` when no client has that name, and when `host` is not one of the eleven ids. 400
-`invalid` for a body with another field, and for a client whose name cannot stand in a
-configuration. 409 `locked` while the store is locked. Owner mode is never asked for. This route
-knows no demo: a demo has no pairing, so there every program on the computer can ask it and
-learn its one word about a file in the home directory of the account the demo runs under, and
-the place of that file. The three routes above refuse a demo.
-
-In a run through this route, made before the folders were reached without following a link and
-before Grok Build's file was known, a marker was written into the files as a value, as the
-token of another tool, in a comment and inside the entry itself, and every state was produced
-with real files, except `unsupported` on an older Python and a refusal by the system, which a
-run as root cannot produce. The marker was in none of the 38 answers, a named pipe that nobody
-wrote to was answered `not_read` in about a millisecond, and after the 38 looks the home
-directory held what the run itself had put there and nothing else. For this version the reader
-was also run by itself: with the right entry in a folder that the settings folder was a link
-to, and again with `~/.config` as the link, the route's word was `not_read`, and nothing of the
-file behind the link was read. A version before this one followed such a link.
+**The look before these routes.** Earlier versions had one more route,
+`POST /api/apps/<name>/connect/check`, which read the same files through the same reader for a
+client that was registered, and answered one word. It is gone, and so is the shell line it
+composed. A run through it is still what two figures of this page and of the threat model rest
+on. In that run, made before the folders were reached without following a link and before Grok
+Build's file was known, a marker was written into the files as a value, as the token of another
+tool, in a comment and inside the entry itself, and every state was produced with real files,
+except `unsupported` on an older Python and a refusal by the system, which a run as root cannot
+produce. The marker was in none of the 38 answers, a named pipe that nobody wrote to was
+answered `not_read` in about a millisecond, and after the 38 looks the home directory held what
+the run itself had put there and nothing else. The reader was also run by itself: with the
+right entry in a folder that the settings folder was a link to, and again with `~/.config` as
+the link, nothing of the file behind the link was read. A version before that followed such a
+link.
 
 ### The played app of a demo
 

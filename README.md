@@ -134,16 +134,17 @@ local model can search the vault and read single passages inside limits you set,
 exact text of everything that left. It is not a wall: text that was released to a hosted AI app
 is with that app's provider, and nothing can recall it.
 
-![Home of an unlocked vault, as it looked when it was one page called Basic: the headline "Nothing is waiting for you", the rows under "What left the vault", and under "Documents" and "Apps" one app that is set to "Ask me each time"](docs/images/gate-basic.png)
+![Home of a new vault: a sidebar with Home, Documents, Activity and Settings, and under "Start here" three numbered cards, "Add a document" with the buttons "Choose a file" and "Use a sample document", "Ask your documents" with a box that says "Add a document first.", and "Connect an app" with the four tiles Claude, ChatGPT, Grok and Other app](docs/images/gate-home.png)
 
-You use it in your browser. The page opens on **Home**: what waits for your approval, what left
-the vault, and your apps. **Documents**, **Activity** and **Settings** are beside it in a
-sidebar, and under Settings are six pages with every setting. A new vault opens on Home, after a
-first run in four steps, "Passphrase", "App", "Documents" and "First question": you choose a
-passphrase, say which AI app you use, add a document, and ask that app a first question.
+You use it in your browser, in English or Polish. **Home** shows what waits for your yes, a box
+that asks your documents and shows the one passage an AI app would get, and buttons that connect
+Claude Desktop, ChatGPT (with Codex, which according to OpenAI's documentation reads the same
+settings file) and Grok Build. **Documents** and **Activity** are beside it in a sidebar, and
+**Settings** leads to six pages with every setting. A new vault opens on Home: choose a
+passphrase, add a document, ask it a question, connect an app.
 
-Try the demo. It runs on invented documents and plays an AI app against them, and a guide on its
-page says where the demo is and what you can do next. Locktender runs on macOS and Linux and
+Try the demo. It runs on invented documents and plays an AI app against them, and a card on its
+Home says where the demo is and what you can do next. Locktender runs on macOS and Linux and
 needs Python 3.11 or newer:
 
 ```bash
@@ -157,8 +158,11 @@ wdva gate app --demo
   locked, an app gets one answer: the vault is locked.
 - Meters what apps receive: search results and single passages of at most 800 characters, inside
   limits per app, per kind of app and per document, with your approval passage by passage where
-  you ask for it. The first run asks for it: an app added there is set to "Ask me each time".
+  you ask for it. An app connected from Home is set to "Ask me each time".
 - Records every result with its exact text before it is handed over, and shows it to you.
+- Connects an app for you. "Connect" writes one entry into that app's own settings file, keeps a
+  copy of the file as it was before each change, and changes nothing else in it. Nobody has
+  tried the result with the apps themselves.
 
 **What it does not do**
 
@@ -171,10 +175,12 @@ wdva gate app --demo
   connected](https://support.claude.com/en/articles/13364135), and Claude Code reads files in
   [its working folder](https://code.claude.com/docs/en/permissions) without asking. So a document
   is behind the lock only while its original is in no folder that an AI app can read.
-- Serve assistants on the web or on a phone. And it is a preview: nobody has yet used it by hand
-  on a Mac or in a real conversation with one of the apps, and it has not been audited.
+- Serve assistants on the web or on a phone, or Grok Bot: according to their makers'
+  documentation they work in their makers' clouds. And it is a preview: nobody has yet used it
+  by hand on a Mac or in a real conversation with one of the apps, and it has not been audited.
 
-Installing it, the first run, the two views, connecting each app, daily use and every limit:
+Installing it, the first minutes, Home and Settings, connecting each app, daily use and every
+limit:
 [docs/GATE.md](docs/GATE.md).
 
 ## Python API
@@ -238,7 +244,7 @@ print(AdapterBundle.load("my-adapter.wdva", key=key).summary())  # what the key 
 | `wdva unseal VAULT -o DIR` | Decrypt a vault back to a **plaintext** PEFT directory | core |
 | `wdva rekey VAULT` | Re-encrypt under `--new-key-file` or `--new-passphrase` | core |
 | `wdva destroy-key FILE` | Overwrite and delete a key file (crypto-shredding, with its [limits](docs/THREAT_MODEL.md#crypto-shredding)) | core |
-| `wdva gate app` | Start [Locktender](#locktender-preview); `--demo` runs it on invented documents, `--view basic` or `--view pro` chooses the view. `wdva gate mcp` is the program an AI app starts, `wdva gate config HOST` prints the configuration for one app ([docs/GATE.md](docs/GATE.md#command-reference)) | `gate` |
+| `wdva gate app` | Start [Locktender](#locktender-preview); `--demo` runs it on invented documents, `--view basic` or `--view pro` chooses the page it opens on (Home, or Overview under Settings). `wdva gate mcp` is the program an AI app starts, `wdva gate config HOST` prints the configuration for one app ([docs/GATE.md](docs/GATE.md#command-reference)) | `gate` |
 
 `wdva COMMAND --help` lists every option. **Credentials** come from `--key-file PATH`, from
 `--passphrase` (an interactive prompt), or from the environment: `WDVA_KEY_FILE`, then `WDVA_KEY`
