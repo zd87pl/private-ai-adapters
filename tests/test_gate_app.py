@@ -25,8 +25,9 @@ from urllib.parse import quote
 import pytest
 
 from wdva._version import __version__
-from wdva.gate import brand, hostconfig, messages
+from wdva.gate import brand, hostconfig, hostwrite, messages
 from wdva.gate.app import demo, main
+from wdva.gate.app import service as service_module
 from wdva.gate.app.api import ServiceError
 from wdva.gate.app.demo import DemoAgent, DemoCall, make_demo_store
 from wdva.gate.app.httpd import AppServer
@@ -1311,6 +1312,209 @@ def test_asking_the_played_app_again_over_http(short_store_dir: Path) -> None:
         assert browser.error("GET", "/api/demo/again") == (404, "not_found")
         assert told == [1, 1]
         assert record_and_files(browser) == head
+    finally:
+        server.stop()
+        service.close()
+
+
+def test_connect_over_http(app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The settings file is one this test made, in a home this test owns: no application
+    # read it. That home and the vault lie under the folder for temporary files, where
+    # the writer refuses a command; the rule is tested with the writer, and is taken out
+    # of the way here, like the two checks that depend on what is installed.
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    for variable in ("XDG_CONFIG_HOME", "GROK_HOME", "CODEX_HOME"):
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setattr(hostwrite, "_may_not_last", lambda path: False)
+    monkeypatch.setattr(service_module, "start_problem", lambda: None)
+    ready = {"sdk": True, "version": "2.3.0", "python": True, "message": None}
+    monkeypatch.setattr(hostconfig, "sdk_status", lambda: dict(ready))
+    browser, store = app.browser, app.store
+    host = "claude-desktop"
+    look, write, remove = (
+        f"/api/connect/{host}/look",
+        f"/api/connect/{host}",
+        f"/api/connect/{host}/remove",
+    )
+    posts = [(look, {}), (write, {"expect": "other"}), (remove, {"expect": "present"})]
+    found = hostconfig.settings_file(host)
+    assert found is not None
+    place = found[0]
+    shown = "~/" + str(place.relative_to(home))
+
+    # Each needs the session, and a vault that is unlocked.
+    for path, body in posts:
+        assert browser.error("POST", path, body) == (401, "pairing_required")
+    browser.ok("POST", "/api/session/pair", {"code": app.server.pairing_code})
+    for path, body in posts:
+        assert browser.error("POST", path, body) == (409, "locked")
+    assert not store.exists()
+    assert not home.exists()
+    browser.ok("POST", "/api/store/create", {"passphrase": gs.PASSPHRASE})
+
+    # The tiles come with the list of apps, and name the place of each file.
+    tiles = browser.ok("GET", "/api/apps")["tiles"]
+    assert [tile["tile"] for tile in tiles] == ["claude", "chatgpt", "grok", "custom"]
+    assert (tiles[0]["host"], tiles[0]["path"], tiles[0]["writes"]) == (host, shown, True)
+    assert not home.exists()  # the list looked at nothing
+
+    # The look: what is there, in fixed words. The program was never opened here.
+    answer = browser.ok("POST", look, {})
+    assert (answer["state"], answer["path"], answer["copies"]) == ("no_folder", shown, [])
+    assert answer["app"]["registered"] is False
+    assert browser.ok("POST", look) == answer  # the page may send no body at all
+    assert browser.ok("POST", write, {"expect": "no_file"}) == {
+        "connected": False,
+        "state": "no_folder",
+        "path": shown,
+    }
+    assert not home.exists()  # a folder that is not there is not made
+
+    secret = "sk-MADE-UP-KEY-OF-ANOTHER-TOOL-90817"
+    original = (
+        "{\n"
+        '  "theme": "dark",\n'
+        '  "mcpServers": {\n'
+        f'    "another-tool": {{"command": "tool", "env": {{"TOKEN": "{secret}"}}}}\n'
+        "  }\n"
+        "}\n"
+    ).encode()
+    place.parent.mkdir(parents=True)
+    place.write_bytes(original)
+    long_ago = time.time() - 60
+    os.utime(place, (long_ago, long_ago))
+    seen = len(browser.bodies)
+    answer = browser.ok("POST", look, {})
+    assert (answer["state"], answer["section"], answer["problem"]) == ("other", "filled", None)
+    command = hostconfig.host_command(host, store)
+    assert answer["command"] == command
+
+    # Connect: not in a state the owner was not shown, and then the one entry.
+    head = record_and_files(browser)
+    assert browser.error("POST", write, {"expect": "no_file"}) == (409, "changed")
+    assert browser.error("POST", write, {"expect": "nothing"}) == (400, "invalid")
+    assert browser.error("POST", write, {"expect": "other", "path": str(place)}) == (400, "invalid")
+    assert browser.error("POST", "/api/connect/codex", {"expect": "other"}) == (404, "not_found")
+    assert (record_and_files(browser), place.read_bytes()) == (head, original)
+    answer = browser.ok("POST", write, {"expect": "other"})
+    assert answer == {
+        "connected": True,
+        "state": "present",
+        "path": shown,
+        "copy": shown + hostwrite.FIRST_COPY,
+        "replaced": False,
+        "groups": 1,
+        "app": {
+            "name": host,
+            "registered": True,
+            "paused": False,
+            "last_seen": None,
+            "differs": False,
+            "reads": False,
+        },
+    }
+    written = place.read_bytes()
+    # The new file is the old one with one piece put in, and holds the entry.
+    entry = {"command": command[0], "args": command[1:]}
+    assert json.loads(written)["mcpServers"] == {
+        "another-tool": {"command": "tool", "env": {"TOKEN": secret}},
+        SLUG: entry,
+    }
+    at = next(i for i in range(len(original)) if original[i] != written[i])
+    piece = len(written) - len(original)
+    assert written[:at] + written[at + piece :] == original
+    copy = place.parent / (place.name + hostwrite.FIRST_COPY)
+    assert copy.read_bytes() == original
+    assert copy.stat().st_mode & 0o777 == 0o600
+    assert sorted(item.name for item in place.parent.iterdir()) == [place.name, copy.name]
+    # The vault answers the app now, with "ask me each time" for its one group.
+    (registered,) = browser.ok("GET", "/api/apps")["apps"]
+    assert (registered["name"], registered["destination"], registered["grants"]) == (
+        host,
+        "Anthropic",
+        {"documents": "approve"},
+    )
+    newest = browser.ok("GET", "/api/activity?limit=1")["items"][0]
+    assert newest["summary"].startswith(
+        f"you connected Claude Desktop: {PRODUCT} was about to write its entry into the "
+    )
+    answer = browser.ok("POST", look, {})
+    assert (answer["state"], [c["path"] for c in answer["copies"]]) == (
+        "present",
+        [shown + hostwrite.FIRST_COPY],
+    )
+    # A caller reaches the vault under the name the entry holds, by the path it holds.
+    client = RemoteGate(store, client=host)
+    said = client.status(Caller(host, "claude-ai", "1.2", "2025-11-25", "stdio"))
+    assert said.code == "OK", said.text
+
+    # Disconnect: the entry goes, the app goes, the rest of the file is as it was.
+    assert browser.error("POST", remove, {"expect": "other"}) == (409, "changed")
+    os.utime(place, (long_ago, long_ago))
+    assert browser.ok("POST", remove, {"expect": "present"}) == {
+        "file": "removed",
+        "app_removed": True,
+        "path": shown,
+        "copy": shown + hostwrite.LAST_COPY,
+    }
+    assert place.read_bytes() == original
+    assert (place.parent / (place.name + hostwrite.LAST_COPY)).read_bytes() == written
+    assert copy.read_bytes() == original
+    assert browser.ok("GET", "/api/apps")["apps"] == []
+    assert browser.ok("POST", look, {})["state"] == "other"
+    assert browser.ok("POST", "/api/verify", {})["verified"] is True
+    # In no answer of all this was a byte of what the file held beside the entry.
+    for body in browser.bodies[seen:]:
+        assert secret not in body, "a byte of the file reached an answer"
+        assert "another-tool" not in body
+
+    # Locked again, none of the three answers, and nothing is looked at.
+    browser.ok("POST", "/api/lock", {})
+    for path, body in posts:
+        assert browser.error("POST", path, body) == (409, "locked")
+    assert place.read_bytes() == original
+
+
+def test_a_demo_refuses_the_settings_files_over_http(
+    short_store_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    for variable in ("XDG_CONFIG_HOME", "GROK_HOME", "CODEX_HOME"):
+        monkeypatch.delenv(variable, raising=False)
+    passphrase = make_demo_store(short_store_dir, scrypt_n=gs.FAST_SCRYPT)
+    service = GateService(short_store_dir, demo=True, demo_passphrase=passphrase)
+    server = AppServer(service, port=0, pairing=False, version=__version__, demo=True)
+    server.start()
+    try:
+        browser = Browser(server.port)
+        browser.ok("GET", "/api/session")  # a demo hands its session to whoever asks
+        browser.ok("POST", "/api/unlock", {"passphrase": passphrase})
+        found = hostconfig.settings_file("claude-desktop")
+        assert found is not None
+        place = found[0]
+        place.parent.mkdir(parents=True)
+        place.write_text('{"apiKey": "sk-MADE-UP-90817"}', encoding="utf-8")
+        before = (place.read_bytes(), place.stat().st_mtime_ns, sorted(home.rglob("*")))
+        head = record_and_files(browser)
+        for host in hostwrite.WRITABLE:
+            for path, body in (
+                (f"/api/connect/{host}/look", {}),
+                (f"/api/connect/{host}", {"expect": "other"}),
+                (f"/api/connect/{host}/remove", {"expect": "other"}),
+            ):
+                status, answer = browser.call("POST", path, body)
+                assert (status, answer) == (
+                    409,
+                    {"error": {"code": "demo", "message": "A demo's vault cannot be connected."}},
+                )
+        assert (place.read_bytes(), place.stat().st_mtime_ns, sorted(home.rglob("*"))) == before
+        assert record_and_files(browser) == head
+        # Whoever asks a demo is told which programs the tiles stand for, and no place.
+        tiles = browser.ok("GET", "/api/apps")["tiles"]
+        assert [tile["path"] for tile in tiles] == [None, None, None, None]
+        assert not [body for body in browser.bodies if str(home) in body or "Claude/" in body]
     finally:
         server.stop()
         service.close()

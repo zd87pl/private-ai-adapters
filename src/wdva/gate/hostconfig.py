@@ -60,6 +60,7 @@ __all__ = [
     "KnownHost",
     "Tile",
     "check_client_name",
+    "desktop_app",
     "host_command",
     "install_line",
     "known_host",
@@ -449,6 +450,18 @@ def known_host(host: str) -> KnownHost:
     raise ValueError(
         f"{str(host)[:40]!r} is not an application {brand.PRODUCT} knows; choose from {known}"
     )
+
+
+def desktop_app(host: str) -> bool:
+    """Whether the application ``host`` is a desktop app, which reads its settings when it starts.
+
+    Such an app has to be quit and opened again after its settings changed; a
+    program in a terminal reads them at the start of each session. False for an
+    id that has no form. This is what the application's documentation says,
+    not something that was tried.
+    """
+    after = _AFTER.get(host)
+    return after is not None and after[2]
 
 
 def check_client_name(client: str) -> str:

@@ -506,6 +506,22 @@ def test_the_plain_note_names_no_page_and_the_note_with_the_address_stays() -> N
         assert (config.plain_note, config.after) == (None, None)
 
 
+def test_which_applications_are_desktop_apps_is_said_in_one_word() -> None:
+    # The word a page needs to choose between "quit it and open it again" and "start a new
+    # session": the same one the text to copy carries, for every application that has a form.
+    for host in LOCAL:
+        after = render(host, client="a", store=PLAIN).after
+        assert after is not None
+        assert hostconfig.desktop_app(host) is after["desktop"]
+    assert [host for host in LOCAL if hostconfig.desktop_app(host)] == [
+        "claude-desktop",
+        "chatgpt-desktop",
+    ]
+    # A product that cannot be connected, and a name that is none, are no desktop app.
+    for host in (*WEB_ONLY, "netscape", "", "Claude-Desktop"):
+        assert hostconfig.desktop_app(host) is False
+
+
 def test_what_to_do_in_the_application_afterwards_is_said_for_each() -> None:
     told = {host: render(host, client="a", store=PLAIN).after for host in LOCAL}
     assert told == {

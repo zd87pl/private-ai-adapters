@@ -319,6 +319,16 @@ _ROUTES: tuple[_Route, ...] = (
     _Route("POST", "apps/<name>/limits", "set_app_limits", whole_body="limits"),
     _Route("GET", "apps/<name>/connect", "connect", query=(_text("host"),)),
     _Route("POST", "apps/<name>/connect/check", "connect_check", fields=(_text("host"),)),
+    # The settings file of one of three applications. The address names the application
+    # and nothing else: no request carries a path.
+    _Route("POST", "connect/<host>/look", "connect_look"),
+    _Route("POST", "connect/<host>", "connect_write", fields=(_text("expect", required=True),)),
+    _Route(
+        "POST",
+        "connect/<host>/remove",
+        "connect_remove",
+        fields=(_text("expect", required=True),),
+    ),
     _Route("GET", "settings", "settings"),
     _Route(
         "POST",

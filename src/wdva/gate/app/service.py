@@ -15,11 +15,13 @@ app has beyond the store itself:
   owner may make changes that let more leave: register an app, grant a
   collection, open a collection to hosted apps, show titles, raise a limit,
   answer both kinds of apps at once, answer an app again that was not being
-  answered. After that such a change is refused until the passphrase is
-  entered again. Changes that only take away, approvals of single passages,
-  adding and removing documents and locking are never held up by this. The
-  owner's trial question has a permission of its own with the same ten
-  minutes; entering the passphrase for it does not open owner mode.
+  answered; and have the app write its entry into the settings file of an
+  agent application, or take it out. After that such a change is refused
+  until the passphrase is entered again. Changes that only take away,
+  approvals of single passages, adding and removing documents and locking
+  are never held up by this. The owner's trial question has a permission of
+  its own with the same ten minutes; entering the passphrase for it does not
+  open owner mode.
 * **Which apps are answered.** Every registered app is, unless the owner
   paused it in this session. When hosted and local apps are both registered,
   only the hosted ones are answered until the owner has chosen. Which apps
@@ -41,6 +43,20 @@ app has beyond the store itself:
   by a clock of its own, a session gets at most :data:`TRIAL_PER_MINUTE`
   answers in a minute, and the session counts its questions where the state
   shows the number.
+* **The settings file of an agent application.** For three applications the
+  app can do what the owner otherwise does by hand: put the entry that
+  starts this vault's program into the application's own settings file, or
+  take it out (:meth:`GateService.connect_write`,
+  :meth:`GateService.connect_remove`), after a look that changes nothing
+  (:meth:`GateService.connect_look`). The file is read and written by
+  :mod:`wdva.gate.hostwrite`, by its rules; the service decides who may ask,
+  registers or removes the app in the same step, and writes the record
+  first: one ``policy`` record that says what was about to be done, also
+  where the settings themselves did not change. The service's lock is held
+  only while the record is written and the file is put in place, never while
+  a file of another program is read or prepared, so that a folder that
+  answers slowly cannot keep the vault from locking. A demo refuses all
+  three.
 * **Which view the owner uses.** Three words about the interface, kept in a
   small file beside the vault that is not sealed (``run/interface.json``):
   which of its two views the owner uses, whether setting up was finished,
@@ -72,7 +88,7 @@ import tempfile
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path, PurePosixPath
@@ -82,7 +98,7 @@ from wdva import vault
 from wdva._util import strict_json_loads
 from wdva._version import __version__
 from wdva.errors import WDVAError, WrongKeyError
-from wdva.gate import brand, extract, hostcheck, hostconfig, messages, paths
+from wdva.gate import brand, extract, hostcheck, hostconfig, hostwrite, messages, paths
 from wdva.gate.app.api import JSONObject, ServiceError
 from wdva.gate.app.startcheck import start_problem
 from wdva.gate.core import (
@@ -153,7 +169,8 @@ __all__ = [
 ]
 
 OWNER_MODE = timedelta(minutes=10)
-"""How long after the passphrase was entered a change that lets more leave is accepted.
+"""How long after the passphrase was entered a change that lets more leave, and a write into
+another program's settings file, are accepted.
 
 A trial question is accepted for the same span, by its own clock: see
 :meth:`GateService.reauth`.
@@ -232,6 +249,41 @@ _UNUSABLE_NAME = (
     "starting with a letter. Register the app again under such a name."
 )
 
+# The states of a settings file in which "Connect" may be pressed: what the owner was shown.
+_CONNECT_EXPECT = (
+    "no_file",
+    "empty",
+    "other",
+    "differs",
+    "present_as",
+    "present",
+    "present_more",
+)
+_OURS = ("present", "present_more")  # the entry is there and is this vault's
+_AN_ENTRY = (*_OURS, "differs", "present_as")  # an entry under the product's name is there
+_NO_ENTRY = ("other", "empty", "no_file", "no_folder")  # the file could be told to hold none
+_NO_CHANGE = "you saved the settings without a change"
+_FIRST_GROUP = "documents"  # the group a connect makes for a vault that has none
+_UNWRITABLE_COMMAND = (
+    "The place of the vault or of its Python cannot be written into a settings file."
+)
+_TILE_LABELS = {tile.host: tile.label for tile in hostconfig.TILES}
+# What a ``policy`` record says in the activity list when its ``by`` names a settings file
+# of another program. The record is written before the file is changed, so the words of a
+# change say "was about to", never "wrote".
+_OUTSIDE_WORDS = {
+    "connect": (
+        "you connected {label}: {product} was about to write its entry into the settings file"
+    ),
+    "connect-kept": "you connected {label}: its settings file had the entry already",
+    "disconnect": (
+        "you disconnected {label}: {product} was about to remove its entry from the settings file"
+    ),
+    "disconnect-kept": "you disconnected {label}: its settings file was not changed",
+    "connect-failed": "{product} did not finish changing the settings file of {label}",
+    "disconnect-failed": "{product} did not finish changing the settings file of {label}",
+}
+
 _F = TypeVar("_F", bound=Callable[..., Any])
 
 
@@ -254,6 +306,12 @@ def _locked() -> ServiceError:
 
 def _unavailable(message: str) -> ServiceError:
     return ServiceError(503, "unavailable", message)
+
+
+def _file_changed() -> ServiceError:
+    return ServiceError(
+        409, "changed", "The settings file is not as it was shown. Look again before you go on."
+    )
 
 
 def _sentence(text: str) -> str:
@@ -501,7 +559,8 @@ def _policy_changes(
 ) -> list[tuple[str, tuple[str, ...]]]:
     """What changed between two policies, as sentences about the owner, with their collections.
 
-    The strings listed for replacement are counted, never quoted.
+    The strings listed for replacement are counted, never quoted. An empty
+    list for two policies that differ in nothing but their serial number.
     """
     if old is None:
         return [("you started with the default limits: no app is answered yet", ())]
@@ -566,7 +625,34 @@ def _policy_changes(
             changes.append((f"you added {added:,} words that are replaced", ()))
         else:
             changes.append(("you changed the words that are replaced", ()))
-    return changes or [("you saved the settings without a change", ())]
+    return changes
+
+
+def _outside(by: Any) -> tuple[str, str] | None:
+    """For a ``policy`` record that stands for a settings file of another program: what and whose.
+
+    ``by`` is what the record says made it. Returns the action (a key of
+    ``_OUTSIDE_WORDS``) and the application, or ``None`` for every record that
+    is a change of the settings and nothing else.
+    """
+    if not isinstance(by, str):
+        return None
+    action, colon, host = by.partition(":")
+    if not colon or action not in _OUTSIDE_WORDS or host not in hostwrite.WRITABLE:
+        return None
+    return (action, host) if host in _TILE_LABELS else None
+
+
+def _settings_file_shown(host: str) -> str | None:
+    """Where the settings file of ``host`` lies for this run of the app, as an owner reads it.
+
+    The record holds no path: this is the place the app would look at now.
+    """
+    try:
+        place = hostconfig.settings_place(host)
+    except ValueError:
+        return None
+    return None if place is None else hostconfig.shown_path(place[0])
 
 
 class _Feed:
@@ -732,8 +818,13 @@ class _Feed:
         approved = data.get("rule") == "approval"
         ref: str | None = None
         details: list[tuple[str, str]] = []
+        # The same facts as the sentence, as fields: a page that words the entry in another
+        # language reads these. ``results`` is ``None`` where the record does not say.
+        title: str | None = None
+        passage: int | None = None
+        results: int | None = None
         if tool == "search":
-            shown = _whole(data.get("lines"))
+            shown = results = _whole(data.get("lines"))
             text = str(data.get("text") or "")
             where = _listing(collections) or "without a collection it may see"
             if shown is None:
@@ -753,13 +844,16 @@ class _Feed:
             else:
                 words, details, _ = self._passage(ref, data.get("passage"), data.get("passages"))
                 summary = f"read {words}"
+                known = self._documents.get(ref.partition(".")[0])
+                title = None if known is None else known.title
+                passage = _whole(data.get("passage")) or int(ref.rpartition(".")[2])
         replaced = _whole(data.get("replaced"))
         if replaced:
             details.append(("words replaced", f"{replaced:,}"))
         left = _whole(data.get("left"))
         if left is not None:
             details.append(("left for this app then", f"{left:,} characters"))
-        return self._item(
+        item = self._item(
             data,
             kind="release",
             summary=summary,
@@ -774,6 +868,8 @@ class _Feed:
             approved=approved,
             details=details,
         )
+        item.update(title=title, passage=passage, results=results)
+        return item
 
     def _denial(self, data: Mapping[str, Any]) -> dict[str, Any]:
         client = str(data.get("client"))
@@ -882,18 +978,36 @@ class _Feed:
         )
 
     def _policy_change(self, data: Mapping[str, Any]) -> dict[str, Any]:
+        """A ``policy`` record: a change of the settings, or a press on "Connect" or "Disconnect".
+
+        A record of the second kind says first what was about to be done to
+        the settings file of another program, and then how many changes of
+        the settings came with it; there may be none.
+        """
         new = _mapping(data.get("policy"))
         changes = _policy_changes(self._policy, new)
         self._policy = new
-        summary = changes[0][0]
-        if len(changes) > 1:
-            summary += f" and made {_count(len(changes) - 1, 'more change')}"
+        outside = _outside(data.get("by"))
+        if outside is None:
+            changes = changes or [(_NO_CHANGE, ())]
+            summary, more = changes[0][0], len(changes) - 1
+            listed = changes if more else []
+        else:
+            action, host = outside
+            summary = _OUTSIDE_WORDS[action].format(label=_TILE_LABELS[host], product=brand.PRODUCT)
+            more, listed = len(changes), changes
+        if more:
+            summary += f" and made {_count(more, 'more change')}"
         collections: list[str] = []
         for _, names in changes:
             collections.extend(name for name in names if name not in collections)
         details: list[tuple[str, str]] = []
-        if len(changes) > 1:
-            details.append(("changes", "; ".join(text[4:] for text, _ in changes)))
+        if listed:
+            details.append(("changes", "; ".join(text[4:] for text, _ in listed)))
+        if outside is not None:
+            place = _settings_file_shown(outside[1])
+            if place is not None:
+                details.append(("settings file", place))
         serial = _whole(data.get("serial"))
         if serial is not None:
             details.append(("settings, version", f"{serial:,}"))
@@ -1292,14 +1406,24 @@ class GateService:
         )
         session.gate.set_served(answered)
 
-    def _change(self, session: _Session, new: Policy) -> Policy:
-        """Put a changed policy in force. One that lets more leave needs owner mode."""
+    def _change(
+        self, session: _Session, new: Policy, *, by: str = "owner", always: bool = False
+    ) -> Policy:
+        """Put a changed policy in force. One that lets more leave needs owner mode.
+
+        ``by`` is recorded as what made the change. A policy that changes
+        nothing writes no record, unless ``always`` asks for one: the record
+        then says that something was done, or about to be done, outside the
+        settings (see :meth:`connect_write`), and the settings in it are the
+        ones that were in force.
+        """
         old = session.gate.policy()
         if new.with_serial(old.serial) == old:
-            return old
-        if widens(old, new) or self._answers_more(session, new, session.kinds, session.paused):
+            if not always:
+                return old
+        elif widens(old, new) or self._answers_more(session, new, session.kinds, session.paused):
             self._owner(session)
-        stored = session.gate.set_policy(new)
+        stored = session.gate.set_policy(new, by=by)
         self._apply_serving(session, stored)
         return stored
 
@@ -1711,8 +1835,9 @@ class GateService:
         """Check the passphrase again; what needs it is then accepted for a while.
 
         Without ``scope`` this begins owner mode anew, and with it the trial's
-        permission: changes that let more leave and trial questions are
-        accepted for ten minutes. With ``scope="trial"`` only the trial's
+        permission: changes that let more leave, a write into another
+        program's settings file and trial questions are accepted for ten
+        minutes. With ``scope="trial"`` only the trial's
         permission begins anew and owner mode stays where it was, so that the
         passphrase entered for a question does not open ten minutes in which
         a widening change goes through. No other scope exists. The answer
@@ -2241,9 +2366,46 @@ class GateService:
         if not isinstance(name, str) or name not in policy.clients:
             raise _not_found("There is no app of that name.")
 
+    def _tiles(self) -> list[dict[str, Any]]:
+        """The four tiles a page offers to connect, and what each stands for.
+
+        ``writes`` says whether a press on the tile can write a settings file
+        here: the application is one of the three, the place of its file is
+        known, and its format can be read by this Python. ``path`` is that
+        place as an owner reads it. A demo names no place: it has no pairing,
+        and a place can say where a variable of the account points. No file is
+        looked at for any of this.
+        """
+        tiles: list[dict[str, Any]] = []
+        for tile in hostconfig.TILES:
+            known = hostconfig.known_host(tile.host)
+            place = None
+            if tile.host in hostwrite.WRITABLE:
+                place = hostconfig.settings_place(tile.host)
+            readable = place is not None and (
+                place[1] != "toml" or hostcheck._toml_loads() is not None
+            )
+            shown = None
+            if place is not None and not self._demo:
+                shown = hostconfig.shown_path(place[0])
+            tiles.append(
+                {
+                    "tile": tile.tile,
+                    "host": tile.host,
+                    "label": tile.label,
+                    "readers": list(tile.readers),
+                    "name": known.name,
+                    "destination": known.destination,
+                    "writes": readable,
+                    "desktop": hostconfig.desktop_app(tile.host),
+                    "path": shown,
+                }
+            )
+        return tiles
+
     @_translated
     def apps(self) -> JSONObject:
-        """The registered apps with their grants, limits and use."""
+        """The registered apps with their grants, limits and use, and the tiles to connect one."""
         session = self._unlocked()
         policy = session.gate.policy()
         usage = session.gate.usage()
@@ -2267,6 +2429,7 @@ class GateService:
                 for name, entry in policy.collections.items()
             ],
             "known": [host.as_dict() for host in hostconfig.KNOWN_HOSTS],
+            "tiles": self._tiles(),
         }
 
     @_translated
@@ -2386,7 +2549,12 @@ class GateService:
         return out
 
     def _start_problem(self) -> str | None:
-        """What keeps the command of a configuration from starting; tried once per app run."""
+        """What keeps the command of a configuration from starting, as it was last found.
+
+        For the text to copy it is tried once per run of the app. A press on
+        "Connect" tries anew each time (:meth:`connect_write`), and what it
+        finds is what this answers from then on.
+        """
         checked = self._start_checked
         if checked is None:
             checked = self._start_checked = (start_problem(),)
@@ -2405,11 +2573,13 @@ class GateService:
     def connect_check(self, *, name: str, host: str | None = None) -> JSONObject:
         """Look at the settings file of one agent application for this app's entry.
 
-        The one call that reads a file outside the vault's folder: one file,
-        whose place is fixed by the application and this computer, read when
-        this is called and at no other time. The answer says in one word what
-        was found and holds nothing from the file. Nothing is changed, here or
-        there, so it needs no owner mode.
+        The look that came before :meth:`connect_look`, for an app that is
+        registered; it stays for the page that still calls it. It reads one
+        file outside the vault's folder, whose place is fixed by the
+        application and this computer, when this is called and at no other
+        time. The answer says in one word what was found and holds nothing
+        from the file. Nothing is changed, here or there, so it needs no owner
+        mode.
         """
         session = self._unlocked()
         self._registered(session.gate.policy(), name)
@@ -2418,6 +2588,369 @@ class GateService:
             return hostcheck.check(chosen, client=name, store=self._path)
         except ValueError:
             raise _invalid(_UNUSABLE_NAME) from None
+
+    # -- the settings file of an agent application ----------------------------------------
+
+    @staticmethod
+    def _writable(host: str) -> hostconfig.KnownHost:
+        """The application behind one of the tiles that write. 404 for every other id."""
+        if not isinstance(host, str) or host not in hostwrite.WRITABLE:
+            raise _not_found("There is no application of that kind to connect.")
+        return hostconfig.known_host(host)
+
+    def _not_a_demo(self) -> None:
+        """Refuse what deals with a settings file in a demo, before any file is looked at."""
+        if self._demo:
+            raise ServiceError(409, "demo", "A demo's vault cannot be connected.")
+
+    @staticmethod
+    def _group_names(session: _Session, policy: Policy) -> list[str]:
+        """The groups of the vault: those of the settings, then those that only hold a document."""
+        names = list(policy.collections)
+        held = {entry.collection for entry in session.gate.documents()}
+        names.extend(sorted(held - set(names)))
+        return names
+
+    @staticmethod
+    def _other_kind(policy: Policy, known: hostconfig.KnownHost) -> bool:
+        """Whether the tile's name is registered as something the tile does not stand for.
+
+        That is an app whose model runs on this computer, or one that sends
+        its text to another receiver than the tile's. A press on a tile never
+        changes what kind of app a name is.
+        """
+        entry = policy.clients.get(known.name)
+        return entry is not None and (not entry.hosted or entry.destination != known.destination)
+
+    def _connect_policy(
+        self, session: _Session, policy: Policy, known: hostconfig.KnownHost
+    ) -> Policy:
+        """The settings a connect of ``known`` puts in force, built from ``policy``.
+
+        The app is registered under the tile's name if it is not yet. A vault
+        without a group gets the group ``documents``. In a vault with one
+        group that group is opened to apps that send text to a provider, and
+        the app gets "ask me each time" for it unless it is answered for that
+        group already: a grant in force is left as it is, also "can read". In
+        a vault with several groups no group and no grant is touched. A pause
+        is never touched. Raises what registering an app raises.
+        """
+        name = known.name
+        new = policy
+        if name not in new.clients:
+            new = new.with_client(name, hosted=True, destination=known.destination)
+        groups = self._group_names(session, policy)
+        if len(groups) > 1:
+            return new
+        group = groups[0] if groups else _FIRST_GROUP
+        entry = new.collections.get(group)
+        if entry is None or not entry.allow_hosted:
+            new = new.with_collection(group, allow_hosted=True)
+        if new.effective_grant(name, group) is None:
+            new = new.with_grant(name, group, MODE_APPROVE)
+        return new
+
+    def _tile_app(
+        self, session: _Session, policy: Policy, known: hostconfig.KnownHost
+    ) -> JSONObject:
+        """What the vault says of the app a tile stands for. Call with the lock held."""
+        name = known.name
+        registered = name in policy.clients
+        last_seen = None
+        if registered:
+            used = session.gate.usage().clients.get(name)
+            if used is not None and used.last_call is not None:
+                said = " ".join(p for p in (used.claimed_name, used.claimed_version) if p)
+                last_seen = {"time": _iso(used.last_call), "claimed": said or None}
+        return {
+            "name": name,
+            "registered": registered,
+            "paused": name in session.paused,
+            "last_seen": last_seen,
+            "differs": self._other_kind(policy, known),
+            "reads": MODE_READ in policy.effective_grants(name).values(),
+        }
+
+    @_translated
+    def connect_look(self, *, host: str) -> JSONObject:
+        """What one application's settings file holds of this vault's entry, in fixed words.
+
+        ``host`` is one of the three applications whose settings file the app
+        writes. The file is read, at its fixed place, and the two places of
+        its kept copies are looked at; nothing is changed, here or there, so
+        this needs no owner mode. It needs no registered app either.
+
+        The answer is what :func:`wdva.gate.hostwrite.look` returns (a word
+        for what was found, a word for what would keep the entry from being
+        written, the places, the command the entry holds or would hold, the
+        copies that lie beside the file) and three things of the vault:
+        ``app`` (whether the tile's name is registered, paused, when it last
+        called, whether it is registered as another kind of app than the
+        tile's, whether it may read without asking), ``groups`` (how many
+        groups the vault has) and ``answered_change`` (a connect would leave
+        apps on this computer without an answer until the owner chooses).
+        Nothing of what the file holds is in it. A demo is refused before any
+        file is looked at.
+        """
+        known = self._writable(host)
+        session = self._unlocked()
+        self._not_a_demo()
+        try:
+            # Without the lock: a folder that answers slowly must not keep the vault from locking.
+            answer = hostwrite.look(host, client=known.name, store=self._path)
+        except ValueError:
+            raise _invalid(_UNWRITABLE_COMMAND) from None
+        with self._lock:
+            policy = session.gate.policy()
+            ahead = False
+            if not self._other_kind(policy, known):
+                with contextlib.suppress(PolicyError):
+                    new = self._connect_policy(session, policy, known)
+                    answered = self._serving(new, session.kinds, session.paused)[2]
+                    ahead = bool(set(session.gate.served()) - set(answered))
+            answer.update(
+                app=self._tile_app(session, policy, known),
+                groups=len(self._group_names(session, policy)),
+                answered_change=ahead,
+            )
+        return answer
+
+    def _outside_section(
+        self,
+        session: _Session,
+        known: hostconfig.KnownHost,
+        *,
+        owner: bool,
+        serial: int,
+        new: Policy | None = None,
+    ) -> tuple[hostwrite.Section, dict[str, Any]]:
+        """What the writer is handed as ``section``, and what its records came to.
+
+        Entering the section takes the service's lock, the one that locking
+        takes, and holds it for the few steps in which the record is written
+        and the file is put in place. Before this call has recorded anything
+        it checks, in this order: the session is still the one the request
+        began in (409 ``locked``); owner mode is on, where ``owner`` says the
+        request needs it (403); the settings in force are still those with
+        the serial number ``serial`` (409 ``changed``). Once this call has
+        recorded, only the session is checked: what follows is saying that a
+        change did not happen, which needs no permission.
+
+        Entered, it yields ``record(action)``:
+
+        * ``connect``, ``connect-kept``: put ``new`` in force. What the vault
+          then says of the app, and how many groups it has, is noted for the
+          answer (``app``, ``groups``): the answer of a connect says how
+          things stood when it was recorded, also when the vault locks right
+          after it.
+        * ``connect-failed``: put back the settings that were in force before
+          this call, if nothing changed them since; else append a record with
+          the settings as they are. ``kept`` is then true while the app this
+          call was for is still registered.
+        * ``disconnect``, ``disconnect-kept``: take the app of the tile's name
+          out of the settings, if it is registered (``removed``).
+        * ``disconnect-failed``: append a record with the settings as they
+          are. The app stays removed.
+
+        Every record is one ``policy`` record whose ``by`` is the action and
+        the application's id, also where the settings did not change.
+        """
+        host, name = known.id, known.name
+        told: dict[str, Any] = {"kept": False, "removed": False}
+        # The settings before this call's connect, and those the connect put in force.
+        mine: list[Policy] = []
+        recorded: list[str] = []
+
+        def record(action: str) -> None:
+            by = f"{action}:{host}"
+            policy = session.gate.policy()
+            if action in ("connect", "connect-kept"):
+                if new is None:
+                    raise ValueError("a connect needs the settings it puts in force")
+                mine[:] = [policy, self._change(session, new, by=by, always=True)]
+                told["groups"] = len(self._group_names(session, mine[1]))
+                told["app"] = self._tile_app(session, mine[1], known)
+            elif action == "connect-failed":
+                if mine and policy.serial == mine[1].serial:
+                    # Putting back what was in force a moment ago asks for no owner mode.
+                    stored = session.gate.set_policy(mine[0], by=by)
+                    self._apply_serving(session, stored)
+                else:
+                    self._change(session, policy, by=by, always=True)
+                    told["kept"] = name in policy.clients
+            elif action in ("disconnect", "disconnect-kept") and name in policy.clients:
+                self._change(session, policy.without_client(name), by=by, always=True)
+                told["removed"] = True
+            else:
+                self._change(session, policy, by=by, always=True)
+            recorded.append(action)
+
+        @contextlib.contextmanager
+        def section() -> Iterator[Callable[[str], None]]:
+            with self._lock:
+                if self._current() is not session:
+                    raise _locked()
+                if not recorded:
+                    if owner:
+                        self._owner(session)
+                    if session.gate.policy().serial != serial:
+                        raise ServiceError(
+                            409, "changed", "The vault's settings changed meanwhile. Look again."
+                        )
+                yield record
+
+        return section, told
+
+    @_translated
+    def connect_write(self, *, host: str, expect: str) -> JSONObject:
+        """Connect one application: register it, write the vault's entry into its settings file.
+
+        ``expect`` is the state of the file the owner was shown
+        (:meth:`connect_look`). The checks come in a fixed order and the
+        first that fails answers: ``expect`` is a state in which a connect
+        can be pressed (400); ``host`` is one of the three applications
+        (404); the vault is unlocked (409 ``locked``); this is no demo (409
+        ``demo``); **owner mode is on, always** (403 ``reauth_required``): the
+        press writes a file of another program, whatever it changes in the
+        vault. Then, answered with ``{"connected": False, "state": ...}``: no
+        app of the tile's name is registered as another kind
+        (``other_kind``); the new settings can be built (else the error that
+        registering an app gives); an app could connect here, with the start
+        check run at this press (``not_ready``). None of these looks at a
+        settings file.
+
+        Then :func:`wdva.gate.hostwrite.connect` does the rest, by its rules.
+        The service's lock is not held while it looks, prepares and reads
+        back, only for the steps in which the record is written and the file
+        is put in place (:meth:`_outside_section`). The record comes first:
+        one ``policy`` record with ``by`` ``connect:<host>`` puts the new
+        settings in force (the app under the tile's name; for a vault with at
+        most one group, that group opened to apps that send text to a
+        provider and "ask me each time" for it; nothing for several groups).
+        If the file is then not changed, a second record puts the settings
+        back as they were.
+
+        Returns ``{"connected": True, "state", "path", "copy", "replaced",
+        "groups", "app"}``, or ``{"connected": False, "state": word, ...}`` with
+        the vault and the file as they were (``"kept": True`` where the app
+        stayed registered although the file does not hold the entry). A file
+        that is not in the state ``expect``, or is another one by the time it
+        would be replaced, is answered 409 ``changed``.
+        """
+        if expect not in _CONNECT_EXPECT:
+            raise _invalid("Say which state of the settings file you were shown.")
+        known = self._writable(host)
+        session = self._unlocked()
+        self._not_a_demo()
+        name = known.name
+        with self._lock:
+            self._owner(session)
+            policy = session.gate.policy()
+            if self._other_kind(policy, known):
+                return {"connected": False, "state": "other_kind"}
+            new = self._connect_policy(session, policy, known)
+            registered = tuple(policy.clients)
+        # Without the lock from here on: a program is started, and files are looked at.
+        if hostconfig.sdk_status()["message"] is not None:
+            return {"connected": False, "state": "not_ready"}
+        problem = start_problem()  # at each press: what started an hour ago may not start now
+        self._start_checked = (problem,)
+        if problem is not None:
+            return {"connected": False, "state": "not_ready"}
+        section, told = self._outside_section(
+            session, known, owner=True, serial=policy.serial, new=new
+        )
+        try:
+            answer = hostwrite.connect(
+                host,
+                client=name,
+                store=self._path,
+                expect=expect,
+                section=section,
+                registered=registered,
+            )
+        except ValueError:
+            raise _invalid(_UNWRITABLE_COMMAND) from None
+        if answer["state"] == "changed":
+            raise _file_changed()
+        if not answer["connected"]:
+            if told["kept"] and answer["state"] == "failed":
+                answer["kept"] = True
+            return answer
+        answer.update(groups=told["groups"], app=told["app"])
+        return answer
+
+    @_translated
+    def connect_remove(self, *, host: str, expect: str) -> JSONObject:
+        """Disconnect one application: stop answering it, take the vault's entry out of its file.
+
+        ``expect`` is the state of the file the owner was shown; any state a
+        look can find. The file is changed only for ``present`` and
+        ``present_more``, the two states in which the entry is this vault's:
+        the entry is removed and nothing else. An entry that points elsewhere
+        is left, and so is a file in every other state. In each case the app
+        of the tile's name is taken out of the vault if it is registered, and
+        one ``policy`` record says so (``by`` ``disconnect:<host>`` where the
+        file was about to be changed, ``disconnect-kept:<host>`` where it was
+        left). With neither an entry nor a registered app nothing is recorded.
+
+        Owner mode is needed when the file would be changed, and when
+        removing the app makes apps answered that are not answered now (the
+        rule of :meth:`remove_app`); it is checked before any file is looked
+        at. Otherwise the call only takes away.
+
+        Returns ``{"file": word, "app_removed": ..., "path", "copy"}``.
+        ``file`` is ``removed``, ``differs`` (an entry that points elsewhere
+        was left), ``no_entry``, or the word for why the file was left. A file
+        that is not in the state ``expect`` is answered 409 ``changed``, and
+        nothing is changed then, in the vault or outside.
+        """
+        if expect not in hostcheck.STATES:
+            raise _invalid("Say which state of the settings file you were shown.")
+        known = self._writable(host)
+        session = self._unlocked()
+        self._not_a_demo()
+        name = known.name
+        with self._lock:
+            policy = session.gate.policy()
+            registered = name in policy.clients
+            owner = expect in _OURS or (
+                registered
+                and self._answers_more(
+                    session, policy.without_client(name), session.kinds, session.paused
+                )
+            )
+            if owner:
+                self._owner(session)
+        try:
+            if not registered:
+                # Nothing to take out of the vault: the writer is called only for an entry.
+                found = hostwrite.look(host, client=name, store=self._path)
+                state = found["state"]
+                if self._current() is not session:
+                    raise _locked()  # the vault locked while the file was looked at
+                if state != expect:
+                    raise _file_changed()
+                if state not in _AN_ENTRY:
+                    return {
+                        "file": "no_entry" if state in _NO_ENTRY else state,
+                        "app_removed": False,
+                        "path": found["path"],
+                        "copy": None,
+                    }
+            section, told = self._outside_section(session, known, owner=owner, serial=policy.serial)
+            answer = hostwrite.disconnect(
+                host, client=name, store=self._path, expect=expect, section=section
+            )
+        except ValueError:
+            raise _invalid(_UNWRITABLE_COMMAND) from None
+        if answer["file"] == "changed":
+            raise _file_changed()
+        return {
+            "file": answer["file"],
+            "app_removed": told["removed"],
+            **{key: value for key, value in answer.items() if key != "file"},
+        }
 
     # -- the demo -----------------------------------------------------------------------
 

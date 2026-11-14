@@ -537,7 +537,7 @@ does not verify. The others are written for the owner and are not checked.
 | `kind` | Written when | Checked fields | Other fields |
 | --- | --- | --- | --- |
 | `init` | The store is created. Always entry 1, and only entry 1 | `store_id`: the id in the key slot | |
-| `policy` | A policy comes into force | `serial`: larger than the one before and equal to `policy.serial`; `policy`: the object; `by`: what made the change (`init`, `owner`, `add`, `demo`) | |
+| `policy` | A policy comes into force. From this version on also: the app is about to change the settings file of an AI application, or did not finish doing so (the six values of `by` below) | `serial`: larger than the one before and equal to `policy.serial`; `policy`: the object; `by`: what made the entry, text of 1 to 64 characters (`init`, `owner`, `add`, `demo`, or one of the six values below) | |
 | `add` | A document is added | `doc_id` (never used before), `collection`, `title`, `title_source`, `text_sha256`, `source_sha256` (or `null`), `chars`, `terms`, `passages`, `original` (true when the file's bytes were sealed too) | |
 | `remove` | A document is removed | `doc_id`: a listed document | |
 | `unlock` | The store is unlocked | `served`: the client names answered; `policy_seq`: the number of the newest `policy` entry; `documents`: how many documents the store has | `mixed`, `previous_session` (`first`, `clean`, `unclean`), `auto_lock` |
@@ -560,6 +560,27 @@ Some of these fields need a word more:
   limit then: `{"client_day":[2939,12000],"client_30_days":[2939,150000],…}`.
 - `folded_before` and `folded_refusals` count the refused calls that got no entry of their own
   because one of the same client and code was written less than an hour before.
+
+**From this version on an entry of the kind `policy` is not always a change of the policy.** An
+entry whose `by` begins with `connect` or `disconnect` says that the app was about to change the
+settings file of an AI application, or did not finish doing so; the policy in it may be the one
+that was in force before. The serial number counts entries of this kind, not changes. `<host>`
+is `claude-desktop`, `chatgpt-desktop` or `grok-build`
+([the settings file of an AI application](#the-settings-file-of-an-ai-application)).
+
+| `by` | Written when | The policy in the entry |
+| --- | --- | --- |
+| `connect:<host>` | Everything is prepared, and the app is about to write its entry into the settings file of that application | The one the connect puts in force: the client registered, and for a store with at most one collection that collection marked for hosted clients and granted in `approve` mode |
+| `connect-kept:<host>` | The file held the entry already. Nothing is written | The same; unchanged where the client was registered and granted before |
+| `disconnect:<host>` | The app is about to take its entry out of the file | Without the client, if it was registered; else unchanged |
+| `disconnect-kept:<host>` | The file held no entry of this store, or was left alone | The same |
+| `connect-failed:<host>` | The entry before said that the file was about to be written, and it was not, or did not hold the entry afterwards | The one from before the connect. Unchanged where another entry changed the policy in between |
+| `disconnect-failed:<host>` | The entry before said that the entry was about to be taken out, and it was not | Unchanged: the client stays removed |
+
+Such an entry has the fields of every `policy` entry and no other. It holds nothing of the
+settings file, and not its place. A version from before this one reads it like any `policy`
+entry: its activity list words it by what changed in the policy, and where nothing changed as
+"you saved the settings without a change".
 
 A release entry of a run for this page, with its text shortened here:
 
@@ -804,7 +825,9 @@ Two things a refusal still tells a caller are listed in the threat model under
 ## The interface file
 
 `<store>/run/interface.json` holds two or three words about the owner's page and nothing from the
-store. It is the only file the app keeps in plain text and the only one it overwrites. It is not
+store. It is the only file in the store's directory that the app keeps in plain text and the
+only one there that it overwrites. (Outside the directory it can replace one more file, the
+[settings file of an AI application](#the-settings-file-of-an-ai-application).) It is not
 sealed because the page has to know which page to open on before a passphrase is typed. The third
 word, a language for the page, is kept beside the two for the screens that come before the
 passphrase and before pairing. This is the file of a new store for which no language was chosen,
@@ -946,9 +969,9 @@ The owner's interface is a page that the app serves itself, with a JSON API behi
 listens on `127.0.0.1` only, at the port of the `open:` line (`--port`, else any free one), and
 speaks HTTP/1.1 with one request per connection. A request path that does not begin with `/api/`
 is looked up in a table of the page's files that is read once, at start; no part of such a path
-reaches the file system. One route of the API reads a file outside the store's directory,
-[the look at a settings file](#the-look-at-a-settings-file); where that file lies is not taken
-from the request either.
+reaches the file system. Four routes of the API deal with one file outside the store's
+directory, [the settings file of an AI application](#the-settings-file-of-an-ai-application):
+two read it and two replace it. Where that file lies is not taken from the request either.
 
 **What every request has to pass**, in this order, before its body is read:
 
@@ -979,11 +1002,12 @@ The pairing code has eight characters from `ABCDEFGHJKMNPQRSTVWXYZ23456789` and 
 
 **Answers.** Every answer of the API is a JSON object. An error is
 `{"error": {"code": …, "message": …}}` with one of these: 400 `invalid`; 401 `pairing_required`;
-403 `forbidden`, `wrong_code`, `wrong_passphrase`, `reauth_required` (the change lets more
-leave and owner mode has run out) or `trial_reauth_required` (the request is the owner's
-[trial question](#the-trial-question), and the passphrase was last entered more than ten
-minutes ago); 404 `not_found`; 405 `invalid`; 409 `locked`, `conflict`, `busy`, `changed` or
-`duplicate`; 413 `too_large`; 429 `pairing_disabled` or `too_many`; 500 `internal`; 503
+403 `forbidden`, `wrong_code`, `wrong_passphrase`, `reauth_required` (owner mode has run out,
+and the request would let more leave or change a file outside the store) or
+`trial_reauth_required` (the request is the owner's [trial question](#the-trial-question), and
+the passphrase was last entered more than ten minutes ago); 404 `not_found`; 405 `invalid`; 409
+`locked`, `conflict`, `busy`, `changed`, `demo` or `duplicate`; 413 `too_large`; 429
+`pairing_disabled` or `too_many`; 500 `internal`; 503
 `unavailable`. An error may carry a third member, `reason`: one word of lower-case letters,
 digits and `_`, at most 32 characters, for a page that words the error itself. One route sends
 it today: `POST /api/documents` with 400 `invalid`, when a file is not added. The words are
@@ -1003,14 +1027,15 @@ Cache-Control: no-store
 Connection: close
 ```
 
-**The routes.** There are 30. `POST` bodies are JSON objects; a field that the route does not
+**The routes.** There are 33. `POST` bodies are JSON objects; a field that the route does not
 know is an error. "Owner mode" marks what is refused with `reauth_required` once ten minutes have
 passed since the passphrase was last given for it; an empty cell means that the route never asks
 for it. While the store is locked, `GET /api/state`, `POST /api/unlock`, `POST /api/lock` and
 `POST /api/interface` do their work and every other route answers 409 `locked`, with two
 exceptions that are answered before that question is asked: `POST /api/store/create` answers 409
 `conflict` because the store exists, and `POST /api/demo/again` answers 404 outside a demo. In a
-run for this page all 30 were called against a locked store.
+run for this page all 33 were called against a locked store: four did their work, two were
+these exceptions, and 27 answered 409 `locked`.
 
 | Route | Does | Owner mode |
 | --- | --- | --- |
@@ -1033,13 +1058,16 @@ run for this page all 30 were called against a locked store.
 | `DELETE /api/documents/<id>` | Removes a document | |
 | `POST /api/collections` `{name, note?, allow_hosted?, show_titles?}` | Creates a collection or changes the fields given. Closing it to hosted clients also removes their grants for it | For `allow_hosted` or `show_titles` becoming true |
 | `DELETE /api/collections/<name>` | Removes an empty collection and every grant of it | |
-| `GET /api/apps` | The clients with their grants, limits and use; the two pools; `known`, the applications a configuration can be shown for | |
+| `GET /api/apps` | The clients with their grants, limits and use; the two pools; `known`, the applications a configuration can be shown for; `tiles`, the four a page offers to connect ([below](#what-the-answers-say-about-the-interface)) | |
 | `POST /api/apps` `{name, hosted, destination?}` | Registers a client | Always |
 | `DELETE /api/apps/<name>` | Removes a client and its grants | When clients of the other kind are answered from then on |
 | `POST /api/grants` `{app, collection, mode}` | Sets a grant: `read`, `approve` or `none` | For a new grant, and for `approve` becoming `read` |
 | `POST /api/apps/<name>/limits` | Changes limits of one client; the body is the limits object, `null` for "as the defaults" | For a limit in force that rises |
 | `GET /api/apps/<name>/connect?host=` | The configuration that connects one application under this client's name: text for the owner to copy. It looks at no file of that application | |
-| `POST /api/apps/<name>/connect/check` `{host?}` | Looks into the settings file of one application for this client's entry and answers in one word ([below](#the-look-at-a-settings-file)). It changes nothing | |
+| `POST /api/apps/<name>/connect/check` `{host?}` | Looks into the settings file of one application for this client's entry and answers in one word ([below](#the-look-before-these-routes)). It changes nothing. It is the look of the page of this version, and goes with that page | |
+| `POST /api/connect/<host>/look` | Reads the settings file of one of three applications and answers in fixed words what it holds of this store's entry ([below](#the-settings-file-of-an-ai-application)). It changes nothing. 409 `demo` in a demo | |
+| `POST /api/connect/<host>` `{expect}` | Registers the client of that application and writes the store's entry into its settings file, if the file is in the state `expect`. 409 `changed` when it is not; 409 `demo` in a demo | Always |
+| `POST /api/connect/<host>/remove` `{expect}` | Removes that client and takes the store's entry out of the settings file, if the entry is this store's. An entry that points elsewhere is left. 409 `changed`, 409 `demo` as above | When `expect` is `present` or `present_more` (the file would be changed), and as for `DELETE /api/apps/<name>` |
 | `GET /api/settings` | The limits of the store, the number of listed strings, and which figures differ from those of a new store | |
 | `POST /api/settings` `{defaults?, groups?, per_document?, approval?}` | Changes the defaults, the limits of the two pools, the allowance per document, the lifetime of an approval | For a value that rises |
 | `POST /api/replaced-strings` `{text}` | Adds one listed string; answers their number | |
@@ -1049,11 +1077,13 @@ No route returns a listed string, the store key, an original file, or stored tex
 passage that waits for approval, the text of results that were released, and the one passage
 that `POST /api/try` finds for the owner's own question, which needs the passphrase entered
 within ten minutes (a permission apart from owner mode) and leaves no entry. Only the state of a
-demo carries a passphrase, that of the demo (`demo_passphrase`). Three answers hold something
-that is not of the store: `launch` in the state is the command that starts the app, with the
-paths of the Python interpreter and of the store; a configuration holds the same two paths in
-the command it shows; and the look at a settings file answers with words about a file of another
-program, and with no byte from it.
+demo carries a passphrase, that of the demo (`demo_passphrase`). Four kinds of answers hold
+something that is not of the store: `launch` in the state is the command that starts the app,
+with the paths of the Python interpreter and of the store; a configuration holds the same two
+paths in the command it shows; `tiles` in the list of clients names the places of three
+settings files; and the answers about a settings file hold its place, the places of its copies
+and since when they lie there, fixed words about it, and the command its entry holds or would
+hold; never a byte from it.
 
 | Limit | Value |
 | --- | --- |
@@ -1066,7 +1096,7 @@ program, and with no byte from it.
 
 ### What the answers say about the interface
 
-Some fields of five answers are there for the page and say nothing about the documents. (One
+Some fields of seven answers are there for the page and say nothing about the documents. (One
 more field of the state, `trial`, belongs to [the trial question](#the-trial-question).)
 
 | Answer | Field | Value |
@@ -1077,10 +1107,12 @@ more field of the state, `trial`, belongs to [the trial question](#the-trial-que
 | `GET /api/settings` | `changed_from_new` | Which of `defaults`, `groups`, `per_document` and `approval` hold other figures than a new store has. `[]` for a new store |
 | | `ceilings.passage_chars` | 800: the length of a passage that new stores are made with. It is the constant of the code, not `chunk_chars` read from the key slot |
 | `GET /api/apps` | `known` | Eleven entries of `{"id", "label", "name", "destination", "hosted", "local_program"}`. Seven can be connected: `claude-desktop`, `claude-code`, `chatgpt-desktop`, `codex`, `grok-build`, `openclaw` and `generic` ("Another app"). Four cannot, and have `"local_program": false`: `chatgpt-web`, `claude-web`, `grok-web` and `grok-bot` |
+| | `tiles` | Four entries, in this order: `claude`, `chatgpt`, `grok`, `custom`. Each is `{"tile", "host", "label", "readers", "name", "destination", "writes", "desktop", "path"}`. `host` is the id the tile stands for (`claude-desktop`, `chatgpt-desktop`, `grok-build`; `generic` for the fourth), `label` the name a sentence uses for the program (`Claude Desktop`, `ChatGPT`, `Grok Build`; empty for the fourth), `readers` the programs that read its settings file by their maker's documentation (`["ChatGPT", "Codex"]` for the second), `name` and `destination` those of the client a connect registers. `writes` is true when the id is one of the three whose file the app writes, the place of the file is known, and its format can be read here (TOML needs Python 3.11). `desktop` says that the program is a desktop app, which has to be quit to read its settings anew. `path` is the place of the file, written with `~` where it lies in the home directory, or `null`; **in a demo it is always `null`**, because a demo has no pairing and a place can say where a variable of the account points. Making the list looks at no file |
+| `GET /api/activity`, `GET /api/activity/<seq>` | `title`, `passage`, `results` | In an entry of the kind `release`, and in no other: the title of the document that was read, or `null`; the number of the passage, or `null`; and for a search how many lines were shown, `0` when it found nothing, `null` when the record does not say. They say what the sentence in `summary` says, as fields |
 | `GET /api/apps/<name>/connect` | `platform` | `"macos"` or `"linux"`: the system the app runs on, for which the places in the answer were chosen |
 | | `plain_note` | What the text follows and that it was not tried, without an address, for example "This follows the published instructions for Claude Desktop, as read on 2026-11-12. It has not been tried with Claude Desktop itself." |
 | | `after` | `{"title", "text", "desktop"}`: what the owner does in the application once the text is in place, and whether it is a desktop app that has to be quit |
-| | `blocks[].where_here` | Of the places listed in `where`, the one that applies on this computer, or `null`. For Claude Desktop and for Grok Build it is the place of the settings file here, written with `~` where it lies in the home directory; a variable that moves the file ([below](#the-look-at-a-settings-file)) moves this place with it, so it need not be one of `where` |
+| | `blocks[].where_here` | Of the places listed in `where`, the one that applies on this computer, or `null`. For Claude Desktop and for Grok Build it is the place of the settings file here, written with `~` where it lies in the home directory; a variable that moves the file ([below](#the-settings-file-of-an-ai-application)) moves this place with it, so it need not be one of `where` |
 | | `blocks[].inner` | For a block of JSON: `{"entry", "section"}`, the entry `"locktender": {…}` alone and the member `"mcpServers": {…}` alone, each as text without the braces around it, for a file that holds other settings already. `null` for a block in another format |
 
 The other fields of a configuration are `host`, `label`, `local_program`, `blocks` (each with
@@ -1172,96 +1204,419 @@ left the head of the record, the number and the size of the sealed files, `curso
 the activity list and the list of approvals as they were, and `trial.questions` was 50 higher.
 Of 23 questions sent in one minute, 20 were answered and three were refused with `too_many`.
 
-### The look at a settings file
+### The settings file of an AI application
 
-An AI application starts Locktender's program because of an entry in its own settings file, and
-the owner puts that entry there: the app changes no file of another program.
-`POST /api/apps/<name>/connect/check` looks whether the entry has arrived. It is the one route,
-and `wdva.gate.hostcheck` the one module, that reads a file of another program. (The package
-also holds a module that can write the entry into such a file, `wdva.gate.hostwrite`. No route
-calls it in this version; what it reads, it reads through `hostcheck`.)
+An AI application starts Locktender's program because of an entry in its own settings file. The
+owner puts that entry there by hand, from the text of a configuration; or, for three
+applications, the app puts it there when a request asks for it. Three routes deal with that
+file: one reads it, two replace it. `wdva.gate.hostcheck` is the one module that reads such a
+file and `wdva.gate.hostwrite` the one that writes it.
 
-**Which file.** The body is `{}` or `{"host": id}`, with `host` chosen as for a configuration. The
-app knows the settings file of four applications, which are three files:
-
-| `host` | File | Format |
+| Route | Body | What it does |
 | --- | --- | --- |
-| `claude-desktop` | On macOS `~/Library/Application Support/Claude/claude_desktop_config.json`. Elsewhere `$XDG_CONFIG_HOME/Claude/claude_desktop_config.json` when that variable holds an absolute path, else `~/.config/Claude/claude_desktop_config.json` | JSON |
-| `chatgpt-desktop`, `codex` | `~/.codex/config.toml`. The variable `CODEX_HOME` is not looked at | TOML |
-| `grok-build` | `$GROK_HOME/config.toml` when that variable holds an absolute path, else `~/.grok/config.toml`, on either system. This follows xAI's documentation as read on 2026-11-14 ("user config is `~/.grok/config.toml` or `$GROK_HOME/config.toml`"). It was not tried with Grok Build | TOML |
+| `POST /api/connect/<host>/look` | none, or `{}` | Reads the file and says in fixed words what it holds of this store's entry. Changes nothing |
+| `POST /api/connect/<host>` | `{"expect": state}` | Registers the client and writes the entry into the file, if the file is in the state `expect` |
+| `POST /api/connect/<host>/remove` | `{"expect": state}` | Removes the client and, if the entry in the file is this store's, takes it out |
 
-For every other `host` the answer is `unsupported` and no file is looked at. The place follows
-from the id, the system, and the home directory and environment of the account the app runs
-under: `HOME`, and the two variables of the table. An application that was started with other
-values reads another file than the one looked at. A request chooses among the ids and nothing
-more: no part of a path comes from it. In a run for this page a `host` of `../../etc/passwd` was
-answered 404, and a body with a field `path` 400.
+No page of this version calls these three yet. Its button "Check the file" still asks
+[the look that came before them](#the-look-before-these-routes), which stays until that page
+goes.
 
-**How it is read.**
+**Which file.** `<host>` is one of three ids, and each has one file:
+
+| `<host>` | The client's name | File | Format | Who reads it, by its maker's documentation |
+| --- | --- | --- | --- | --- |
+| `claude-desktop` | `claude-desktop` | On macOS `~/Library/Application Support/Claude/claude_desktop_config.json`. Elsewhere `$XDG_CONFIG_HOME/Claude/claude_desktop_config.json` when that variable holds an absolute path, else `~/.config/Claude/claude_desktop_config.json` | JSON | Claude Desktop |
+| `chatgpt-desktop` | `chatgpt-desktop` | `~/.codex/config.toml` | TOML | The ChatGPT desktop app, Codex and its IDE extension |
+| `grok-build` | `grok-build` | `$GROK_HOME/config.toml` when that variable holds an absolute path, else `~/.grok/config.toml`, on either system (xAI, read on 2026-11-14: "user config is `~/.grok/config.toml` or `$GROK_HOME/config.toml`") | TOML | Grok Build |
+
+Every other id is answered 404, `codex` among them: its file is the one of `chatgpt-desktop`,
+and is written under that id. The place follows from the
+id, the system, and the home directory and environment of the account the app runs under:
+`HOME`, and the two variables of the table. An application that was started with other values
+reads another file than the one written. `CODEX_HOME` is not followed, because OpenAI's
+documentation names the file only as `~/.codex/config.toml` and does not say that it moves with
+that variable; while it is set, with any value, the file of `chatgpt-desktop` is not written
+(`moved`, below). A request chooses among the three ids and nothing more: no part of a path
+comes from it. In a run for this page the ids `../../etc/passwd` and `codex` were answered 404,
+and a body with a field `path` 400.
+
+**How it is read.** All three routes read through `hostcheck`, in the same way:
 
 1. The folder of the file is reached without following a link. The place starts from a folder
    that is taken as the system resolves it: the home directory, or the folder a variable names.
    Every folder below it on the way to the file (`.config` and `Claude`, say) is looked at
    (`lstat`) and then opened through the one above it, without following a link, and what was
    opened must be the folder that was looked at. A folder that is a symbolic link is not gone
-   through, and nothing behind it is looked at or read: the answer is `not_read`. A version
-   before this one followed such a link.
+   through, and nothing behind it is looked at or read: the state is `linked`, and the answer
+   says where the link leads.
 2. The file is looked at and opened through the one folder that was opened, so a folder that
-   is exchanged while a look runs changes nothing. What is not a regular file (a symbolic link,
-   a directory, a named pipe, a device) or is larger than 1 MiB is never opened.
+   is exchanged while a look or a write runs changes nothing. What is not a regular file (a
+   symbolic link, a directory, a named pipe, a device) or is larger than 1 MiB is never opened.
 3. A file that passed is opened for reading only, without following a link and without waiting.
    What was opened is looked at once more before a byte is read, and a file that has grown past
    1 MiB by the time it is read, or changed its size while it was read, counts as not read. No
-   read can block: in the run a named pipe that nobody wrote to was answered `not_read` in about
-   a millisecond.
-4. Nothing is written, created, renamed or started, there or anywhere. After 38 looks in the run
-   the home directory held what the run itself had put there and nothing else.
-5. The file is read when this route is called, and at no other time: not for a configuration,
-   not for the list of apps, not on a timer. The page calls the route when the owner presses
-   "Check the file" or "Check again".
+   read can block. Where the system refuses to look at a folder or to open the file, the state
+   is `no_access`.
+4. Beside the file, the two places of its [copies](#the-copies) are looked at (`lstat`); what
+   lies there is not read.
+5. The file is read when one of the three routes, or the look before them, is called, and at
+   no other time: not for a configuration, not for the list of clients and its `tiles`, not on
+   a timer.
 
-The figures above are from a run through the route, made before the folders were reached this
-way and before Grok Build's file was known. For this version the reader was run by itself, on
-Linux, without a page and without an application, in a home directory made for the run. With
-the right entry in a folder that the settings folder was a link to, and again with `~/.config`
-as the link, the answer was `not_read`, and nothing of the file behind the link was read. A
-named pipe was answered `not_read` in 0.6 milliseconds. The file of Grok Build gave
-`no_folder`, `no_file`, `other` and `present`, and with `GROK_HOME` set the place named was the
-one in that folder. The 21 looks of that run left the home directory as it was, and a marker
-written into the files was in none of the answers.
+**The look** answers 200 with nineteen fields. It needs the session and an unlocked store, and
+nothing else: no owner mode, because it changes nothing and lets nothing leave the store, and no
+registered client. (The look before it answered only for a client that was registered.)
 
-**The answer** is `{"state", "path", "folder", "open_line", "section"}`.
+| Field | What it is |
+| --- | --- |
+| `host`, `label`, `readers` | The id; the name a sentence uses for the program (`Claude Desktop`, `ChatGPT`, `Grok Build`); the programs that read the file (`["ChatGPT", "Codex"]` for `chatgpt-desktop`) |
+| `state` | What the reader found: one of the thirteen words below |
+| `problem` | What keeps the entry from being written, found without the file: `expands`, `unstable`, `moved`, or `null` ([the rules](#the-rules-of-the-write), R14, R17, R1) |
+| `format` | `"JSON"` or `"TOML"` |
+| `path`, `folder` | The file and its folder, written with `~` where they lie in the home directory |
+| `real_folder` | For `linked`: where the folder really lies. Else `null` |
+| `variable` | The variable that decided the place (`XDG_CONFIG_HOME`, `GROK_HOME`), or `null` |
+| `entry` | The name of the entry: `locktender` |
+| `command` | The command the entry holds or would hold, as a list of texts: the Python that runs the app by its full path, fixed words, the client's name, the place of the store |
+| `section` | For a JSON file in the states `other` and `empty`: `"none"` when it has no `mcpServers`, `"empty"` when that is empty, `"filled"` when it holds entries of other programs. Else `null` |
+| `switched_off` | True when the entry holds `enabled` with the value false |
+| `other_name` | For `present_as`: the name the entry calls under. Else `null` |
+| `copies` | The kept copies that lie beside the file: none, one or two of `{"path", "made_at"}`. `made_at` is the time the copy was last changed, as a record writes a time |
+| `app` | `{"name", "registered", "paused", "last_seen", "differs", "reads"}` for the client this id has in the store. `last_seen` is `null` or `{"time", "claimed"}`. `differs`: a client of that name is registered as another kind (local) or with another destination than the id's. `reads`: it holds a grant in `read` mode |
+| `groups` | How many collections the store has |
+| `answered_change` | True when registering this client would leave local clients without an answer until the owner chooses ([what a session serves](#the-policy)) |
 
 | `state` | What was found |
 | --- | --- |
-| `present` | An entry named `locktender` whose `command` and `args` are exactly those of the configuration for this client and this store. Other members of the entry (`enabled`, `env`, a table below it) are not compared: an entry that is switched off is `present` too |
-| `differs` | An entry named `locktender` with another `command` or other `args` |
+| `present` | An entry named `locktender` that is exactly `command` and `args` of the configuration for this client and this store, and holds nothing else |
+| `present_more` | `command` and `args` are those, and the entry holds other members or tables below it (`enabled`, `env`, `cwd`, a table `tools`) |
+| `present_as` | The entry is the command of this store under the other name the same file serves: for `chatgpt-desktop`, an entry made for `codex` |
+| `differs` | An entry named `locktender` that is none of the three above: another store, another name, another program |
 | `other` | Settings, and no entry of that name |
 | `empty` | Nothing, or white space only; a JSON object without keys, or with an empty `mcpServers` as its only key; a TOML file without keys, or with an empty `mcp_servers` table alone |
 | `no_file` | The folder is there and the file is not |
 | `no_folder` | The folder is not there, or is not a directory |
-| `unreadable` | The file is not what it should be: not UTF-8, not valid JSON or TOML, a JSON key written twice, `NaN` or `Infinity`, a byte-order mark, something other than an object at the top, or `mcpServers` (`mcp_servers`) that is not an object (a table). Also when the system refuses to look at the file or a folder on the way, or to open one of them |
-| `not_read` | Not a regular file, or larger than 1 MiB: it was not opened. Or a folder on the way to it is a symbolic link: nothing behind the link was looked at |
-| `unsupported` | The app knows no settings file for this `host`; or the file is TOML and the app runs on a Python older than 3.11, which has no reader for it |
+| `linked` | A folder on the way is a symbolic link. Nothing behind it was read |
+| `no_access` | The system refused to look at a folder or to open the file |
+| `unreadable` | The file is not what it should be: not UTF-8, not valid JSON or TOML, a JSON key written twice, `NaN` or `Infinity`, a byte-order mark, something other than an object at the top, or `mcpServers` (`mcp_servers`) that is not an object (a table) |
+| `not_read` | Not a regular file, or larger than 1 MiB: it was not opened. For these three routes also a file with more than one name, and one that belongs to another account |
+| `unsupported` | The file is TOML and the app runs on a Python older than 3.11, which has no reader for it; or the home directory cannot be told |
 
-- `path` and `folder` are the place of the file and of its folder, written with `~` where they
-  lie in the home directory. They are `null` for `unsupported`.
-- The module's own look (`hostcheck.look`, which no route answers from yet) has four words
-  more than the nine of this route, and this route gives each as the word it had before:
-  `present_more` (the entry holds the command and other members besides) as `present`;
-  `present_as` (the entry holds the command of this store under the other name that the same
-  file serves, `codex` for `chatgpt-desktop` and the other way round) as `differs`; `linked`
-  as `not_read`; and `no_access` (the system refused) as `unreadable`.
-- `section` is given for a JSON file in the state `other`: `"none"` when it has no `mcpServers`,
-  `"empty"` when that is empty, `"filled"` when it holds entries of other programs. Otherwise
-  `null`.
-- `open_line` is one shell line as text, or `null` for `present`, `no_folder` and
-  `unsupported`. It would open the file in the system's text editor, after making it where it is
-  missing, and it never changes a file that exists. The app runs none of it, and the page of this
-  version does not show it. On Linux the run gave these three forms; on macOS, by the code,
-  `open -e` stands in place of `xdg-open`, and for `no_file`, `empty` and a TOML file in the
-  state `other` the line goes on to put the text of the configuration on the clipboard with
-  `pbcopy`. No Mac ran it.
+**Nothing from the file is in an answer.** A settings file of this kind can hold the keys and
+tokens of other tools. The answers of the three routes are made of fixed words, of places, of
+the times of the copies and of the command, which the app composes without the file: no key, no
+value, no name of another entry and no message of a parser reaches them. The record holds less:
+no place and nothing of the file ([below](#what-the-record-holds-of-it)).
+
+#### The rules of the write
+
+"The file" is the settings file of the id. "The entry" is the member `locktender` of `mcpServers`
+(JSON) or the table `[mcp_servers.locktender]` (TOML).
+
+| # | Rule | What it means |
+| --- | --- | --- |
+| R1 | The place is fixed | It is the place of the table above. A request chooses among three ids; the body holds `expect` and nothing else. Three variables of the app's own environment take part (`HOME`; `XDG_CONFIG_HOME` and `GROK_HOME` when they hold an absolute path); a fourth, `CODEX_HOME`, refuses the write for `chatgpt-desktop` when it is set (`moved`) |
+| R2 | Only the entry is added or changed | Parsed, the new file without the entry equals the old file without it: every key, value and type, and the order of the keys. In the entry, `command` and `args` are the app's; every other member and every table below it is what it was. In the text everything outside the edit is unchanged: byte for byte in JSON, line for line in TOML |
+| R3 | A file that cannot be parsed is never written | The state is `unreadable` |
+| R4 | A link or a special file is never written, and nothing is written through a link | A symbolic link, a directory, a named pipe, a file with more than one name and a file of another account are `not_read`; a folder on the way that is a link is `linked`. Every call of a write names its file through the one folder that was opened |
+| R5 | A file larger than 1 MiB is never written | It is `not_read`; a new text that would be larger is `by_hand` |
+| R6 | A copy of the file as it was is kept before every change | See [the copies](#the-copies) |
+| R7 | One step | The new bytes go to a temporary file in the same folder (`.<file name>.<24 hexadecimal digits>.tmp`), are flushed to disk, and take the file's place by one `replace`. A file that was not there is put there by `link`, which fails when something lies there. At no moment does the file hold half of the new text |
+| R8 | The result is read back | After the replace the file is read through the same reader and must hold the entry |
+| R9 | A folder that is not there is not made | The state is `no_folder`; the module has no call that makes a folder |
+| R10 | A request that changes the file needs owner mode | For a connect always; for a removal when `expect` is `present` or `present_more`. It is checked before any file is looked at |
+| R11 | The change is in the record, without a new kind of entry | One `policy` entry with `by` set, written before the file is replaced ([below](#what-the-record-holds-of-it)) |
+| R12 | A removal takes out that one entry | Only an entry whose `command` and `args` are this store's, in the state the owner was shown. In JSON an `mcpServers` that becomes empty stays as `{}`; in TOML a header `[mcp_servers]` that was written out stays, and so does every comment. An entry that points elsewhere is left |
+| R13 | Nothing is written into a file the owner did not see | The state found at the write must be the one in `expect`. Device, inode, size and the two times of change of the file must be those of the file that was read, at two moments: before the record is written, and directly before the replace. A file that is gone counts as changed. Else 409 `changed` |
+| R14 | Grok Build is given no command it would rewrite | For `grok-build`, a command or argument that holds `${` is `expands`: by xAI's documentation such text is replaced by the value of a variable |
+| R15 | A demo writes nothing and looks at nothing | All three routes answer 409 `demo` before any file is looked at |
+| R16 | The writer starts no program | Whether the AI application runs is not looked up. (The app starts its own Python once at each connect, to see that the command it is about to write starts.) |
+| R17 | A command that may not last is not written | The entry makes another program start this Python at each of its starts. The write is refused (`unstable`) when the path of the Python or of the store, as written, has a part that belongs to an account other than the owner's or root, or that everybody may write, or when it lies under a folder for temporary files (`tempfile.gettempdir()`, `/tmp`, `/var/tmp`, `/dev/shm`, and where these really lie). A part that a group may write is not refused, and the file behind a Python that is a link is not looked at |
+| R18 | A file that is being saved is not written | A file whose time of change is less than five seconds old is `recent` |
+
+#### A connect
+
+`POST /api/connect/<host>` with `{"expect": state}`. These checks come in this order, and the
+first that fails answers. None of the first nine looks at a settings file or changes anything.
+
+| # | Check | Answer when it fails |
+| --- | --- | --- |
+| 1 | `expect` is one of `no_file`, `empty`, `other`, `differs`, `present_as`, `present`, `present_more` | 400 `invalid` |
+| 2 | `<host>` is one of the three ids | 404 `not_found` |
+| 3 | The store is unlocked | 409 `locked` |
+| 4 | This is no demo | 409 `demo` |
+| 5 | Owner mode is on | 403 `reauth_required` |
+| 6 | No client of that name is registered as another kind (local) or with another destination | 200 `{"connected": false, "state": "other_kind"}` |
+| 7 | The new policy can be built: the limit of 100 clients | the error that `POST /api/apps` gives |
+| 8 | A client could connect here: the MCP SDK is installed for a Python of 3.11 or newer, and this Python, started again at this request the way the entry starts it, finds the package | 200 `{"connected": false, "state": "not_ready"}` |
+| 9 | The command can be written: R1, R14, R17 | 200 `{"connected": false, "state": "moved"}`, `"expands"` or `"unstable"` |
+| 10 | The writer | see below |
+
+**The new policy** registers the client under the id's name as a hosted client with the id's
+destination (Anthropic, OpenAI, xAI), unless it is registered. Then, by how many collections the
+store has, counting those that only hold a document: with none, a collection `documents` is
+created, marked for hosted clients, and granted to the client in `approve` mode; with one, that
+collection is marked for hosted clients if it is not, and granted in `approve` mode unless the
+client is answered for it already (a grant in force is left as it is, also one in `read` mode);
+with several, no collection and no grant is touched, and the answer's `groups` says how many
+there are. A pause is not touched. Where local clients are registered and no hosted one, the
+client this registers is the first hosted one, and from then on only hosted clients are answered
+until the owner chooses: the look says so ahead, in `answered_change`.
+
+**The writer**, step by step. A step that stops removes every temporary file of the call.
+
+1. The folder is opened. `no_folder`, `linked`, `no_access` and `unsupported` stop.
+2. A temporary file that an earlier call left in the folder is removed: a regular file of the
+   owner whose name is of the pattern of R7 for this settings file and that is more than 60
+   seconds old.
+3. The file is read. `unreadable`, `not_read` and `no_access` stop.
+4. A state that is not `expect` stops with `changed`. The state `present_as`, when the store has
+   a client of that other name, stops with `present_as`: the file connects the program to this
+   store already, under a name the store answers.
+5. For `present` and `present_more` nothing is written: one entry is recorded
+   (`connect-kept:<host>`), with the new policy, and the answer is `connected`.
+6. A file that was changed less than five seconds ago stops with `recent`.
+7. The new text is made ([JSON](#the-two-edits), [TOML](#the-two-edits)). A text the rules
+   cannot make, and one that would be larger than 1 MiB, stop with `by_hand`.
+8. Two temporary files are written and flushed: the new content, with the lowest nine
+   permission bits of the old file (0600 for a new file; without the three bits of the group
+   when the new file's group is not the old one's), and, for a file that exists, the copy,
+   0600. A failure stops with `failed`, or with `no_copy` where the copy has no place.
+9. With the store's lock held: the file is compared with what was read (R13); the entry is
+   recorded (`connect:<host>`), which puts the new policy in force; the copy is put in place;
+   the file is compared once more; the file is replaced. If the copy cannot be put in place,
+   the second comparison fails or the replace fails, a second entry is recorded
+   (`connect-failed:<host>`) that puts the policy back as it was, and a first copy this call
+   made is removed again.
+10. The folder is flushed, and the file is read back. It must hold the entry (`present` or
+    `present_more`). If it does not, a second entry is recorded as in step 9 and the answer is
+    `failed`.
+
+The store's lock, the one that locking takes, is held in step 9 only: for two looks at the
+file's status, the record, and putting the copy and the file in place. It is not held while a
+file is read, prepared or flushed, so a folder that answers slowly does not keep the store from
+locking. Step 9 begins by asking again whether the store is still unlocked in the session of
+the request (else 409 `locked`), whether owner mode is still on (else 403), and whether the
+policy in force is still the one the new policy was built from (else 409 `changed`).
+
+| What happened | Answer | The store and the record | The file |
+| --- | --- | --- | --- |
+| The reader found `no_folder`, `linked`, `no_access`, `unreadable`, `not_read` or `unsupported` | 200 `{"connected": false, "state": <that word>, "path"}`; for `linked` also `real_folder` | unchanged | unchanged |
+| A state that can be written, but not the one in `expect`; or the file is another one at a comparison | 409 `changed` | unchanged, or put back with two entries when the record was written already | unchanged |
+| `present_as`, and the store has a client of that name | 200 `{"connected": false, "state": "present_as", "path", "other_name"}` | unchanged | unchanged |
+| `recent`, `by_hand`, `no_copy`, `failed` before the record | 200 `{"connected": false, "state": <that word>, "path"}` | unchanged | unchanged |
+| Owner mode ran out, the store locked or its policy changed while the file was prepared | 403 `reauth_required`, 409 `locked`, 409 `changed` | unchanged | unchanged |
+| The record cannot be written | 503 `unavailable` | unchanged | unchanged |
+| After the record: the copy cannot be put in place, or the replace fails | 200 `{"connected": false, "state": "no_copy"}` or `"failed"` | the policy is put back; two entries | unchanged |
+| After the replace: the file read back holds no entry of this store | 200 `{"connected": false, "state": "failed"}` | the policy is put back; two entries. Where the policy was changed in between it is left, and the answer has `"kept": true` while the client is still registered | as the next look finds it |
+| The file read back holds the entry, in other bytes than were written | 200 `{"connected": true, "changed_since": true, …}` | changed; one entry | holds the entry |
+| Everything went through | 200 `{"connected": true, "state", "path", "copy", "replaced", "groups", "app"}` | changed; one entry | holds the entry |
+
+`state` in the last two rows is `present` or `present_more`. `replaced` is true when an entry of
+that name was there and pointed elsewhere. `copy` is the place of the copy this call made, or
+`null` when the file was new or nothing was written. `app` is the member of that name of the
+look, as it is after the call. "Unchanged" for the file means that the folder holds exactly the
+files it held before the call, and no temporary file; where a latest copy was put in place
+before a failure, it stays, and then holds the file as it is.
+
+Between the second comparison and the replace another program can still change the file; the
+time is that of one system call, and what it wrote in that time is lost.
+
+#### A removal
+
+`POST /api/connect/<host>/remove` with `{"expect": state}`. Checks 1 to 4 as for a connect, with
+every state of the reader allowed in `expect`. Then owner mode, when `expect` is `present` or
+`present_more` (the file would be changed), and when removing the client makes clients of the
+other kind answered (the rule of `DELETE /api/apps/<name>`); it is asked before any file is
+looked at. Then the file is read. A state that is not the one in `expect` is answered 409
+`changed`, and nothing is changed, in the store or outside.
+
+| `expect` and the state found | The file | `file` in the answer |
+| --- | --- | --- |
+| `present` | The entry is removed: three lines in TOML, one member in JSON | `removed` |
+| `present_more` | The entry is removed with the members and tables below it | `removed` |
+| `differs`, `present_as` | Left alone: the entry points elsewhere and is not this store's to remove | `differs` |
+| `other`, `empty`, `no_file`, `no_folder` | Left alone: there is no entry | `no_entry` |
+| `linked`, `no_access`, `unreadable`, `not_read`, `unsupported` | Left alone | that word |
+| `present` or `present_more`, and the file cannot be changed now (`recent`, `by_hand`, `no_copy`, `failed`) | Left alone | that word |
+
+The answer is 200 `{"file", "app_removed", "path", "copy"}`. In every row the client is taken
+out of the store when it was registered (`app_removed`), and one entry is recorded:
+`disconnect:<host>` where the file was about to be changed, `disconnect-kept:<host>` where it
+was left. When there is neither an entry in the file nor a registered client, nothing is
+recorded. A removal that fails after its record is answered `"file": "failed"`, with a second
+entry (`disconnect-failed:<host>`); the client stays removed. Both copies stay: the app never
+deletes one.
+
+#### The two edits
+
+Both formats are edited as text. The parsed file is never written out again: that would respell
+numbers, escapes and line endings of the whole file, and drop every comment of a TOML file.
+
+**JSON.** The text is read with the reader of the look, and scanned once for the places of the
+members of the top object and of `mcpServers`. Where there is no entry, one piece of text is
+put in: the entry as the last member of `mcpServers`, with the comma it needs, in the
+indentation and with the line ending the file uses; or, where there is no `mcpServers`, that
+member with the entry in it, as the last member of the top object; or the whole object, for a
+file that is empty. Where an entry is there, the values of its `command` and `args` are
+replaced in their place (a missing `args` is put after `command`), and every other member of
+the entry stays. An entry without `command` is `by_hand`. For a removal the entry goes with the
+comma that belonged to it. The new text is parsed again and compared as R2 says, and it is
+compared as text too: the new text must be the old one with one piece put in or taken out, or
+with the two values exchanged.
+
+**TOML.** The text is read with `tomllib` before and after. Where there is no entry, three
+lines are appended, after one blank line when the last line of the file is not blank:
+
+```toml
+[mcp_servers.locktender]
+command = "<the Python>"
+args = ["-I", "-X", "utf8", "-m", "wdva", "gate", "mcp", "--client", "<name>", "--store", "<store>"]
+```
+
+Where an entry is there, its header must stand in the text exactly once, as a line of its own.
+Among the lines up to the next header, the one line that begins with `command =` is replaced,
+and the one that begins with `args =` (put after `command` where there is none). No other line
+is touched: other keys of the table, the tables below it, comments and blank lines stay where
+they are. For a removal the lines that go are the header, every header below it, and every line
+of these tables that is neither blank nor only a comment; where two blank lines then stand next
+to each other at the place of the header, one of them goes. `by_hand`, with the file untouched,
+is the answer for everything these rules cannot edit: `mcp_servers` or the entry written as an
+inline table, the entry written with dotted keys, the header twice or inside a multi-line
+string, an entry without `command`, a `command` or `args` that runs over several lines.
+
+A connect and then a removal can leave a TOML file with one blank line more at its end than it
+had: the blank line that was put before the three lines. A JSON file that had an `mcpServers`
+is the file it was, byte for byte.
+
+#### The copies
+
+Before every change of a file that exists, the bytes exactly as they were read are kept in one
+of two files beside it. Each call makes one copy.
+
+| | The first copy | The latest copy |
+| --- | --- | --- |
+| Name | The name of the settings file and `.before-locktender` | The same and `.last-locktender` |
+| What it holds | The file as it was before the app first changed it | The file as it was before the latest change |
+| When this call's copy is this one | The file as read holds no entry named `locktender`, and neither copy lies there yet | In every other case |
+| How it is put in place | By `link`, which fails when anything lies there; the copy then becomes the latest copy | By `replace`: the latest copy before it is gone in the same step |
+| Overwritten | Never. Whatever lies at its place is not touched and not read | At every later change |
+| Mode | 0600, whatever the mode of the file | 0600 |
+
+A file that was not there has no copy. `no_copy` is the answer when the place of the latest
+copy holds something that is not a regular file of the owner with one name, or the copy cannot
+be written; nothing is changed then. After a failure behind the record, a first copy this call
+made is removed again; a latest copy cannot be put back. The app never deletes a copy. They
+hold whatever the settings file held, the keys and tokens of other tools included, and keep it
+after those are gone from the settings file; a folder kept under version control that leaves
+out the settings file by its name will pick them up.
+
+**What a replace does not carry over to the new file:** the group of the old file (the new one
+has the group the system gives a file this account makes), extended attributes and access lists
+(on a Mac: tags, the quarantine mark), the set-user, set-group and sticky bits, and its
+identity: the name leads to a new file, which matters to a program that watches the old one. A
+file system without hard links cannot take a **new** settings file by these rules; the answer
+is `failed`.
+
+#### What the record holds of it
+
+A connect and a removal are each one entry of the kind `policy`, with `by` set to one of the
+six values listed under [Kinds of entry](#kinds-of-entry). The entry is written before the file
+is replaced, as a release is recorded before its text is handed over; so `connect:<host>` says
+that the file was about to be written, never that it was. An entry `connect:<host>` that is
+followed by `connect-failed:<host>` says that the file was not changed as announced. If the app
+is stopped between the record and the replace, the second entry is missing, and the record
+still says nothing untrue. The record holds neither the content of the settings file nor its
+place: `by` and the time are what it says.
+
+In the activity list such an entry is of the kind `change`. Its sentence says first what was
+about to be done ("you connected Claude Desktop: Locktender was about to write its entry into
+the settings file"), then how many changes of the policy came with it ("and made 4 more
+changes"); its details list those changes, and name the place of the settings file as the app
+would look for it now, since the record does not hold it.
+
+#### What was run
+
+No AI application read a file that the app wrote, and none was installed where these runs were
+made. What follows was run on Linux, with Python 3.11, in a home directory made for the run that
+lay outside every folder for temporary files.
+
+**The three routes over HTTP.** The app was started by its command (`python -m wdva gate app`
+with `--store`, `--no-browser` and `--port 0`), paired with the code it printed, and asked over
+HTTP for a new store. For each of the three ids the run wrote a settings file that held other
+content into the empty home, and set its time of change a minute back: for Claude Desktop JSON
+of 410 bytes with two other servers, a number written `1.0e0`, an escape and a number of 23
+digits, mode 0644; for the ChatGPT desktop app TOML of 409 bytes with comments, a date, an array
+of tables and a table below another server, mode 0600; for Grok Build TOML of 210 bytes, mode
+0640.
+
+- Before the folder was there the look said `no_folder`, a connect was answered `no_folder`, and
+  the folder was still not there.
+- The look said `other`, in two to three milliseconds, with the nineteen fields.
+- A connect with a state that had not been shown was answered 409 `changed`, and the file was
+  as before.
+- The connect took about 0.2 seconds, nearly all of it the start of the second Python. The new
+  file was the old one with one piece put in: 229 bytes at byte 310 of the JSON file, after the
+  last member of `mcpServers`; 214 and 209 bytes at the end of the two TOML files, a blank line
+  and the three lines of the entry. The entry held the command the look had named. Parsed, the
+  file without the entry equalled the old file by value, by type and by the order of its keys.
+  Its mode was the old one (0644, 0600, 0640). The copy `.before-locktender` held the old
+  bytes, with mode 0600. The record had one entry more, of the kind `policy`, and the store had
+  the client with a grant in `approve` mode for its one collection, which the first of the
+  three connects had made.
+- The look then said `present` and named the copy.
+- Six seconds later the removal answered `removed`. The JSON file was the file it had been,
+  byte for byte. Each TOML file was the file it had been with one blank line more at its end
+  (one byte), and parsed to the same. The copy `.last-locktender` held the file with the entry,
+  the first copy was unchanged, the client was gone from the store, and the record had one
+  entry more.
+- A body with a field `path` was answered 400; the ids `../../etc/passwd` and `codex`, 404.
+- The marker that the run had put into the three files (as a value, as the token of another
+  tool, in a comment) was in none of the 55 answers of this part, and neither was the name of
+  another entry. The record verified, with nine entries.
+
+**With a clock the run could move**, the same service behind the same server in the run's own
+process: all 33 routes answered 401 without the session. Against the locked store four did
+their work, one answered 404 and one 409 `conflict` (the two exceptions named with
+[the routes](#the-owners-page)), and 27 answered 409 `locked`, the three routes of this part
+among them; the home was as before. Ten minutes after the passphrase the look was answered
+(`present`), and a connect, a removal of that entry and the registration of a client were
+refused with `reauth_required`; so were the first two after the passphrase had been given for
+the trial alone. The file, its time and its folder were as before, and the record had no entry
+more. The entry was then made to point at another store: the look said `differs`, a removal
+was answered `{"file": "differs", "app_removed": true}` without the passphrase, and the file
+was as it had been. With owner mode on again, a connect pointed the entry back (`replaced`,
+with a copy `.last-locktender`), and a second connect in the state `present` wrote nothing and
+was recorded as `connect-kept`. A demo answered 409 `demo` on each of the three routes for each
+of the three ids, with the home as it was, and its `tiles` named no place.
+
+**A version from before.** The store of the run was then opened with the sources of the commit
+before this work began. They unlocked it, the record verified, and their activity list worded
+the twelve `policy` entries by what changed in the policy: "you created the collection
+documents and made 3 more changes" for the first connect, "you removed the app claude-desktop"
+for the removal after it, and "you saved the settings without a change" for the two entries
+whose policy was the one before (a `disconnect-kept` with no client left to remove, and the
+`connect-kept`).
+
+#### The look before these routes
+
+`POST /api/apps/<name>/connect/check` is the look that the page of this version calls, from its
+button "Check the file". It reads the same files through the same reader, for a client that is
+registered, and answers less. It goes when that page goes.
+
+The body is `{}` or `{"host": id}`, with `host` chosen as for a configuration; it knows the
+files of four ids, `codex` among them, and answers `unsupported` for every other id without
+looking at a file. The answer is `{"state", "path", "folder", "open_line", "section"}`, with
+nine words for `state`: `present_more` is given as `present`, `present_as` as `differs`,
+`linked` as `not_read` and `no_access` as `unreadable`. `path` and `folder` are `null` for
+`unsupported`. `section` is given for a JSON file in the state `other`. `open_line` is one shell
+line as text, or `null` for `present`, `no_folder` and `unsupported`. It would open the file in
+the system's text editor, after making it where it is missing, and it never changes a file that
+exists. The app runs none of it, and the page of this version does not show it. On Linux a run
+gave these three forms; on macOS, by the code, `open -e` stands in place of `xdg-open`, and for
+`no_file`, `empty` and a TOML file in the state `other` the line goes on to put the text of the
+configuration on the clipboard with `pbcopy`. No Mac ran it.
 
 ```text
 no_file, JSON    f=<path>; [ -e "$f" ] || echo '{}' > "$f"; xdg-open "$f"
@@ -1269,22 +1624,23 @@ no_file, TOML    f=<path>; [ -e "$f" ] || : > "$f"; xdg-open "$f"
 other states     xdg-open <path>
 ```
 
-**Nothing from the file is in the answer.** A settings file of this kind can hold the keys and
-tokens of other tools. The answer is made of the nine words, the three words, and paths and text
-that the app worked out without the file: no key, no value and no message of a parser reaches
-it. In the run a marker was written into the files as a value, as the token of another tool, in
-a comment and inside the entry itself, and every state was produced with real files. Two cases
-were not: `unsupported` on an older Python, and `unreadable` after a refusal by the system,
-which a run as root cannot produce. The marker was in none of the 38 answers.
+404 `not_found` when no client has that name, and when `host` is not one of the eleven ids. 400
+`invalid` for a body with another field, and for a client whose name cannot stand in a
+configuration. 409 `locked` while the store is locked. Owner mode is never asked for. This route
+knows no demo: a demo has no pairing, so there every program on the computer can ask it and
+learn its one word about a file in the home directory of the account the demo runs under, and
+the place of that file. The three routes above refuse a demo.
 
-**Errors and rights.** 404 `not_found` when no client has that name, and when `host` is not one
-of the eleven ids. 400 `invalid` for a body with another field, and for a client whose name cannot
-stand in a configuration. 409 `locked` while the store is locked. Owner mode is never asked for:
-the route changes nothing and lets nothing leave the store. In a run for this page it was
-answered after owner mode had run out, when registering a client was refused. It needs the
-session like every route. A demo has no pairing, so there every program on the computer can ask
-this route and learn its one word about a file in the home directory of the account the demo
-runs under, and the place of that file.
+In a run through this route, made before the folders were reached without following a link and
+before Grok Build's file was known, a marker was written into the files as a value, as the
+token of another tool, in a comment and inside the entry itself, and every state was produced
+with real files, except `unsupported` on an older Python and a refusal by the system, which a
+run as root cannot produce. The marker was in none of the 38 answers, a named pipe that nobody
+wrote to was answered `not_read` in about a millisecond, and after the 38 looks the home
+directory held what the run itself had put there and nothing else. For this version the reader
+was also run by itself: with the right entry in a folder that the settings folder was a link
+to, and again with `~/.config` as the link, the route's word was `not_read`, and nothing of the
+file behind the link was read. A version before this one followed such a link.
 
 ### The played app of a demo
 
@@ -1388,3 +1744,10 @@ and `v` in every request and reply (1). The vault format underneath has its own 
 version: the page and its server are files of one installation and change together.
 [The interface file](#the-interface-file) states none either: a file this version cannot read
 counts as no file.
+
+Two things a store or its `run/` folder may hold from this version on that a version before it
+reads differently, without failing: the third word of the interface file, which makes the whole
+file count as none there; and a `policy` entry whose `by` begins with `connect` or `disconnect`
+([Kinds of entry](#kinds-of-entry)), which can stand for an event outside the store with the
+policy unchanged, and which a version before shows as a change of the policy, or as "you saved
+the settings without a change".

@@ -509,10 +509,10 @@ only whether its own entry is there. Then this page says what to do." What holds
   or that lies in a folder of your home folder that is a link, is not gone through: nothing
   behind such a link is read.
 - Nothing from the file reaches the page but one of the answers in the table below.
-- Nothing is written. Locktender writes no file outside the vault's folder and changes no
-  settings of any app. In the words of the screen: "This part happens outside this page. Nothing
-  is changed for you: you copy the text and put it where the app reads it. The text holds no
-  passphrase and no key."
+- Nothing is written by this press, and by no other press of this page: it changes no file
+  outside the vault's folder and no settings of any app. In the words of the screen: "This part
+  happens outside this page. Nothing is changed for you: you copy the text and put it where the
+  app reads it. The text holds no passphrase and no key."
 
 | The screen says | What it asks you to do |
 | --- | --- |
@@ -1407,14 +1407,25 @@ replacement.
   the original; [Limits you should know](#limits-you-should-know) says what follows from that.
 - **Backups** of your disk, which hold whatever they copied: the sealed vault, and the originals.
 
-**What Locktender touches outside the vault's folder.** It writes nothing there: no file, and no
-setting of any app. (A demo's vault is a temporary folder of its own, and counts as its vault.)
-Of the files of other programs it reads one kind, and only when you press "Check the file" or
-"Check again" on the screen "Ask your first question": the settings file of Claude Desktop, of
-the ChatGPT desktop app and Codex, or of Grok Build. The page is told one of a few fixed answers
-about it and nothing of what is in it ([Step 4](#step-4-first-question)). (The package holds a
-module that can write Locktender's entry into such a file. Nothing in this version calls it:
-no press and no command.)
+**What Locktender touches outside the vault's folder.** One kind of file: the settings file of an
+AI app (Claude Desktop; the ChatGPT desktop app and Codex, which share one; Grok Build), and up
+to two copies of it that Locktender keeps beside it. It reads that file when the page asks for
+a look, and looks whether the copies are there. It writes it when the page asks for it, with
+your passphrase typed in the last ten minutes: it adds its own entry, changes where that entry
+points, or removes it, and nothing else, after it has read the file; before each change it
+keeps a copy of the file as it was. It writes no file it could not read and nothing through a
+link, creates no folder, and removes no entry that points somewhere else. It starts no program
+but its own Python, once before each such write, to see that the command it is about to write
+starts. The page is told a few fixed words about the file, the place of the file and of the
+copies, and the command; nothing of what is in the file.
+
+No page of this version asks for the write yet. The page asks for a look when you press "Check
+the file" or "Check again" on the screen "Ask your first question"
+([Step 4](#step-4-first-question)), and is told one of a few fixed answers; the entry you put
+into the file yourself, as that step describes. What the app does when it is asked to write is
+in [GATE_FORMAT.md](GATE_FORMAT.md#the-settings-file-of-an-ai-application). Nobody has tried
+the result with an AI app. (A demo's vault is a temporary folder of its own, and counts as its
+vault. A demo is refused the write.)
 
 While the vault is unlocked, its key and whatever text is being handled are in the memory of the
 Locktender program. A program that runs under your account has ways to them. This is the same for

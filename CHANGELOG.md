@@ -64,9 +64,12 @@ changes only when the bytes on disk do.
   makes Locktender read that app's one settings file and tell the page one of a
   few fixed answers, such as whether its own entry is there, and nothing of
   what the file holds; the page asks for that look at no other time. It is the
-  one kind of file of another program that Locktender reads. Locktender writes
-  no file of another program and changes no settings of any AI app: you copy
-  the text and put it where the AI app reads it. Every step after the first can
+  one kind of file of another program that Locktender reads. No press of
+  this page writes a file of another program or changes the settings of an AI
+  app: you copy the text and put it where the AI app reads it. (The app
+  behind the page can write its own entry into such a file from this version
+  on, when a request asks for it within ten minutes of the passphrase. No
+  page sends such a request yet.) Every step after the first can
   be skipped or left for later; until setting up is over, a card on the Basic
   page, "Finish setting up", names the next one.
 - **The demo has a guide.** It stands on the Basic page under "Approvals" and

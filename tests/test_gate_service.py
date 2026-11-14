@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import hashlib
+import http.client
 import importlib.util
 import itertools
 import json
@@ -29,14 +31,18 @@ import pytest
 
 from wdva._version import __version__
 from wdva.errors import WDVAError
-from wdva.gate import brand, extract, hostcheck, hostconfig, messages
+from wdva.gate import brand, extract, hostcheck, hostconfig, hostwrite, messages
+from wdva.gate import ledger as gate_ledger
+from wdva.gate import policy as policy_module
 from wdva.gate import store as gate_store
 from wdva.gate.app import main as app_main
 from wdva.gate.app import service as service_module
 from wdva.gate.app.api import Service, ServiceError
+from wdva.gate.app.httpd import AppServer
 from wdva.gate.app.service import NOT_REGISTERED, OWNER_MODE, TRIAL_PER_MINUTE, GateService
 from wdva.gate.core import Gate
 from wdva.gate.errors import LedgerError
+from wdva.gate.policy import Policy
 from wdva.gate.store import init_store
 from wdva.gate.types import Caller
 
@@ -392,6 +398,9 @@ LOCKED_CALLS: dict[str, Callable[[GateService], Any]] = {
     "set_app_limits": lambda s: s.set_app_limits(name="claude-desktop", limits={}),
     "connect": lambda s: s.connect(name="claude-desktop"),
     "connect_check": lambda s: s.connect_check(name="claude-desktop"),
+    "connect_look": lambda s: s.connect_look(host="claude-desktop"),
+    "connect_write": lambda s: s.connect_write(host="claude-desktop", expect="no_file"),
+    "connect_remove": lambda s: s.connect_remove(host="claude-desktop", expect="no_file"),
     "settings": lambda s: s.settings(),
     "set_settings": lambda s: s.set_settings(defaults={"chars_per_day": 1}),
     "add_replaced_string": lambda s: s.add_replaced_string(text="Okafor"),
@@ -2047,7 +2056,7 @@ def test_a_question_is_not_a_release(unlocked: GateService) -> None:
 
 
 def test_the_cursor_grows_with_everything_the_interface_shows(
-    unlocked: GateService, gate_clock: FakeClock
+    unlocked: GateService, gate_clock: FakeClock, tiles_home: Path
 ) -> None:
     seen = [unlocked.state()["cursor"]]
 
@@ -2076,6 +2085,15 @@ def test_the_cursor_grows_with_everything_the_interface_shows(
     assert grew()
     unlocked.reauth(passphrase=gs.PASSPHRASE, scope="trial")
     assert grew()  # the state says until when a trial question is answered
+    # A look at a settings file changes nothing a list shows; a connect and a disconnect
+    # each leave an entry in the record.
+    folder_of(JSON_HOST)
+    assert unlocked.connect_look(host=JSON_HOST)["state"] == "no_file"
+    assert not grew()
+    assert unlocked.connect_write(host=JSON_HOST, expect="no_file")["connected"] is True
+    assert grew()
+    assert unlocked.connect_remove(host=JSON_HOST, expect="present")["app_removed"] is True
+    assert grew()
     unlocked.lock()
     assert grew()
 
@@ -4362,3 +4380,1616 @@ def test_demo_again_is_not_there_outside_a_demo(
             quiet.demo_again()
     finally:
         quiet.close()
+
+
+# -- connect, in the app: the settings file of an agent application ----------------------------
+#
+# Every test here runs in a home of its own, and the settings files in it are files the test
+# made: no application read one of them. That home, and the vault, lie under the system's
+# folder for temporary files, where the writer refuses a command (a Python or a vault there
+# may be gone tomorrow). The fixture ``tiles_home`` therefore replaces the function that
+# judges such a place by one that finds nothing; the rule itself is tested with the writer.
+# It also takes out of the way what depends on the Python that runs the tests: whether the
+# MCP SDK is installed, and the start of a second Python at each press.
+
+HAS_TOML = sys.version_info >= (3, 11)
+needs_toml = pytest.mark.skipif(not HAS_TOML, reason="no reader for TOML in this Python")
+TILE_HOSTS = [
+    pytest.param("claude-desktop"),
+    pytest.param("chatgpt-desktop", marks=needs_toml),
+    pytest.param("grok-build", marks=needs_toml),
+]
+JSON_HOST = "claude-desktop"
+SDK_READY = {"sdk": True, "version": "2.3.0", "python": True, "message": None}
+LOOK_FIELDS = [
+    "host",
+    "label",
+    "readers",
+    "state",
+    "problem",
+    "format",
+    "path",
+    "folder",
+    "real_folder",
+    "variable",
+    "entry",
+    "command",
+    "section",
+    "switched_off",
+    "other_name",
+    "copies",
+    "app",
+    "groups",
+    "answered_change",
+]
+TILE_APP_FIELDS = ["name", "registered", "paused", "last_seen", "differs", "reads"]
+NOT_SHOWN = "Say which state of the settings file you were shown."
+
+
+@pytest.fixture
+def tiles_home(home: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The home of a test that connects: it exists, and no variable moves a settings file."""
+    home.mkdir()
+    for variable in ("GROK_HOME", "CODEX_HOME"):
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setattr(hostwrite, "_may_not_last", lambda path: False)
+    monkeypatch.setattr(service_module, "start_problem", lambda: None)
+    monkeypatch.setattr(hostconfig, "sdk_status", lambda: dict(SDK_READY))
+    return home
+
+
+@pytest.fixture
+def fresh(service: GateService, tiles_home: Path) -> GateService:
+    """An unlocked vault that was just created: no app, no group, no document."""
+    service.create_store(passphrase=gs.PASSPHRASE)
+    return service
+
+
+def files_in(root: Path) -> dict[str, tuple[Any, ...]]:
+    """Everything below ``root``, as :func:`tree` tells it, without the time of a folder.
+
+    A temporary file that came and went changes the time of its folder and nothing else.
+    """
+    return {
+        name: (mode, size, None if stat.S_ISDIR(mode) else changed, content)
+        for name, (mode, size, changed, content) in tree(root).items()
+    }
+
+
+def file_of(host: str) -> Path:
+    """Where the settings file of ``host`` lies in the test's home, on this system."""
+    found = hostconfig.settings_file(host)
+    assert found is not None
+    return found[0]
+
+
+def folder_of(host: str) -> Path:
+    """The settings file of ``host``, with its folder made."""
+    place = file_of(host)
+    place.parent.mkdir(parents=True, exist_ok=True)
+    return place
+
+
+def shown(path: Path) -> str:
+    return hostconfig.shown_path(path)
+
+
+def settled(path: Path) -> Path:
+    """Give a file a time of change that is not a moment ago: a write leaves a fresh file alone."""
+    when = time.time() - 30
+    os.utime(path, (when, when))
+    return path
+
+
+def holding(path: Path, content: str | bytes) -> Path:
+    """A settings file with this content, last changed half a minute ago."""
+    path.write_bytes(content.encode("utf-8") if isinstance(content, str) else content)
+    return settled(path)
+
+
+def in_force(service: GateService) -> dict[str, Any]:
+    """The settings in force, without their serial number."""
+    session = service._session
+    assert session is not None
+    policy = session.gate.policy().to_json()
+    del policy["serial"]
+    return policy
+
+
+def policy_records(service: GateService) -> list[tuple[str, int]]:
+    """What made each ``policy`` record, and its serial number, oldest first."""
+    session = service._session
+    assert session is not None
+    return [
+        (str(record.data["by"]), int(record.data["serial"]))
+        for record in session.store.ledger.records()
+        if record.kind == "policy"
+    ]
+
+
+def registered(service: GateService) -> dict[str, Any]:
+    return {app["name"]: app for app in service.apps()["apps"]}
+
+
+def count_looks(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Note every look at a settings file and every opening of its folder, from now on."""
+    seen: list[str] = []
+    real_look, real_folder = hostcheck.look, hostcheck.open_folder
+
+    def look(*args: Any, **kwargs: Any) -> Any:
+        seen.append("look")
+        return real_look(*args, **kwargs)
+
+    def open_folder(*args: Any, **kwargs: Any) -> Any:
+        seen.append("folder")
+        return real_folder(*args, **kwargs)
+
+    monkeypatch.setattr(hostcheck, "look", look)
+    monkeypatch.setattr(hostcheck, "open_folder", open_folder)
+    return seen
+
+
+def the_three(service: GateService, host: str, expect: str) -> list[Callable[[], Any]]:
+    """The three calls that deal with the settings file of ``host``."""
+    return [
+        lambda: service.connect_look(host=host),
+        lambda: service.connect_write(host=host, expect=expect),
+        lambda: service.connect_remove(host=host, expect=expect),
+    ]
+
+
+@contextlib.contextmanager
+def over_http(service: GateService) -> Iterator[Callable[[str, Any], tuple[int, Any]]]:
+    """The service behind the real server; yields ``post(path, body)`` of a page that paired."""
+    server = AppServer(service, port=0, pairing=True, version=__version__)
+    server.start()
+
+    def post(path: str, body: Any, token: list[str] = []) -> tuple[int, Any]:  # noqa: B006
+        headers = {"X-WDVA-Gate": "1", "Content-Type": "application/json"}
+        if token:
+            headers["X-WDVA-Session"] = token[0]
+        connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=60)
+        try:
+            connection.request("POST", path, body=json.dumps(body).encode(), headers=headers)
+            response = connection.getresponse()
+            answer = json.loads(response.read())
+        finally:
+            connection.close()
+        if path == "/api/session/pair" and response.status == 200:
+            token[:] = [answer["session"]]
+        return response.status, answer
+
+    try:
+        assert post("/api/session/pair", {"code": server.pairing_code})[0] == 200
+        yield post
+    finally:
+        server.stop()
+
+
+def test_the_tiles_say_what_each_stands_for_and_look_at_no_file(
+    unlocked: GateService, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for variable in ("GROK_HOME", "CODEX_HOME"):
+        monkeypatch.delenv(variable, raising=False)
+    seen = count_looks(monkeypatch)
+    answer = unlocked.apps()
+    assert list(answer) == ["apps", "groups", "collections", "known", "tiles"]
+    tiles = answer["tiles"]
+    mac = sys.platform == "darwin"
+    claude = "Library/Application Support/Claude" if mac else ".config/Claude"
+    assert tiles == [
+        {
+            "tile": "claude",
+            "host": "claude-desktop",
+            "label": "Claude Desktop",
+            "readers": ["Claude Desktop"],
+            "name": "claude-desktop",
+            "destination": "Anthropic",
+            "writes": True,
+            "desktop": True,
+            "path": f"~/{claude}/claude_desktop_config.json",
+        },
+        {
+            "tile": "chatgpt",
+            "host": "chatgpt-desktop",
+            "label": "ChatGPT",
+            "readers": ["ChatGPT", "Codex"],
+            "name": "chatgpt-desktop",
+            "destination": "OpenAI",
+            "writes": HAS_TOML,
+            "desktop": True,
+            "path": "~/.codex/config.toml",
+        },
+        {
+            "tile": "grok",
+            "host": "grok-build",
+            "label": "Grok Build",
+            "readers": ["Grok Build"],
+            "name": "grok-build",
+            "destination": "xAI",
+            "writes": HAS_TOML,
+            "desktop": False,
+            "path": "~/.grok/config.toml",
+        },
+        {
+            "tile": "custom",
+            "host": "generic",
+            "label": "",
+            "readers": [],
+            "name": "",
+            "destination": "",
+            "writes": False,
+            "desktop": False,
+            "path": None,
+        },
+    ]
+    # They are the tiles of the module that knows the programs, in its order, and the three
+    # that write are the three the writer knows.
+    assert [(t["tile"], t["host"]) for t in tiles] == [(t.tile, t.host) for t in hostconfig.TILES]
+    assert tuple(t["host"] for t in tiles if t["host"] != "generic") == hostwrite.WRITABLE
+    # A variable of the app's own environment moves a place, and the tile says where to.
+    monkeypatch.setenv("GROK_HOME", str(home / "grok kept here"))
+    if not mac:
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "settings"))
+    moved = {tile["tile"]: tile["path"] for tile in unlocked.apps()["tiles"]}
+    assert moved["grok"] == "~/grok kept here/config.toml"
+    assert moved["claude"] == (
+        tiles[0]["path"] if mac else "~/settings/Claude/" + "claude_desktop_config.json"
+    )
+    assert moved["chatgpt"] == "~/.codex/config.toml"
+    # Without a reader for TOML two of them cannot write here; the JSON one still can.
+    monkeypatch.setattr(hostcheck, "_toml_loads", lambda: None)
+    assert [tile["writes"] for tile in unlocked.apps()["tiles"]] == [True, False, False, False]
+    # Making the list looked at no file: there is not even a home folder to look into.
+    assert seen == []
+    assert not home.exists()
+
+
+def test_a_request_chooses_among_three_files_and_nothing_else(
+    fresh: GateService, tiles_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = count_looks(monkeypatch)
+    head = record_and_files(fresh)
+    settings = in_force(fresh)
+    others = (
+        "generic",
+        "codex",
+        "claude-code",
+        "grok-web",
+        "../../etc/passwd",
+        "",
+        "Claude-Desktop",
+        "claude-desktop/",
+        str(tiles_home / "elsewhere.json"),
+    )
+    for host in others:
+        for call in the_three(fresh, host, "no_file"):
+            with refused(404, "not_found"):
+                call()
+    # No call takes a place, or anything but the application and the state that was shown.
+    for method in (fresh.connect_look, fresh.connect_write, fresh.connect_remove):
+        with pytest.raises(TypeError):
+            method(host=JSON_HOST, expect="no_file", path="/etc/passwd")
+    # The state is one of the fixed words: for a connect, one in which there is something
+    # to press; for a disconnect, any that a look can find.
+    for expect in ("", "written", "no_folder", "linked", "unreadable", "Present", "/etc/passwd"):
+        with refused(400, "invalid") as told:
+            fresh.connect_write(host=JSON_HOST, expect=expect)
+        assert told[0].message == NOT_SHOWN
+    for expect in ("", "written", "changed", "recent", "Present", "/etc/passwd"):
+        with refused(400, "invalid") as told:
+            fresh.connect_remove(host=JSON_HOST, expect=expect)
+        assert told[0].message == NOT_SHOWN
+    assert seen == []
+    assert (record_and_files(fresh), in_force(fresh)) == (head, settings)
+    assert sorted(tiles_home.rglob("*")) == []
+    # Each of the three ids leads to one place: the one the module that knows the programs
+    # gives for it, in the home of the account the app runs under.
+    for host in hostwrite.WRITABLE:
+        if host != JSON_HOST and not HAS_TOML:
+            continue
+        look = fresh.connect_look(host=host)
+        assert look["path"] == shown(file_of(host))
+        assert look["path"].startswith("~/")
+        assert look["state"] == "no_folder"
+    assert sorted(tiles_home.rglob("*")) == []
+    # Over HTTP: the address names the application and the body names the state. A body
+    # with a path, or with any other field, is refused before the service is asked.
+    with over_http(fresh) as post:
+        seen.clear()
+        for path, body in (
+            (f"/api/connect/{JSON_HOST}/look", {"path": "/etc/passwd"}),
+            (f"/api/connect/{JSON_HOST}/look", {"expect": "no_file"}),
+            (f"/api/connect/{JSON_HOST}", {"expect": "no_file", "path": "/etc/passwd"}),
+            (f"/api/connect/{JSON_HOST}", {"path": str(tiles_home / "elsewhere.json")}),
+            (f"/api/connect/{JSON_HOST}", {}),
+            (f"/api/connect/{JSON_HOST}", {"expect": ["no_file"]}),
+            (f"/api/connect/{JSON_HOST}/remove", {"expect": "no_file", "file": "~/.ssh/id"}),
+            (f"/api/connect/{JSON_HOST}/remove", {}),
+            (f"/api/connect/{JSON_HOST}/look?path=%2Fetc%2Fpasswd", {}),
+            (f"/api/connect/{JSON_HOST}?host=codex", {"expect": "no_file"}),
+        ):
+            status, answer = post(path, body)
+            assert (status, answer["error"]["code"]) == (400, "invalid"), (path, body)
+        for path, body in (
+            ("/api/connect/codex/look", {}),
+            ("/api/connect/generic", {"expect": "no_file"}),
+            ("/api/connect/..%2F..%2Fetc%2Fpasswd/look", {}),
+            ("/api/connect/claude-desktop/look/again", {}),
+            ("/api/connect/claude-desktop/remove/now", {"expect": "no_file"}),
+            ("/api/connect", {"expect": "no_file"}),
+        ):
+            status, answer = post(path, body)
+            assert (status, answer["error"]["code"]) == (404, "not_found"), (path, body)
+        assert seen == []
+        status, answer = post(f"/api/connect/{JSON_HOST}/look", {})
+        assert (status, list(answer)) == (200, LOOK_FIELDS)
+    assert (record_and_files(fresh), in_force(fresh)) == (head, settings)
+    assert sorted(tiles_home.rglob("*")) == []
+
+
+def test_connect_needs_owner_mode_before_it_looks(
+    fresh: GateService, tiles_home: Path, gate_clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    place = holding(folder_of(JSON_HOST), '{\n  "theme": "dark"\n}\n')
+    before = files_in(tiles_home)
+    head, settings = record_and_files(fresh), in_force(fresh)
+    started: list[int] = []
+    monkeypatch.setattr(service_module, "start_problem", lambda: started.append(1))
+    seen = count_looks(monkeypatch)
+    # Until the last second of owner mode nothing is refused for it (a wrong state is).
+    gate_clock.advance(seconds=OWNER_MODE.total_seconds() - 1)
+    with refused(409, "changed"):
+        fresh.connect_write(host=JSON_HOST, expect="no_file")
+    assert (files_in(tiles_home), in_force(fresh)) == (before, settings)
+    seen.clear()
+    started.clear()
+    gate_clock.advance(seconds=1)
+    for host in hostwrite.WRITABLE:
+        for expect in ("other", "no_file", "present"):
+            with refused(403, "reauth_required") as told:
+                fresh.connect_write(host=host, expect=expect)
+            assert told[0].message == ENTER_AGAIN
+    # Nothing was looked at, no program was started, and nothing changed anywhere.
+    assert (seen, started) == ([], [])
+    assert files_in(tiles_home) == before
+    assert (record_and_files(fresh), in_force(fresh)) == (head, settings)
+    # The look itself needs no owner mode: it changes nothing.
+    assert fresh.connect_look(host=JSON_HOST)["state"] == "other"
+    assert seen != []
+    assert files_in(tiles_home) == before
+    # The passphrase entered for a trial question does not open the press.
+    fresh.reauth(passphrase=gs.PASSPHRASE, scope="trial")
+    with refused(403, "reauth_required"):
+        fresh.connect_write(host=JSON_HOST, expect="other")
+    assert files_in(tiles_home) == before
+    # Entered for owner mode, it does.
+    fresh.reauth(passphrase=gs.PASSPHRASE)
+    answer = fresh.connect_write(host=JSON_HOST, expect="other")
+    assert (answer["connected"], answer["state"]) == (True, "present")
+    assert json.loads(place.read_bytes())["mcpServers"] == {SLUG: the_entry(fresh)}
+    assert started == [1]
+
+
+def test_disconnect_needs_owner_mode_to_change_a_file(
+    fresh: GateService, tiles_home: Path, gate_clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    place = holding(
+        folder_of(JSON_HOST), json.dumps({"mcpServers": {"another": {"command": "tool"}}}, indent=2)
+    )
+    assert fresh.connect_write(host=JSON_HOST, expect="other")["connected"] is True
+    settled(place)
+    expire_owner_mode(gate_clock)
+    seen = count_looks(monkeypatch)
+    before = files_in(tiles_home)
+    head, settings = record_and_files(fresh), in_force(fresh)
+    # The entry is this vault's: taking it out changes a file of another program.
+    for expect in ("present", "present_more"):
+        with refused(403, "reauth_required") as told:
+            fresh.connect_remove(host=JSON_HOST, expect=expect)
+        assert told[0].message == ENTER_AGAIN
+    assert seen == []
+    assert files_in(tiles_home) == before
+    assert (record_and_files(fresh), in_force(fresh)) == (head, settings)
+
+    # The entry points elsewhere now. With the state the owner was shown before ("present"),
+    # nothing is done, although owner mode is on: the file is not what was shown.
+    elsewhere = the_entry(fresh)
+    elsewhere["args"] = [*elsewhere["args"][:-1], str(tiles_home / "another vault")]
+    holding(place, json.dumps({"mcpServers": {SLUG: elsewhere}}, indent=2))
+    before = files_in(tiles_home)
+    fresh.reauth(passphrase=gs.PASSPHRASE)
+    head = record_and_files(fresh)
+    with refused(409, "changed"):
+        fresh.connect_remove(host=JSON_HOST, expect="present")
+    assert JSON_HOST in registered(fresh)
+    assert files_in(tiles_home) == before
+    assert (record_and_files(fresh), in_force(fresh)) == (head, settings)
+
+    # With the state it is in ("differs") the file is left as it is, so nothing but the
+    # vault changes, and only by taking away: no owner mode is asked.
+    expire_owner_mode(gate_clock)
+    known = len(policy_records(fresh))
+    assert fresh.connect_remove(host=JSON_HOST, expect="differs") == {
+        "file": "differs",
+        "app_removed": True,
+        "path": shown(place),
+        "copy": None,
+    }
+    assert JSON_HOST not in registered(fresh)
+    assert files_in(tiles_home) == before
+    assert [by for by, _ in policy_records(fresh)[known:]] == [f"disconnect-kept:{JSON_HOST}"]
+
+
+def test_disconnect_needs_owner_mode_where_removing_the_app_does(
+    unlocked: GateService, tiles_home: Path, gate_clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The sample vault answers claude-desktop, which sends text to a provider, and holds
+    # back lm-studio, which runs here, until the owner chooses. Without claude-desktop the
+    # other one would be answered: that lets more leave, as "Remove this app" knows.
+    assert unlocked.state()["serving"]["local"] == []
+    expire_owner_mode(gate_clock)
+    seen = count_looks(monkeypatch)
+    head = record_and_files(unlocked)
+    with refused(403, "reauth_required"):
+        unlocked.remove_app(name="claude-desktop")
+    with refused(403, "reauth_required"):
+        unlocked.connect_remove(host=JSON_HOST, expect="no_folder")
+    assert seen == []
+    assert record_and_files(unlocked) == head
+    unlocked.reauth(passphrase=gs.PASSPHRASE)
+    assert unlocked.connect_remove(host=JSON_HOST, expect="no_folder") == {
+        "file": "no_entry",
+        "app_removed": True,
+        "path": shown(file_of(JSON_HOST)),
+        "copy": None,
+    }
+    assert unlocked.state()["serving"]["local"] == ["lm-studio"]
+    assert sorted(tiles_home.rglob("*")) == []
+
+
+def test_connect_is_recorded_as_a_policy_entry(fresh: GateService, tiles_home: Path) -> None:
+    place = holding(folder_of(JSON_HOST), "{}\n")
+    session = fresh._session
+    assert session is not None
+    kinds = gate_ledger.KINDS
+    before = list(session.store.ledger.records())
+    answer = fresh.connect_write(host=JSON_HOST, expect="empty")
+    assert answer["connected"] is True
+    after = list(session.store.ledger.records())
+    assert len(after) == len(before) + 1
+    entry = after[-1]
+    # An entry of the kind that exists, with the fields that kind has, and nothing of the file.
+    assert (entry.kind, entry.data["by"]) == ("policy", f"connect:{JSON_HOST}")
+    assert set(entry.data) == {"v", "seq", "prev", "time", "kind", "serial", "policy", "by"}
+    assert entry.data["serial"] == before[-2].data["serial"] + 1 == 2
+    assert Policy.from_json(entry.data["policy"]) == session.gate.policy()
+    assert place.name not in json.dumps(entry.data)
+    assert str(tiles_home) not in json.dumps(entry.data)
+    assert fresh.verify()["verified"] is True
+    assert (
+        gate_ledger.KINDS
+        == kinds
+        == (
+            "init",
+            "policy",
+            "add",
+            "remove",
+            "unlock",
+            "lock",
+            "release",
+            "denial",
+            "status",
+            "approval",
+        )
+    )
+
+    def newest() -> dict[str, Any]:
+        item = fresh.activity(limit=1)["items"][0]
+        return fresh.activity_detail(seq=item["seq"])
+
+    # Activity says what the record knows: the file was about to be written.
+    told = newest()
+    assert told["kind"] == "change"
+    assert told["summary"] == (
+        f"you connected Claude Desktop: {PRODUCT} was about to write its entry into the "
+        "settings file and made 4 more changes"
+    )
+    assert told["collections"] == ["documents"]
+    assert told["details"] == [
+        [
+            "changes",
+            "created the collection documents; opened documents to hosted apps; "
+            "added the app claude-desktop; granted claude-desktop: documents (ask me each time)",
+        ],
+        ["settings file", shown(place)],
+        ["settings, version", "2"],
+    ]
+    # A second press finds the entry: an entry all the same, with the settings unchanged.
+    assert fresh.connect_write(host=JSON_HOST, expect="present")["connected"] is True
+    told = newest()
+    assert (
+        told["summary"] == "you connected Claude Desktop: its settings file had the entry already"
+    )
+    assert told["details"] == [["settings file", shown(place)], ["settings, version", "3"]]
+    assert policy_records(fresh)[-2:] == [
+        (f"connect:{JSON_HOST}", 2),
+        (f"connect-kept:{JSON_HOST}", 3),
+    ]
+    stored = [r.data["policy"] for r in session.store.ledger.records() if r.kind == "policy"]
+    assert {**stored[-1], "serial": 0} == {**stored[-2], "serial": 0}
+    # A disconnect that takes the entry out, and one that finds none.
+    settled(place)
+    assert fresh.connect_remove(host=JSON_HOST, expect="present")["file"] == "removed"
+    told = newest()
+    assert told["summary"] == (
+        f"you disconnected Claude Desktop: {PRODUCT} was about to remove its entry from the "
+        "settings file and made 1 more change"
+    )
+    assert told["details"][0] == ["changes", "removed the app claude-desktop"]
+    fresh.add_app(name=JSON_HOST, hosted=True, destination="Anthropic")
+    assert fresh.connect_remove(host=JSON_HOST, expect="empty")["file"] == "no_entry"
+    told = newest()
+    assert told["summary"] == (
+        "you disconnected Claude Desktop: its settings file was not changed and made 1 more change"
+    )
+    assert told["kind"] == "change"
+    assert [by.partition(":")[0] for by, _ in policy_records(fresh)[-4:]] == [
+        "connect-kept",
+        "disconnect",
+        "owner",
+        "disconnect-kept",
+    ]
+    assert fresh.verify()["verified"] is True
+    # What made an entry is read as one of these only for the three applications.
+    assert service_module._outside(f"connect:{JSON_HOST}") == ("connect", JSON_HOST)
+    for by in ("connect:codex", "connect:", "connect", "owner", "export:claude-desktop", None, 7):
+        assert service_module._outside(by) is None
+
+
+def test_connect_grants_ask_me_each_time_for_one_group_and_nothing_for_several(
+    fresh: GateService, tiles_home: Path
+) -> None:
+    place = folder_of(JSON_HOST)
+
+    def groups() -> dict[str, bool]:
+        return {c["name"]: c["allow_hosted"] for c in fresh.documents()["collections"]}
+
+    # No group: the group "documents" is made, opened, and given with "ask me each time".
+    assert groups() == {}
+    answer = fresh.connect_write(host=JSON_HOST, expect="no_file")
+    assert (answer["connected"], answer["groups"]) == (True, 1)
+    assert answer["app"] == {
+        "name": JSON_HOST,
+        "registered": True,
+        "paused": False,
+        "last_seen": None,
+        "differs": False,
+        "reads": False,
+    }
+    assert groups() == {"documents": True}
+    app = registered(fresh)[JSON_HOST]
+    assert (app["hosted"], app["destination"], app["grants"]) == (
+        True,
+        "Anthropic",
+        {"documents": "approve"},
+    )
+    assert in_force(fresh)["collections"]["documents"]["show_titles"] is False
+
+    # One group, of another name, closed to apps that send text to a provider: it is
+    # opened and given; no second group is made.
+    fresh.remove_app(name=JSON_HOST)
+    fresh.remove_collection(name="documents")
+    fresh.add_document(collection="papers", name="lease.txt", data=gs.LEASE_TEXT.encode())
+    assert groups() == {"papers": False}
+    look = fresh.connect_look(host=JSON_HOST)
+    assert (look["state"], look["groups"], look["app"]["registered"]) == ("present", 1, False)
+    answer = fresh.connect_write(host=JSON_HOST, expect="present")
+    assert (answer["connected"], answer["groups"]) == (True, 1)
+    assert groups() == {"papers": True}
+    assert registered(fresh)[JSON_HOST]["grants"] == {"papers": "approve"}
+
+    # A grant "can read" that exists is left as it is, and the look says that it is there.
+    fresh.set_grant(app=JSON_HOST, collection="papers", mode="read")
+    assert fresh.connect_look(host=JSON_HOST)["app"]["reads"] is True
+    answer = fresh.connect_write(host=JSON_HOST, expect="present")
+    assert (answer["connected"], answer["app"]["reads"]) == (True, True)
+    assert registered(fresh)[JSON_HOST]["grants"] == {"papers": "read"}
+
+    # Several groups: the app is registered, and no group and no grant is touched.
+    fresh.remove_app(name=JSON_HOST)
+    fresh.set_collection(name="papers", allow_hosted=False)
+    fresh.set_collection(name="tax")
+    assert fresh.connect_look(host=JSON_HOST)["groups"] == 2
+    answer = fresh.connect_write(host=JSON_HOST, expect="present")
+    assert (answer["connected"], answer["groups"]) == (True, 2)
+    assert groups() == {"papers": False, "tax": False}
+    assert registered(fresh)[JSON_HOST]["grants"] == {}
+    assert answer["app"]["reads"] is False
+    # In all of it the file was written once.
+    assert json.loads(place.read_bytes()) == {"mcpServers": {SLUG: the_entry(fresh)}}
+    assert [by.partition(":")[0] for by, _ in policy_records(fresh) if ":" in by] == [
+        "connect",
+        "connect-kept",
+        "connect-kept",
+        "connect-kept",
+    ]
+
+
+def test_connect_does_not_change_what_kind_of_app_a_name_is(
+    fresh: GateService, tiles_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    place = holding(folder_of(JSON_HOST), "{}\n")
+    for kind in (
+        {"hosted": False},  # its model runs on this computer
+        {"hosted": True, "destination": "Somebody else"},  # another receiver than the tile's
+    ):
+        fresh.add_app(name=JSON_HOST, **kind)
+        fresh.set_collection(name="papers")
+        before = (files_in(tiles_home), in_force(fresh), record_and_files(fresh))
+        seen = count_looks(monkeypatch)
+        for expect in ("empty", "present", "no_file"):
+            assert fresh.connect_write(host=JSON_HOST, expect=expect) == {
+                "connected": False,
+                "state": "other_kind",
+            }
+        assert seen == []  # found before any file is looked at
+        look = fresh.connect_look(host=JSON_HOST)
+        assert (look["app"]["differs"], look["app"]["registered"]) == (True, True)
+        assert look["answered_change"] is False
+        assert (files_in(tiles_home), in_force(fresh), record_and_files(fresh)) == before
+        monkeypatch.undo()
+        monkeypatch.setenv("HOME", str(tiles_home))
+        monkeypatch.setattr(hostwrite, "_may_not_last", lambda path: False)
+        monkeypatch.setattr(service_module, "start_problem", lambda: None)
+        monkeypatch.setattr(hostconfig, "sdk_status", lambda: dict(SDK_READY))
+        fresh.remove_app(name=JSON_HOST)
+        fresh.remove_collection(name="papers")
+    assert place.read_bytes() == b"{}\n"
+    # Registered as the tile's own kind, it is no other kind.
+    fresh.add_app(name=JSON_HOST, hosted=True, destination="Anthropic")
+    assert fresh.connect_look(host=JSON_HOST)["app"]["differs"] is False
+    assert fresh.connect_write(host=JSON_HOST, expect="empty")["connected"] is True
+
+
+def test_the_look_says_ahead_which_apps_stop_being_answered(
+    fresh: GateService, tiles_home: Path
+) -> None:
+    folder_of(JSON_HOST)
+    # Nothing is registered: nobody stops being answered.
+    assert fresh.connect_look(host=JSON_HOST)["answered_change"] is False
+    fresh.add_app(name="lm-studio", hosted=False)
+    serving = fresh.state()["serving"]
+    assert (serving["local"], serving["hosted"], serving["choice_needed"]) == (
+        ["lm-studio"],
+        [],
+        False,
+    )
+    look = fresh.connect_look(host=JSON_HOST)
+    assert look["answered_change"] is True
+    assert fresh.state()["serving"] == serving  # saying it ahead changed nothing
+    assert fresh.connect_write(host=JSON_HOST, expect=look["state"])["connected"] is True
+    serving = fresh.state()["serving"]
+    assert (serving["local"], serving["hosted"], serving["choice_needed"]) == (
+        [],
+        [JSON_HOST],
+        True,
+    )
+    # Now that it is so, a second press changes nothing about who is answered.
+    assert fresh.connect_look(host=JSON_HOST)["answered_change"] is False
+    # Where the owner has chosen to answer the apps on this computer, a connect leaves them.
+    fresh.set_serving(kinds="local")
+    fresh.remove_app(name=JSON_HOST)
+    assert fresh.state()["serving"]["local"] == ["lm-studio"]
+    assert fresh.connect_look(host=JSON_HOST)["answered_change"] is True
+
+
+def test_a_write_that_fails_leaves_the_vault_as_it_was(
+    fresh: GateService, tiles_home: Path, gate_clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fresh.add_app(name="lm-studio", hosted=False)  # so that who is answered is at stake
+    place = holding(folder_of(JSON_HOST), '{\n  "theme": "dark"\n}\n')
+    old = place.read_bytes()
+    session = fresh._session
+    assert session is not None
+    settings, served, serving = in_force(fresh), session.gate.served(), fresh.state()["serving"]
+    known = policy_records(fresh)
+    real_replace = os.replace
+
+    def failing(source: Any, target: Any, **kwargs: Any) -> None:
+        if target == place.name:
+            # Owner mode runs out at this very moment: putting back must not ask for it.
+            expire_owner_mode(gate_clock)
+            raise OSError(errno.EIO, "made to fail")
+        real_replace(source, target, **kwargs)
+
+    monkeypatch.setattr(os, "replace", failing)
+    answer = fresh.connect_write(host=JSON_HOST, expect="other")
+    monkeypatch.setattr(os, "replace", real_replace)
+    assert answer == {"connected": False, "state": "failed", "path": shown(place)}
+    # The settings are those from before the press, apart from their serial number, and
+    # nobody is answered who was not answered before.
+    assert in_force(fresh) == settings
+    assert session.gate.served() == served == ("lm-studio",)
+    assert fresh.state()["serving"] == serving
+    assert JSON_HOST not in registered(fresh)
+    serial = known[-1][1]
+    assert policy_records(fresh)[len(known) :] == [
+        (f"connect:{JSON_HOST}", serial + 1),
+        (f"connect-failed:{JSON_HOST}", serial + 2),
+    ]
+    # The file is as it was, and the copy that was made for the change is gone again.
+    assert place.read_bytes() == old
+    assert sorted(item.name for item in place.parent.iterdir()) == [place.name]
+    newest, second = fresh.activity(limit=2)["items"]
+    assert second["summary"].startswith("you connected Claude Desktop: ")
+    assert newest["kind"] == "change"
+    assert newest["summary"] == (
+        f"{PRODUCT} did not finish changing the settings file of Claude Desktop "
+        "and made 2 more changes"
+    )
+    assert fresh.activity_detail(seq=newest["seq"])["details"][0] == [
+        "changes",
+        "removed the collection documents; removed the app claude-desktop",
+    ]
+    assert fresh.verify()["verified"] is True
+
+    # The file is replaced and somebody takes the entry out again before it is read back,
+    # while nothing else happened in the vault: the settings are put back as well.
+    fresh.reauth(passphrase=gs.PASSPHRASE)
+    real_look = hostcheck.look
+    looks: list[int] = []
+    between: list[Callable[[], None]] = [lambda: None]
+
+    def undone(*args: Any, **kwargs: Any) -> Any:
+        looks.append(1)
+        if len(looks) == 2:  # the second look of a write is the read-back
+            place.write_bytes(old)
+            between[0]()
+        return real_look(*args, **kwargs)
+
+    monkeypatch.setattr(hostcheck, "look", undone)
+    known = policy_records(fresh)
+    answer = fresh.connect_write(host=JSON_HOST, expect="other")
+    assert answer == {"connected": False, "state": "failed", "path": shown(place)}
+    assert in_force(fresh) == settings
+    assert [by.partition(":")[0] for by, _ in policy_records(fresh)[len(known) :]] == [
+        "connect",
+        "connect-failed",
+    ]
+    # The same, and the owner changed the settings in between: what the owner did is not
+    # undone. The app stays in the vault, and the answer says so.
+    fresh.reauth(passphrase=gs.PASSPHRASE)
+    settled(place)
+    looks.clear()
+    between[0] = lambda: fresh.set_collection(name="tax", note="made in between")
+    known = policy_records(fresh)
+    answer = fresh.connect_write(host=JSON_HOST, expect="other")
+    assert answer == {"connected": False, "state": "failed", "path": shown(place), "kept": True}
+    assert JSON_HOST in registered(fresh)
+    assert set(in_force(fresh)["collections"]) == {"documents", "tax"}
+    assert [by.partition(":")[0] for by, _ in policy_records(fresh)[len(known) :]] == [
+        "connect",
+        "owner",
+        "connect-failed",
+    ]
+    newest = fresh.activity(limit=1)["items"][0]
+    assert newest["summary"] == (
+        f"{PRODUCT} did not finish changing the settings file of Claude Desktop"
+    )
+    assert place.read_bytes() == old
+    assert fresh.verify()["verified"] is True
+
+
+def test_the_policy_is_checked_before_a_file_is_prepared(
+    fresh: GateService, tiles_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = fresh._session
+    assert session is not None
+    full = session.gate.policy().to_json()
+    full["clients"] = {
+        f"app-{number}": {"destination": "A provider", "hosted": True, "grants": {}, "limits": {}}
+        for number in range(policy_module.MAX_CLIENTS)
+    }
+    session.gate.set_policy(Policy.from_json(full))
+    with refused(400, "invalid") as told:
+        fresh.add_app(name="one-more", hosted=True, destination="A provider")
+    holding(folder_of(JSON_HOST), "{}\n")
+    before = (files_in(tiles_home), in_force(fresh), record_and_files(fresh))
+    started: list[int] = []
+    monkeypatch.setattr(service_module, "start_problem", lambda: started.append(1))
+    seen = count_looks(monkeypatch)
+    with refused(400, "invalid") as again:
+        fresh.connect_write(host=JSON_HOST, expect="empty")
+    # The error of "Add an app", found before a file was looked at or a program started.
+    assert again[0].message == told[0].message == "At most 100 apps can be registered."
+    assert (seen, started) == ([], [])
+    assert (files_in(tiles_home), in_force(fresh), record_and_files(fresh)) == before
+    # The look still answers, and promises nothing about who is answered.
+    assert fresh.connect_look(host=JSON_HOST)["answered_change"] is False
+
+
+def test_the_vault_can_lock_while_a_file_is_looked_at(
+    fresh: GateService, tiles_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    place = holding(folder_of(JSON_HOST), '{\n  "theme": "dark"\n}\n')
+    before = files_in(tiles_home)
+    fresh.add_app(name="codex", hosted=True, destination="OpenAI")
+    known = policy_records(fresh)
+    settings = in_force(fresh)
+    real_look = hostcheck.look
+    reached, go_on = threading.Event(), threading.Event()
+
+    def slow(*args: Any, **kwargs: Any) -> Any:
+        # A folder that answers slowly: a home on a network, a folder filled on demand.
+        reached.set()
+        assert go_on.wait(60)
+        return real_look(*args, **kwargs)
+
+    monkeypatch.setattr(hostcheck, "look", slow)
+    for registered_first, press in (
+        (False, lambda: fresh.connect_write(host=JSON_HOST, expect="other")),
+        (True, lambda: fresh.connect_write(host=JSON_HOST, expect="other")),
+        (False, lambda: fresh.connect_remove(host=JSON_HOST, expect="other")),
+        (True, lambda: fresh.connect_remove(host=JSON_HOST, expect="other")),
+        (False, lambda: fresh.connect_look(host=JSON_HOST)),
+    ):
+        if registered_first:
+            fresh.add_app(name=JSON_HOST, hosted=True, destination="Anthropic")
+        expected = in_force(fresh)
+        reached.clear()
+        go_on.clear()
+        answers: list[Any] = []
+
+        def pressed(press: Callable[[], Any] = press, answers: list[Any] = answers) -> None:
+            try:
+                answers.append(press())
+            except ServiceError as error:
+                answers.append(error)
+
+        pressing = threading.Thread(target=pressed, daemon=True)
+        pressing.start()
+        assert reached.wait(60)
+        states: list[Any] = []
+        locking = threading.Thread(target=lambda: states.append(fresh.lock()), daemon=True)  # noqa: B023
+        locking.start()
+        locking.join(timeout=30)
+        assert not locking.is_alive(), "locking waits for a look at a settings file"
+        assert states[0]["locked"] is True
+        go_on.set()
+        pressing.join(timeout=60)
+        assert not pressing.is_alive()
+        (answer,) = answers
+        assert isinstance(answer, ServiceError), answer
+        assert (answer.status, answer.code) == (409, "locked")
+        assert files_in(tiles_home) == before
+        fresh.unlock(passphrase=gs.PASSPHRASE)
+        assert in_force(fresh) == expected  # also: the app a removal was for is still there
+        if registered_first:
+            fresh.remove_app(name=JSON_HOST)
+    # Nothing of the presses is in the record: the settings were never touched by them.
+    assert in_force(fresh) == settings
+    assert [by for by, _ in policy_records(fresh)[len(known) :] if ":" in by] == []
+    assert place.read_bytes() == b'{\n  "theme": "dark"\n}\n'
+
+
+def test_what_changes_while_a_file_is_prepared_stops_the_write(
+    fresh: GateService, tiles_home: Path, gate_clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    place = holding(folder_of(JSON_HOST), '{\n  "theme": "dark"\n}\n')
+    before = files_in(tiles_home)
+    real_look = hostcheck.look
+    meanwhile: list[Callable[[], Any]] = []
+
+    def look(*args: Any, **kwargs: Any) -> Any:
+        # The look runs without the service's lock: this is where something else gets in.
+        found = real_look(*args, **kwargs)
+        if meanwhile:
+            meanwhile.pop()()
+        return found
+
+    monkeypatch.setattr(hostcheck, "look", look)
+    changed = "The vault's settings changed meanwhile. Look again."
+
+    def settings_change() -> None:
+        note = f"changed while a file was prepared, at {len(policy_records(fresh))}"
+        fresh.set_collection(name="tax", note=note)
+
+    # The new settings were built from settings that are no longer in force.
+    known = policy_records(fresh)
+    meanwhile.append(settings_change)
+    with refused(409, "changed") as told:
+        fresh.connect_write(host=JSON_HOST, expect="other")
+    assert told[0].message == changed
+    assert files_in(tiles_home) == before
+    assert [by for by, _ in policy_records(fresh)[len(known) :]] == ["owner"]
+    assert JSON_HOST not in registered(fresh)
+    # Owner mode runs out while the file is prepared.
+    head, settings = record_and_files(fresh), in_force(fresh)
+    meanwhile.append(lambda: expire_owner_mode(gate_clock))
+    with refused(403, "reauth_required"):
+        fresh.connect_write(host=JSON_HOST, expect="other")
+    assert files_in(tiles_home) == before
+    assert (record_and_files(fresh), in_force(fresh)) == (head, settings)
+
+    # The same holds for a disconnect that would take the entry out.
+    fresh.reauth(passphrase=gs.PASSPHRASE)
+    assert fresh.connect_write(host=JSON_HOST, expect="other")["connected"] is True
+    settled(place)
+    # And for a connect that changes nothing in the vault: the app is there with all it
+    # needs, only the entry is gone from the file. Writing it is what asks for owner mode.
+    connected = place.read_bytes()
+    holding(place, '{\n  "theme": "dark"\n}\n')
+    gone = files_in(tiles_home)
+    head, settings = record_and_files(fresh), in_force(fresh)
+    meanwhile.append(lambda: expire_owner_mode(gate_clock))
+    with refused(403, "reauth_required"):
+        fresh.connect_write(host=JSON_HOST, expect="other")
+    assert files_in(tiles_home) == gone
+    assert (record_and_files(fresh), in_force(fresh)) == (head, settings)
+    fresh.reauth(passphrase=gs.PASSPHRASE)
+    holding(place, connected)
+    before = files_in(tiles_home)
+    head = record_and_files(fresh)
+    meanwhile.append(lambda: expire_owner_mode(gate_clock))
+    with refused(403, "reauth_required"):
+        fresh.connect_remove(host=JSON_HOST, expect="present")
+    assert (files_in(tiles_home), record_and_files(fresh)) == (before, head)
+    fresh.reauth(passphrase=gs.PASSPHRASE)
+    known = policy_records(fresh)
+    meanwhile.append(settings_change)
+    with refused(409, "changed") as told:
+        fresh.connect_remove(host=JSON_HOST, expect="present")
+    assert told[0].message == changed
+    assert files_in(tiles_home) == before
+    assert JSON_HOST in registered(fresh)
+    assert [by for by, _ in policy_records(fresh)[len(known) :]] == ["owner"]
+    # And for one that leaves the file alone: the app it would remove may be another by now.
+    elsewhere = the_entry(fresh)
+    elsewhere["args"] = [*elsewhere["args"][:-1], str(tiles_home / "another vault")]
+    holding(place, json.dumps({"mcpServers": {SLUG: elsewhere}}))
+    expire_owner_mode(gate_clock)
+    meanwhile.append(settings_change)
+    with refused(409, "changed"):
+        fresh.connect_remove(host=JSON_HOST, expect="differs")
+    assert JSON_HOST in registered(fresh)
+    assert fresh.connect_remove(host=JSON_HOST, expect="differs")["app_removed"] is True
+    assert sorted(item.name for item in place.parent.iterdir()) == sorted(
+        place.name + ending for ending in ("", hostwrite.FIRST_COPY)
+    )
+
+
+def test_the_start_check_runs_at_each_connect(
+    fresh: GateService, tiles_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    place = folder_of(JSON_HOST)
+    starts: list[int] = []
+    monkeypatch.setattr(service_module, "start_problem", lambda: starts.append(1))
+    # Neither the look nor the list of tiles starts anything.
+    fresh.connect_look(host=JSON_HOST)
+    fresh.apps()
+    assert starts == []
+    assert fresh.connect_write(host=JSON_HOST, expect="no_file")["connected"] is True
+    assert fresh.connect_write(host=JSON_HOST, expect="present")["connected"] is True
+    assert starts == [1, 1]  # two presses, two starts: not once per run of the app
+    written = place.read_bytes()
+    # What started a moment ago does not start now: nothing is looked at and nothing changes.
+    monkeypatch.setattr(service_module, "start_problem", lambda: "it does not start any more")
+    seen = count_looks(monkeypatch)
+    head, settings = record_and_files(fresh), in_force(fresh)
+    assert fresh.connect_write(host=JSON_HOST, expect="present") == {
+        "connected": False,
+        "state": "not_ready",
+    }
+    assert seen == []
+    assert (record_and_files(fresh), in_force(fresh), place.read_bytes()) == (
+        head,
+        settings,
+        written,
+    )
+    # The text to copy says the same from then on, without another start: what the press
+    # found is what is known now.
+    monkeypatch.setattr(service_module, "start_problem", lambda: starts.append(1))
+    starts.clear()
+    ready = fresh.connect(name=JSON_HOST)["ready"]
+    assert (ready["starts"], ready["message"]) == (
+        False,
+        "Apps cannot connect yet: it does not start any more",
+    )
+    assert starts == []
+    # Without the SDK, or on a Python that is too old, no second Python is started at all.
+    monkeypatch.setattr(
+        hostconfig, "sdk_status", lambda: {**SDK_READY, "sdk": False, "message": "no SDK"}
+    )
+    starts.clear()
+    assert fresh.connect_write(host=JSON_HOST, expect="present") == {
+        "connected": False,
+        "state": "not_ready",
+    }
+    assert (starts, seen) == ([], [])
+    # A disconnect asks for neither: it writes no command.
+    settled(place)
+    assert fresh.connect_remove(host=JSON_HOST, expect="present")["file"] == "removed"
+    assert starts == []
+
+
+def test_connect_twice_and_after_a_removal(fresh: GateService, tiles_home: Path) -> None:
+    place = folder_of(JSON_HOST)
+    first = fresh.connect_write(host=JSON_HOST, expect="no_file")
+    assert first == {
+        "connected": True,
+        "state": "present",
+        "path": shown(place),
+        "copy": None,  # a file that was not there has no copy
+        "replaced": False,
+        "groups": 1,
+        "app": first["app"],
+    }
+    written, stamp = place.read_bytes(), place.stat().st_mtime_ns
+    head, settings = record_and_files(fresh), in_force(fresh)
+    # The file is not what a second press of the same button was shown.
+    for expect in ("no_file", "empty", "other", "differs", "present_as", "present_more"):
+        with refused(409, "changed"):
+            fresh.connect_write(host=JSON_HOST, expect=expect)
+    assert (record_and_files(fresh), in_force(fresh)) == (head, settings)
+    # Shown as it is, nothing is written, and the press is recorded.
+    again = fresh.connect_write(host=JSON_HOST, expect="present")
+    assert (again["connected"], again["state"], again["copy"], again["replaced"]) == (
+        True,
+        "present",
+        None,
+        False,
+    )
+    assert (place.read_bytes(), place.stat().st_mtime_ns) == (written, stamp)
+    assert sorted(item.name for item in place.parent.iterdir()) == [place.name]
+    assert policy_records(fresh)[-1][0] == f"connect-kept:{JSON_HOST}"
+    assert in_force(fresh) == settings
+    # After "Remove this app" among all settings, a press registers the app again.
+    fresh.remove_app(name=JSON_HOST)
+    look = fresh.connect_look(host=JSON_HOST)
+    assert (look["state"], look["app"]["registered"]) == ("present", False)
+    third = fresh.connect_write(host=JSON_HOST, expect="present")
+    assert (third["connected"], third["app"]["registered"]) == (True, True)
+    assert registered(fresh)[JSON_HOST]["grants"] == {"documents": "approve"}
+    assert (place.read_bytes(), place.stat().st_mtime_ns) == (written, stamp)
+    # An entry that points elsewhere is pointed here, in the state it was shown in.
+    elsewhere = the_entry(fresh)
+    elsewhere["args"] = [*elsewhere["args"][:-1], str(tiles_home / "another vault")]
+    holding(place, json.dumps({"mcpServers": {SLUG: elsewhere}}, indent=2))
+    with refused(409, "changed"):
+        fresh.connect_write(host=JSON_HOST, expect="present")
+    fourth = fresh.connect_write(host=JSON_HOST, expect="differs")
+    assert (fourth["connected"], fourth["replaced"]) == (True, True)
+    assert fourth["copy"] == shown(place) + hostwrite.LAST_COPY
+    assert json.loads(place.read_bytes()) == {"mcpServers": {SLUG: the_entry(fresh)}}
+
+
+def test_disconnect_takes_the_app_out_of_the_vault(fresh: GateService, tiles_home: Path) -> None:
+    original = (
+        b'{\n  "theme": "dark",\n  "mcpServers": {\n    "another": {"command": "tool"}\n  }\n}\n'
+    )
+    place = holding(folder_of(JSON_HOST), original)
+    assert fresh.connect_write(host=JSON_HOST, expect="other")["connected"] is True
+    connected = settled(place).read_bytes()
+    known = policy_records(fresh)
+    # The entry is gone from the file, the app from the vault, and one entry says so.
+    answer = fresh.connect_remove(host=JSON_HOST, expect="present")
+    assert answer == {
+        "file": "removed",
+        "app_removed": True,
+        "path": shown(place),
+        "copy": shown(place) + hostwrite.LAST_COPY,
+    }
+    assert place.read_bytes() == original
+    assert (place.parent / (place.name + hostwrite.LAST_COPY)).read_bytes() == connected
+    assert (place.parent / (place.name + hostwrite.FIRST_COPY)).read_bytes() == original
+    assert JSON_HOST not in registered(fresh)
+    assert policy_records(fresh)[len(known) :] == [(f"disconnect:{JSON_HOST}", known[-1][1] + 1)]
+    # The group it opened stays open: a disconnect takes the app away and nothing else.
+    assert in_force(fresh)["collections"] == {
+        "documents": {"note": "", "allow_hosted": True, "show_titles": False}
+    }
+
+    # A file that cannot be changed now (it was written a moment ago): the app is gone
+    # from the vault all the same, and the entry says that the file was left.
+    settled(place)
+    assert fresh.connect_write(host=JSON_HOST, expect="other")["connected"] is True
+    connected = place.read_bytes()
+    known = policy_records(fresh)
+    assert fresh.connect_remove(host=JSON_HOST, expect="present") == {
+        "file": "recent",
+        "app_removed": True,
+        "path": shown(place),
+        "copy": None,
+    }
+    assert place.read_bytes() == connected
+    assert JSON_HOST not in registered(fresh)
+    assert [by for by, _ in policy_records(fresh)[len(known) :]] == [f"disconnect-kept:{JSON_HOST}"]
+    # An entry without an app (the app was removed, the entry stayed): the entry is taken
+    # out, and that is recorded although the settings do not change.
+    settled(place)
+    known = policy_records(fresh)
+    settings = in_force(fresh)
+    answer = fresh.connect_remove(host=JSON_HOST, expect="present")
+    assert (answer["file"], answer["app_removed"]) == ("removed", False)
+    assert place.read_bytes() == original
+    assert policy_records(fresh)[len(known) :] == [(f"disconnect:{JSON_HOST}", known[-1][1] + 1)]
+    assert in_force(fresh) == settings
+    assert fresh.activity(limit=1)["items"][0]["summary"] == (
+        f"you disconnected Claude Desktop: {PRODUCT} was about to remove its entry from the "
+        "settings file"
+    )
+
+    # Neither an entry nor an app: nothing is recorded, whatever the file is.
+    head = record_and_files(fresh)
+    before = files_in(tiles_home)
+    nothing = {"app_removed": False, "path": shown(place), "copy": None}
+    assert fresh.connect_remove(host=JSON_HOST, expect="other") == {"file": "no_entry", **nothing}
+    with refused(409, "changed"):
+        fresh.connect_remove(host=JSON_HOST, expect="empty")
+    place.write_bytes(original[:-3])  # the last braces are missing
+    assert fresh.connect_remove(host=JSON_HOST, expect="unreadable") == {
+        "file": "unreadable",
+        **nothing,
+    }
+    place.unlink()
+    assert fresh.connect_remove(host=JSON_HOST, expect="no_file") == {"file": "no_entry", **nothing}
+    assert record_and_files(fresh) == head
+    place.write_bytes(original[:-3])
+    assert files_in(tiles_home) == before | {
+        str(place.relative_to(tiles_home)): files_in(tiles_home)[str(place.relative_to(tiles_home))]
+    }
+    # A file that cannot be read, and an app: the app goes, the file stays, one entry.
+    fresh.add_app(name=JSON_HOST, hosted=True, destination="Anthropic")
+    known = policy_records(fresh)
+    assert fresh.connect_remove(host=JSON_HOST, expect="unreadable") == {
+        "file": "unreadable",
+        "app_removed": True,
+        "path": shown(place),
+        "copy": None,
+    }
+    assert [by for by, _ in policy_records(fresh)[len(known) :]] == [f"disconnect-kept:{JSON_HOST}"]
+    assert place.read_bytes() == original[:-3]
+    assert fresh.verify()["verified"] is True
+
+
+def test_a_demo_connects_nothing(
+    short_store_dir: Path,
+    gate_clock: FakeClock,
+    tiles_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    passphrase = "a-passphrase-everybody-may-see"
+    gs.make_store(short_store_dir, passphrase=passphrase, clock=gate_clock).close()
+    demo = GateService(
+        short_store_dir,
+        demo=True,
+        demo_passphrase=passphrase,
+        clock=gate_clock,
+        scrypt_n=gs.FAST_SCRYPT,
+    )
+    try:
+        place = folder_of(JSON_HOST)
+        holding(place, json.dumps({"mcpServers": {SLUG: the_entry(demo)}}))
+        before = files_in(tiles_home)
+        starts: list[int] = []
+        monkeypatch.setattr(service_module, "start_problem", lambda: starts.append(1))
+        seen = count_looks(monkeypatch)
+        # Locked, a demo answers what every locked vault answers.
+        for call in the_three(demo, JSON_HOST, "present"):
+            with refused(409, "locked"):
+                call()
+        demo.unlock(passphrase=passphrase)
+        head = record_and_files(demo)
+        for host in hostwrite.WRITABLE:
+            for call in the_three(demo, host, "present"):
+                with refused(409, "demo") as told:
+                    call()
+                assert told[0].message == "A demo's vault cannot be connected."
+        # An id that is none and a state that is none are refused as everywhere.
+        for call in the_three(demo, "codex", "present"):
+            with refused(404, "not_found"):
+                call()
+        with refused(400, "invalid"):
+            demo.connect_write(host=JSON_HOST, expect="written")
+        # No file was looked at, no program started, nothing recorded.
+        assert (seen, starts) == ([], [])
+        assert files_in(tiles_home) == before
+        assert record_and_files(demo) == head
+        # The tiles name the programs, and no place: a place can say where a variable of
+        # the account points, and a demo answers whoever asks.
+        tiles = demo.apps()["tiles"]
+        assert [tile["path"] for tile in tiles] == [None, None, None, None]
+        assert [tile["host"] for tile in tiles] == [tile.host for tile in hostconfig.TILES]
+        assert str(tiles_home) not in json.dumps(demo.apps())
+        assert "~" not in json.dumps(tiles)
+    finally:
+        demo.close()
+
+
+def marked_file(host: str, entry: dict[str, Any] | None, toml: list[str] | None) -> str:
+    """A settings file that holds the markers wherever a file of its format can hold text."""
+    secret, key, token, password = MARKERS
+    if host == JSON_HOST:
+        servers: dict[str, Any] = {
+            "another-tool": {"command": "tool", "env": {"TOKEN": token}},
+            secret: {"command": key, "args": [password]},
+        }
+        if entry is not None:
+            servers[SLUG] = {**entry, "env": {"TOKEN": token, secret: key}, "cwd": password}
+        return json.dumps({"apiKey": key, secret: [password], "mcpServers": servers}, indent=2)
+    lines = [
+        f"# {secret}",
+        f'api_key = "{key}"',
+        "",
+        "[mcp_servers.another-tool]",
+        'command = "tool"',
+        f'env = {{ TOKEN = "{token}" }}  # {password}',
+    ]
+    if toml is not None:
+        lines += ["", *toml, f'cwd = "{password}"  # {secret}', f'env = {{ T = "{token}" }}']
+    return "\n".join(lines) + "\n"
+
+
+@pytest.mark.parametrize("host", TILE_HOSTS)
+def test_the_look_answers_words_and_nothing_from_the_file(
+    host: str, fresh: GateService, tiles_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    place = folder_of(host)
+    command = hostconfig.host_command(host, fresh.path)
+    block = [
+        f"[mcp_servers.{SLUG}]",
+        f"command = {json.dumps(command[0])}",
+        "args = [" + ", ".join(json.dumps(part) for part in command[1:]) + "]",
+    ]
+    said: list[str] = []
+
+    def answered(answer: dict[str, Any]) -> dict[str, Any]:
+        said.append(json.dumps(answer, ensure_ascii=False))
+        return answer
+
+    def checked(look: dict[str, Any], state: str) -> dict[str, Any]:
+        """What a look may say: the fields of the format page, each from a fixed set."""
+        assert list(look) == LOOK_FIELDS
+        tile = next(tile for tile in hostconfig.TILES if tile.host == host)
+        assert (look["host"], look["label"], look["readers"]) == (
+            host,
+            tile.label,
+            list(tile.readers),
+        )
+        assert look["state"] == state
+        assert look["state"] in hostcheck.STATES
+        assert look["problem"] is None
+        assert look["format"] == ("JSON" if host == JSON_HOST else "TOML")
+        assert (look["path"], look["folder"]) == (shown(place), shown(place.parent))
+        assert (look["real_folder"], look["variable"], look["other_name"]) == (None, None, None)
+        assert look["entry"] == SLUG
+        assert look["command"] == command
+        assert look["section"] in (None, *hostcheck.SECTIONS)
+        assert type(look["switched_off"]) is bool
+        for copy in look["copies"]:
+            assert list(copy) == ["path", "made_at"]
+            assert copy["path"] in (
+                shown(place) + hostwrite.FIRST_COPY,
+                shown(place) + hostwrite.LAST_COPY,
+            )
+            assert ISO.fullmatch(copy["made_at"])
+        assert list(look["app"]) == TILE_APP_FIELDS
+        assert look["app"]["name"] == host
+        assert type(look["groups"]) is int
+        assert type(look["answered_change"]) is bool
+        return look
+
+    # A home with a thousand other files: beside the settings file, above it, and in the
+    # folders of other programs.
+    crowd = [tiles_home / f"note-{number}.txt" for number in range(400)]
+    crowd += [place.parent / f"other-{number}.json" for number in range(300)]
+    (tiles_home / ".ssh").mkdir()
+    crowd += [tiles_home / ".ssh" / f"key-{number}" for number in range(300)]
+    for other in crowd:
+        other.write_text(MARKERS[0], encoding="utf-8")
+    holding(place, marked_file(host, None, None))
+    before = files_in(tiles_home)
+
+    touched: list[str] = []
+    places: dict[int, str] = {}
+    real = {name: getattr(os, name) for name in ("open", "lstat", "stat", "listdir", "scandir")}
+
+    def full(path: Any, folder: int | None) -> str:
+        if isinstance(path, int):
+            return places.get(path, "")
+        return os.fspath(path) if folder is None else os.path.join(places.get(folder, ""), path)
+
+    def noting(name: str) -> Callable[..., Any]:
+        def call(path: Any = ".", *args: Any, **kwargs: Any) -> Any:
+            where = full(path, kwargs.get("dir_fd"))
+            if where.startswith(str(tiles_home)):
+                touched.append(where)
+            result = real[name](path, *args, **kwargs)
+            if name == "open":
+                places[result] = where
+            return result
+
+        return call
+
+    for name in real:
+        monkeypatch.setattr(os, name, noting(name))
+    look = answered(fresh.connect_look(host=host))
+    for name, function in real.items():
+        monkeypatch.setattr(os, name, function)
+    checked(look, "other")
+    assert (look["section"], look["copies"]) == ("filled" if host == JSON_HOST else None, [])
+    # It looked at the folders on the way, at the file, and at the two places of its
+    # copies, and at none of the thousand.
+    on_the_way = [tiles_home]
+    for part in place.parent.relative_to(tiles_home).parts:
+        on_the_way.append(on_the_way[-1] / part)
+    allowed = {str(path) for path in on_the_way} | {
+        str(place),
+        str(place) + hostwrite.FIRST_COPY,
+        str(place) + hostwrite.LAST_COPY,
+    }
+    assert set(touched) == allowed
+    assert files_in(tiles_home) == before
+
+    # Connect: the answer names the place and the copy, and nothing the file holds.
+    answer = answered(fresh.connect_write(host=host, expect="other"))
+    assert list(answer) == ["connected", "state", "path", "copy", "replaced", "groups", "app"]
+    assert (answer["connected"], answer["state"], answer["replaced"]) == (True, "present", False)
+    assert answer["copy"] == shown(place) + hostwrite.FIRST_COPY
+    look = checked(answered(fresh.connect_look(host=host)), "present")
+    assert [copy["path"] for copy in look["copies"]] == [shown(place) + hostwrite.FIRST_COPY]
+    assert (look["switched_off"], look["app"]["registered"]) == (False, True)
+    # The markers inside the entry itself: more than the two things the app wrote.
+    holding(place, marked_file(host, the_entry(fresh, host), block))
+    look = checked(answered(fresh.connect_look(host=host)), "present_more")
+    answer = answered(fresh.connect_write(host=host, expect="present_more"))
+    assert (answer["connected"], answer["state"], answer["copy"]) == (True, "present_more", None)
+    # An entry that points elsewhere, with the markers in it; then "Connect" over it.
+    elsewhere = the_entry(fresh, host)
+    elsewhere["command"] = f"/opt/{MARKERS[0]}/python"
+    holding(
+        place,
+        marked_file(host, elsewhere, [block[0], f'command = "/opt/{MARKERS[0]}/python"', block[2]]),
+    )
+    checked(answered(fresh.connect_look(host=host)), "differs")
+    answer = answered(fresh.connect_write(host=host, expect="differs"))
+    assert (answer["connected"], answer["state"], answer["replaced"]) == (
+        True,
+        "present_more",
+        True,
+    )
+    assert answer["copy"] == shown(place) + hostwrite.LAST_COPY
+    # A file that is not what was shown, and one that cannot be read.
+    for expect in ("present", "other"):
+        with refused(409, "changed") as told:
+            fresh.connect_write(host=host, expect=expect)
+        said.append(told[0].message)
+    settled(place)
+    answer = answered(fresh.connect_remove(host=host, expect="present_more"))
+    assert list(answer) == ["file", "app_removed", "path", "copy"]
+    assert (answer["file"], answer["app_removed"]) == ("removed", True)
+    checked(answered(fresh.connect_look(host=host)), "other")
+    holding(place, f'{MARKERS[1]} = "{MARKERS[2]}'.encode() + b"\xff")
+    checked(answered(fresh.connect_look(host=host)), "unreadable")
+    answer = answered(fresh.connect_write(host=host, expect="other"))
+    assert answer == {"connected": False, "state": "unreadable", "path": shown(place)}
+    answered(fresh.connect_remove(host=host, expect="unreadable"))
+    # What Activity says of all this holds none of it either.
+    items = fresh.activity(limit=200)["items"]
+    said.extend(json.dumps(fresh.activity_detail(seq=item["seq"])) for item in items)
+    said.append(json.dumps(fresh.state()))
+    said.append(json.dumps(fresh.apps()))
+    for text in said:
+        for marker in (*MARKERS, "another-tool", "api_key", "apiKey"):
+            assert marker not in text, f"{marker} reached an answer"
+    # The copies hold what the file held: they are the one place the markers are kept.
+    assert MARKERS[0].encode() in (place.parent / (place.name + hostwrite.FIRST_COPY)).read_bytes()
+
+
+def test_the_look_needs_no_app_no_owner_mode_and_does_not_wait(
+    fresh: GateService, tiles_home: Path, gate_clock: FakeClock
+) -> None:
+    # A vault without any app, and owner mode long over: the look answers.
+    expire_owner_mode(gate_clock)
+    assert fresh.apps()["apps"] == []
+    place = folder_of(JSON_HOST)
+    head = record_and_files(fresh)
+    look = fresh.connect_look(host=JSON_HOST)
+    assert (look["state"], look["app"]["registered"], look["groups"]) == ("no_file", False, 0)
+    assert look["app"] == {
+        "name": JSON_HOST,
+        "registered": False,
+        "paused": False,
+        "last_seen": None,
+        "differs": False,
+        "reads": False,
+    }
+    # A named pipe in the file's place is not waited for.
+    os.mkfifo(place)
+    answers: list[Any] = []
+    thread = threading.Thread(
+        target=lambda: answers.append(fresh.connect_look(host=JSON_HOST)), daemon=True
+    )
+    thread.start()
+    thread.join(timeout=30)
+    assert not thread.is_alive(), "the look waits for somebody to write into the pipe"
+    assert answers[0]["state"] == "not_read"
+    assert stat.S_ISFIFO(place.lstat().st_mode)
+    # A folder on the way that is a link is not gone through, and the look says where it leads.
+    place.unlink()
+    kept = tiles_home / "kept in a repository"
+    place.parent.rename(kept)
+    place.parent.symlink_to(kept)
+    look = fresh.connect_look(host=JSON_HOST)
+    assert (look["state"], look["real_folder"]) == ("linked", shown(kept))
+    assert record_and_files(fresh) == head
+
+
+def test_the_look_says_what_the_vault_knows_of_the_app(
+    unlocked: GateService, tiles_home: Path, gate_clock: FakeClock
+) -> None:
+    # The sample vault: claude-desktop sends text to Anthropic, may read "home" and has
+    # three groups before it.
+    folder_of(JSON_HOST)
+    look = unlocked.connect_look(host=JSON_HOST)
+    assert (look["groups"], look["answered_change"]) == (3, False)
+    assert look["app"] == {
+        "name": JSON_HOST,
+        "registered": True,
+        "paused": False,
+        "last_seen": None,
+        "differs": False,
+        "reads": True,
+    }
+    unlocked.backend.status(CLAUDE)
+    unlocked.set_serving(paused=[JSON_HOST])
+    app = unlocked.connect_look(host=JSON_HOST)["app"]
+    assert (app["paused"], app["last_seen"]) == (
+        True,
+        {"time": gs_time(gate_clock), "claimed": "claude-ai 1.2"},
+    )
+    assert app == {
+        key: value
+        for key, value in {
+            **registered(unlocked)[JSON_HOST],
+            "registered": True,
+            "differs": False,
+            "reads": True,
+        }.items()
+        if key in TILE_APP_FIELDS
+    }
+    # A connect leaves the pause, the grants and the groups of such a vault as they are.
+    settings = in_force(unlocked)
+    answer = unlocked.connect_write(host=JSON_HOST, expect="no_file")
+    assert (answer["connected"], answer["groups"]) == (True, 3)
+    assert (answer["app"]["paused"], answer["app"]["reads"]) == (True, True)
+    assert in_force(unlocked) == settings
+    assert unlocked.state()["serving"]["paused"] == [JSON_HOST]
+
+
+def gs_time(clock: FakeClock) -> str:
+    return clock().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+@needs_toml
+def test_one_file_serves_two_names_and_a_variable_refuses(
+    fresh: GateService, tiles_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = "chatgpt-desktop"
+    place = folder_of(host)
+    codex = hostconfig.host_command("codex", fresh.path)
+    made_for_codex = (
+        'model = "o9"\n\n'
+        f"[mcp_servers.{SLUG}]\n"
+        f"command = {json.dumps(codex[0])}\n"
+        "args = [" + ", ".join(json.dumps(part) for part in codex[1:]) + "]\n"
+    )
+    holding(place, made_for_codex)
+    # The file connects ChatGPT and Codex to this vault already, under the name of Codex.
+    look = fresh.connect_look(host=host)
+    assert (look["state"], look["other_name"]) == ("present_as", "codex")
+    # While the vault answers that name, a press on the tile writes nothing.
+    fresh.add_app(name="codex", hosted=True, destination="OpenAI")
+    head, settings = record_and_files(fresh), in_force(fresh)
+    assert fresh.connect_write(host=host, expect="present_as") == {
+        "connected": False,
+        "state": "present_as",
+        "path": "~/.codex/config.toml",
+        "other_name": "codex",
+    }
+    assert place.read_text(encoding="utf-8") == made_for_codex
+    assert (record_and_files(fresh), in_force(fresh)) == (head, settings)
+    # A disconnect of the tile leaves an entry that is not the tile's.
+    assert fresh.connect_remove(host=host, expect="present_as") == {
+        "file": "differs",
+        "app_removed": False,
+        "path": "~/.codex/config.toml",
+        "copy": None,
+    }
+    assert place.read_text(encoding="utf-8") == made_for_codex
+    # Once the app "codex" is gone from the vault, the press points the entry at the tile's name.
+    fresh.remove_app(name="codex")
+    answer = fresh.connect_write(host=host, expect="present_as")
+    assert (answer["connected"], answer["state"], answer["replaced"]) == (True, "present", True)
+    assert host in registered(fresh)
+    assert fresh.connect_look(host=host)["state"] == "present"
+    # With CODEX_HOME set nobody knows which file is read: the look says so, and nothing
+    # is written, for this tile and for no other.
+    settled(place)
+    written = place.read_bytes()
+    monkeypatch.setenv("CODEX_HOME", str(tiles_home / "moved"))
+    look = fresh.connect_look(host=host)
+    assert (look["problem"], look["state"]) == ("moved", "present")
+    seen = count_looks(monkeypatch)
+    assert fresh.connect_write(host=host, expect="present") == {
+        "connected": False,
+        "state": "moved",
+        "path": "~/.codex/config.toml",
+    }
+    assert seen == []
+    assert place.read_bytes() == written
+    assert fresh.connect_look(host="grok-build")["problem"] is None
+
+
+def test_activity_says_what_a_release_was_in_fields(unlocked: GateService) -> None:
+    search = unlocked.backend.search(CLAUDE, "rent deposit")
+    ref = REF.findall(search.text)[0]
+    read = unlocked.backend.read(CLAUDE, ref)
+    nothing = unlocked.backend.search(CLAUDE, "xylophone", "home")
+    status = unlocked.backend.status(CLAUDE)
+    waiting = unlocked.backend.read(CLAUDE, first_ref(unlocked, CLAUDE, "income tax", "tax"))
+    assert [r.code for r in (search, read, nothing, status, waiting)] == [
+        "OK",
+        "OK",
+        "OK",
+        "OK",
+        "NEEDS_APPROVAL",
+    ]
+    session = unlocked._session
+    assert session is not None
+    doc_id, _, number = ref.partition(".")
+    info = session.store.document(doc_id)
+    items = list(reversed(unlocked.activity(limit=6)["items"]))
+    fields = [
+        (item["kind"], item["tool"], item.get("title"), item.get("passage"), item.get("results"))
+        for item in items
+    ]
+    assert fields == [
+        ("release", "search", None, None, len(REF.findall(search.text))),
+        ("release", "read", info.title, int(number), None),
+        ("release", "search", None, None, 0),
+        ("question", "status", None, None, None),
+        ("release", "search", None, None, 1),
+        ("refusal", "read", None, None, None),
+    ]
+    # A release has the three fields, whatever they hold; no other kind of entry has them.
+    for item in items:
+        has = {"title", "passage", "results"} <= set(item)
+        assert has is (item["kind"] == "release"), item
+    # The page of one entry passes them on, beside the sentence that Pro shows.
+    for item in items:
+        detail = unlocked.activity_detail(seq=item["seq"])
+        assert {key: detail[key] for key in item} == item
+    assert (
+        items[1]["summary"] == f"read passage {number} of {info.passages} of {info.title} in home"
+    )
+    # A release whose record does not say how many lines were shown, and one whose
+    # document the records before it never named: the fields are null, not made up.
+    feed = service_module._Feed()
+    feed.add({"seq": 1, "kind": "release", "client": "an-app", "tool": "wdva_search", "text": "OK"})
+    feed.add(
+        {
+            "seq": 2,
+            "kind": "release",
+            "client": "an-app",
+            "tool": "wdva_read",
+            "args": {"ref": "d-0123456789ab.7"},
+        }
+    )
+    feed.add({"seq": 3, "kind": "release", "client": "an-app", "tool": "wdva_read", "args": {}})
+    assert [(i["title"], i["passage"], i["results"]) for i in feed.items] == [
+        (None, None, None),
+        (None, 7, None),
+        (None, None, None),
+    ]

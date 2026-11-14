@@ -173,6 +173,15 @@ class FakeService:
     def connect_check(self, *, name: str, host: str | None = None) -> Any:
         return self._did("connect_check", name=name, host=host)
 
+    def connect_look(self, *, host: str) -> Any:
+        return self._did("connect_look", host=host)
+
+    def connect_write(self, *, host: str, expect: str) -> Any:
+        return self._did("connect_write", host=host, expect=expect)
+
+    def connect_remove(self, *, host: str, expect: str) -> Any:
+        return self._did("connect_remove", host=host, expect=expect)
+
     def settings(self) -> Any:
         return self._did("settings")
 
@@ -960,6 +969,39 @@ ENDPOINTS: list[tuple[str, str, Any, str, dict[str, Any]]] = [
         "connect_check",
         {"name": "lm-studio", "host": None},
     ),
+    # The settings file of an application: the address names it, the body the state shown.
+    ("POST", "/api/connect/claude-desktop/look", {}, "connect_look", {"host": "claude-desktop"}),
+    ("POST", "/api/connect/grok-build/look", None, "connect_look", {"host": "grok-build"}),
+    (
+        "POST",
+        "/api/connect/claude-desktop",
+        {"expect": "no_file"},
+        "connect_write",
+        {"host": "claude-desktop", "expect": "no_file"},
+    ),
+    (
+        "POST",
+        "/api/connect/chatgpt-desktop",
+        {"expect": "present_as"},
+        "connect_write",
+        {"host": "chatgpt-desktop", "expect": "present_as"},
+    ),
+    (
+        "POST",
+        "/api/connect/claude-desktop/remove",
+        {"expect": "present"},
+        "connect_remove",
+        {"host": "claude-desktop", "expect": "present"},
+    ),
+    # Which application and which state exist is the service's to say: the server passes
+    # on a name that could be one, and a word.
+    (
+        "POST",
+        "/api/connect/netscape/remove",
+        {"expect": "anything"},
+        "connect_remove",
+        {"host": "netscape", "expect": "anything"},
+    ),
     ("GET", "/api/settings", None, "settings", {}),
     (
         "POST",
@@ -1518,6 +1560,27 @@ def test_changing_methods_on_static_paths_change_nothing(paired: Browser) -> Non
         ("POST", "/api/trial"),
         ("GET", "/api/reauth"),
         ("POST", "/api/reauth/trial"),
+        # The settings file of an application is looked at, written and left with a POST.
+        # A GET would be a link that any page could make a browser follow; a DELETE reads
+        # no body, and the body says which state the owner was shown.
+        ("GET", "/api/connect/claude-desktop/look"),
+        ("GET", "/api/connect/claude-desktop"),
+        ("DELETE", "/api/connect/claude-desktop"),
+        ("GET", "/api/connect/claude-desktop/remove"),
+        ("POST", "/api/connect"),
+        ("POST", "/api/connect/"),
+        ("POST", "/api/connect/claude-desktop/"),
+        ("POST", "/api/connect/claude-desktop/look/"),
+        ("POST", "/api/connect/claude-desktop/look/file"),
+        ("POST", "/api/connect/claude-desktop/write"),
+        ("POST", "/api/connect/claude-desktop/remove/now"),
+        # The application is one name segment: nothing that could be a path gets through.
+        ("POST", "/api/connect/..%2F..%2Fetc%2Fpasswd/look"),
+        ("POST", "/api/connect/%2Fetc%2Fpasswd"),
+        ("POST", "/api/connect/~/look"),
+        ("POST", "/api/connect/claude%20desktop/look"),
+        ("POST", "/api/connect/" + "a" * 65 + "/look"),
+        ("POST", "/api/connect/../state"),
     ],
 )
 def test_unknown_paths_are_not_found(
@@ -1563,6 +1626,11 @@ def test_query_strings_that_do_not_fit_are_invalid(
         "/api/try?question=rent",
         "/api/try?ref=d-88b0e1aa9c11.1",
         "/api/reauth?scope=trial",
+        "/api/connect/claude-desktop/look?path=%2Fetc%2Fpasswd",
+        "/api/connect/claude-desktop/look?host=codex",
+        "/api/connect/claude-desktop?expect=no_file",
+        "/api/connect/claude-desktop?path=%2Fetc%2Fpasswd",
+        "/api/connect/claude-desktop/remove?expect=present",
     ],
 )
 def test_the_newer_addresses_take_nothing_from_the_address(
@@ -1673,6 +1741,33 @@ def test_an_upload_needs_its_collection_and_name(
         ("/api/reauth", {"passphrase": "pass phrase", "scope": True}),
         ("/api/reauth", {"passphrase": "pass phrase", "scope": "trial", "minutes": 600}),
         ("/api/reauth", {"passphrase": "pass phrase", "trial": True}),
+        # The look at a settings file takes nothing. A connect and a disconnect take the
+        # state the owner was shown, as text, and nothing that could name a file, an
+        # application, a command or a passphrase.
+        ("/api/connect/claude-desktop/look", {"expect": "no_file"}),
+        ("/api/connect/claude-desktop/look", {"path": "/etc/passwd"}),
+        ("/api/connect/claude-desktop/look", {"host": "codex"}),
+        ("/api/connect/claude-desktop", {}),
+        ("/api/connect/claude-desktop", {"expect": None}),
+        ("/api/connect/claude-desktop", {"expect": ["no_file"]}),
+        ("/api/connect/claude-desktop", {"expect": 7}),
+        ("/api/connect/claude-desktop", {"expect": True}),
+        ("/api/connect/claude-desktop", {"expect": {"state": "no_file"}}),
+        ("/api/connect/claude-desktop", {"state": "no_file"}),
+        ("/api/connect/claude-desktop", {"expect": "no_file", "path": "/etc/passwd"}),
+        ("/api/connect/claude-desktop", {"expect": "no_file", "file": "~/.ssh/id_ed25519"}),
+        ("/api/connect/claude-desktop", {"expect": "no_file", "host": "codex"}),
+        ("/api/connect/claude-desktop", {"expect": "no_file", "command": ["/bin/sh"]}),
+        ("/api/connect/claude-desktop", {"expect": "no_file", "name": "another-name"}),
+        ("/api/connect/claude-desktop", {"expect": "no_file", "store": "/another/vault"}),
+        ("/api/connect/claude-desktop", {"expect": "no_file", "passphrase": "pass phrase"}),
+        ("/api/connect/claude-desktop", {"expect": "no_file", "force": True}),
+        ("/api/connect/claude-desktop/remove", {}),
+        ("/api/connect/claude-desktop/remove", {"expect": 123456789012}),
+        ("/api/connect/claude-desktop/remove", {"expect": ["present"]}),
+        ("/api/connect/claude-desktop/remove", {"expect": "present", "path": "/etc/passwd"}),
+        ("/api/connect/claude-desktop/remove", {"expect": "present", "copy": "none"}),
+        ("/api/connect/claude-desktop/remove", {"expect": "present", "keep_app": True}),
     ],
 )
 def test_fields_that_do_not_fit_are_invalid(
@@ -1911,6 +2006,7 @@ def test_a_body_that_ends_early_is_invalid(paired: Browser, service: FakeService
         (404, "not_found"),
         (409, "locked"),
         (409, "changed"),
+        (409, "demo"),
         (409, "duplicate"),
         (413, "too_large"),
         (429, "too_many"),
@@ -2376,3 +2472,139 @@ def test_the_shipped_static_directory_is_the_default(service: FakeService) -> No
         }
     finally:
         server.stop()
+
+
+# -- the settings file of an agent application ---------------------------------------------
+
+SETTINGS_FILE_ROUTES = [
+    ("/api/connect/claude-desktop/look", {}, "connect_look", {"host": "claude-desktop"}),
+    (
+        "/api/connect/claude-desktop",
+        {"expect": "other"},
+        "connect_write",
+        {"host": "claude-desktop", "expect": "other"},
+    ),
+    (
+        "/api/connect/claude-desktop/remove",
+        {"expect": "present"},
+        "connect_remove",
+        {"host": "claude-desktop", "expect": "present"},
+    ),
+]
+
+
+@pytest.mark.parametrize(("target", "body", "name", "arguments"), SETTINGS_FILE_ROUTES)
+def test_the_routes_of_a_settings_file_pass_every_check_a_request_has_to(
+    target: str,
+    body: Any,
+    name: str,
+    arguments: dict[str, Any],
+    server: AppServer,
+    paired: Browser,
+    service: FakeService,
+) -> None:
+    port = server.port
+    # Each of these is refused by the server itself; the service is never asked.
+    refused = [
+        # Without the session, and with a guess at it.
+        (Browser(server).call("POST", target, json_body=body), 401, "pairing_required"),
+        # Under another name for this address.
+        (
+            paired.call("POST", target, json_body=body, headers={"Host": f"evil.example:{port}"}),
+            403,
+            "forbidden",
+        ),
+        (
+            paired.call("POST", target, json_body=body, headers={"Host": "127.0.0.1"}),
+            403,
+            "forbidden",
+        ),
+        # Without the header a page of another site cannot send unasked.
+        (paired.call("POST", target, json_body=body, gate_header=False), 403, "forbidden"),
+        (
+            paired.call("POST", target, json_body=body, headers={"X-WDVA-Gate": "true"}),
+            403,
+            "forbidden",
+        ),
+        # From another site, by what the browser says about the request.
+        (
+            paired.call("POST", target, json_body=body, headers={"Origin": "https://evil.example"}),
+            403,
+            "forbidden",
+        ),
+        (
+            paired.call("POST", target, json_body=body, headers={"Origin": "null"}),
+            403,
+            "forbidden",
+        ),
+        (
+            paired.call("POST", target, json_body=body, headers={"Sec-Fetch-Site": "cross-site"}),
+            403,
+            "forbidden",
+        ),
+        (
+            paired.call("POST", target, json_body=body, headers={"Sec-Fetch-Site": "same-site"}),
+            403,
+            "forbidden",
+        ),
+        # With a body that is too large, that is no JSON object, or that says a thing twice.
+        (paired.call("POST", target, body=b" " * (httpd.MAX_JSON_BYTES + 1)), 413, "too_large"),
+        (paired.call("POST", target, body=b'["other"]'), 400, "invalid"),
+        (
+            paired.call("POST", target, body=b'{"expect": "other", "expect": "present"}'),
+            400,
+            "invalid",
+        ),
+        (paired.call("POST", target, body=b'{"expect": "other"'), 400, "invalid"),
+    ]
+    for answer, status, code in refused:
+        assert (answer.status, answer.error()) == (status, code)
+        assert_headers(answer)
+    guess = Browser(server)
+    guess.token = "0" * 64
+    assert guess.call("POST", target, json_body=body).status == 401
+    assert service.calls == []
+    # With all of it in order the service is asked, once, with the application the address
+    # names and the state the body names, and with nothing else.
+    answer = paired.call("POST", target, json_body=body)
+    assert (answer.status, answer.json()) == (200, {"did": name})
+    assert answer.header("Cache-Control") == "no-store"
+    assert_headers(answer)
+    assert service.calls == [(name, arguments)]
+    # What the service refuses is passed on with its status and its code, and at once: no
+    # request to these routes carries a passphrase, so none takes a turn.
+    for status, code in (
+        (403, "reauth_required"),
+        (404, "not_found"),
+        (409, "locked"),
+        (409, "demo"),
+        (409, "changed"),
+        (503, "unavailable"),
+    ):
+        service.error = ServiceError(status, code, "one sentence for a person")
+        started = time.monotonic()
+        answer = paired.call("POST", target, json_body=body)
+        assert (answer.status, answer.error()) == (status, code)
+        assert time.monotonic() - started < 0.7
+        assert_headers(answer)
+
+
+def test_no_route_of_a_settings_file_takes_a_place_or_a_passphrase() -> None:
+    # The three routes, as the table of routes has them: one name from the address, at
+    # most the one field "expect", nothing from a query, and no upload.
+    routes = {route.path: route for route in httpd._ROUTES if route.path.startswith("connect/")}
+    assert sorted(routes) == ["connect/<host>", "connect/<host>/look", "connect/<host>/remove"]
+    for path, route in routes.items():
+        assert route.method == "POST"
+        fields = [(field.name, field.kind, field.required) for field in route.fields]
+        assert fields == ([] if path.endswith("/look") else [("expect", "text", True)])
+        assert (route.query, route.whole_body, route.upload) == ((), None, False)
+    assert [routes[path].call for path in sorted(routes)] == [
+        "connect_write",
+        "connect_look",
+        "connect_remove",
+    ]
+    # The route of the look before these stays until the page that calls it is gone.
+    assert "apps/<name>/connect/check" in {route.path for route in httpd._ROUTES}
+    # 33 routes behind the session; the two of pairing are not in this table.
+    assert len(httpd._ROUTES) == 33

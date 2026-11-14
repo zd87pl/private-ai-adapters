@@ -3361,8 +3361,8 @@ def test_the_writer_is_the_only_one() -> None:
         source = (GATE / name).read_text(encoding="utf-8")
         for word in ("os.replace", "os.link", "os.rename", "os.unlink", "os.write", "shutil"):
             assert word not in source, (name, word)
-    # The writer is for the app's service and nobody else. (No route calls it yet.)
-    assert set(importers) <= {"app/service.py"}
+    # The writer is for the app's service and nobody else.
+    assert set(importers) == {"app/service.py"}
 
 
 @needs_toml

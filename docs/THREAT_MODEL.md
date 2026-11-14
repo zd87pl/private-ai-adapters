@@ -380,7 +380,9 @@ they add. The third word of that file, a language for the page, and the
 answer that tells it to a page before pairing came later still, and no review
 has attacked them. The same holds for the route that answers the owner's
 trial question, which was built after all of these ("The trial" in that
-part). Where a sentence says "in a run for this page", the figure comes
+part), and for the write into an AI app's settings file with its three
+routes, built later still ("The settings file of an AI app" in that part).
+Where a sentence says "in a run for this page", the figure comes
 from a run made on Linux with Python 3.11 while this page was held against the
 code. One machine, one run: an observation, not a proof.
 
@@ -394,7 +396,8 @@ code. One machine, one run: an observation, not a proof.
 | **Two or three words about the page**: which of its two views is in use, whether setting up was finished, and a language for the page once one is kept | In `run/interface.json` in the store directory, in plain text. | File modes only. They are not sealed, and changing them never asks for the passphrase. They decide which page opens first and whether the page still offers to finish setting up, and nothing about what may leave. The language is protected by less than the other two: the page's port tells it to whoever asks, before pairing. |
 | **What was released** | In the record, sealed, with its exact text. Outside the vault: in the AI app, in that AI app's own files and, for a hosted one, at its provider. | Inside the vault, the lock. Outside, nothing. |
 | **The files the documents came from** | Wherever the owner keeps them. Locktender seals a copy. Adding a document neither moves nor deletes the file. | Nothing Locktender does. A file that stays in a folder an AI app can read can be read there by that app, without Locktender ("Where the original lies" under [Known limits](#known-limits)). |
-| **The settings file of an AI app**, which may hold the entries of other tools, with their keys | In the owner's home folder. It belongs to the AI app. Locktender looks into it when the owner presses "Check the file". This version never writes it: the module that could, `hostwrite`, is called by nothing yet. | The look answers with a word about the file and with nothing from it. |
+| **The settings file of an AI app**, which may hold the entries of other tools, with their keys | In the owner's home folder. It belongs to the AI app. Locktender reads it when a request asks for a look, and writes its own entry into it, or takes that entry out, when a request asks for that ("The settings file of an AI app" below). | For the look: pairing and session; the answer holds fixed words about the file and nothing from it. For the write: pairing, session and owner mode; the rules of the write; a copy before each change. Nothing protects it from programs of the owner's account, before or after. |
+| **The copies of that file**, `….before-locktender` and `….last-locktender` | Beside the settings file, mode 0600. They hold whatever the settings file held, the keys of other tools included, and keep it after those are gone from the settings file. They stay until the owner removes them. | File modes only. A folder kept under version control that leaves out the settings file by its name will pick them up. |
 
 ### The mechanisms, by name
 
@@ -432,9 +435,10 @@ code. One machine, one run: an observation, not a proof.
   scripts, styles and images from Locktender itself and from nowhere else, may
   contact nothing but Locktender, runs no inline script, and may not be shown in
   a frame.
-- **Owner mode.** For ten minutes after the passphrase was typed, the page
-  accepts changes that let more text leave. After that such a change asks for
-  the passphrase again.
+- **Owner mode.** For ten minutes after the passphrase was typed for it, the
+  page accepts changes that let more text leave, and a request that changes
+  an AI app's settings file. After that such a request asks for the
+  passphrase again.
 - **The trial's permission.** The route that answers the owner's trial
   question needs the passphrase typed within ten minutes too, and keeps its
   own time: typing the passphrase for a question does not open owner mode.
@@ -566,81 +570,180 @@ when several names are refused in several ways around the clock. The oldest
 stops of such a day are missing from the list in Basic, and are on the
 Activity page of Pro.
 
-**The look at a settings file.** In the step "First question" of setting up,
-the button "Check the file" makes Locktender read one file that is neither its
-own nor in the vault's folder: the settings file of the AI app that is being
-connected. That is `claude_desktop_config.json` for Claude Desktop,
-`~/.codex/config.toml` for the ChatGPT desktop app and for Codex, and
-`~/.grok/config.toml` for Grok Build; for every other app there is no such
-look. It is the only kind of file of another program that Locktender reads,
-and it may hold the entries of other tools, with their keys.
+**The settings file of an AI app: the look and the write.** Locktender reads
+one kind of file that is neither its own nor in the vault's folder, and from
+this version on it can write it: the settings file of an AI app. That is
+`claude_desktop_config.json` for Claude Desktop, `~/.codex/config.toml` for
+the ChatGPT desktop app and for Codex, and `~/.grok/config.toml` for Grok
+Build. Such a file may hold the entries of other tools, with their keys.
+Three routes of the page's API deal with it. One looks. One registers the AI
+app in the vault and writes Locktender's own entry into the file, the entry
+that makes the AI app start Locktender's program. One removes the app from
+the vault and takes that entry out again.
+[GATE_FORMAT.md](GATE_FORMAT.md#the-settings-file-of-an-ai-application) has
+every rule. This is where a promise ends: until this version Locktender
+wrote nothing outside the vault's folder. No page of this version calls the
+three routes yet. Its button "Check the file", in the step "First question"
+of setting up, still asks the look that came before them, which reads the
+same files for an app that is registered and answers one word.
 
 - **A fixed place.** Where the file lies follows from the AI app, the system,
   the home folder of the account, and two variables of the environment
   Locktender was started in: `XDG_CONFIG_HOME` for Claude Desktop outside
   macOS, and `GROK_HOME` for Grok Build, each only when it holds an absolute
-  path. Whoever sets `HOME` or these two for Locktender moves the look.
-  `CODEX_HOME` is not followed. A request picks one of eleven known names of
-  AI apps and nothing more of the place. No part of a path comes from it: in
-  a run for this page a name of `../../etc/passwd` was answered 404, and a
+  path. Whoever sets `HOME` or these two for Locktender moves the look and
+  the write. `CODEX_HOME` is not followed, and while it is set the file of
+  the ChatGPT desktop app is not written at all: its maker's page does not
+  say which file is read then. A request to the three routes picks one of
+  three names of AI apps (a request to the older look, one of eleven) and
+  nothing more of the place. No part of a path comes from it: in a run for
+  this page the names `../../etc/passwd` and `codex` were answered 404, and a
   request with a field `path` 400.
 - **Read with care.** Only a regular file of at most 1 MiB is opened, without
   following a link and without waiting. A symbolic link, a directory, a named
-  pipe and a larger file were each answered `not_read` in the run, in a
-  millisecond or two. From this version on a folder is not gone through
-  either when it is a symbolic link: each folder below the home folder (or
-  below the folder a variable names) is looked at and opened without
-  following a link, and the file is reached through the folder that was
-  opened. A version before this one followed such a link, and so read
+  pipe and a larger file were each answered `not_read` in a run of the older
+  look, in a millisecond or two. From this version on a folder is not gone
+  through either when it is a symbolic link: each folder below the home
+  folder (or below the folder a variable names) is looked at and opened
+  without following a link, and the file is reached through the folder that
+  was opened. A version before this one followed such a link, and so read
   whatever the link led to. In a run for this version, with the right entry
   behind a linked settings folder and again behind a linked `~/.config`, the
-  answer was `not_read` and nothing behind the link was read. The home folder
+  older look answered `not_read` and nothing behind the link was read; the
+  three routes say `linked` there, and where the link leads. The home folder
   itself, and a folder a variable names, are taken as the system resolves
   them.
-- **Never a byte of the file in an answer.** The answer is one of nine words
-  (`present`, `differs`, `other`, `empty`, `no_file`, `no_folder`,
-  `unreadable`, `not_read`, `unsupported`); beside `other`, one of three more
-  (`none`, `empty`, `filled`); the place of the file; and a line of text that
-  Locktender composed without the file. In the run a marker was written into
-  the settings files as a value, as the token of another tool, in a comment
-  and inside Locktender's own entry. It was in none of 38 answers.
-- **Not written by anything the owner can press.** The code that looks only
-  reads. One module, `hostwrite`, can write such a file; no route calls it
-  yet. In this version the owner copies the text and puts it where the AI app
-  reads it. After the 38 looks the home folder held what the run itself had
-  put there. The module is there for a press that a later version brings. It
-  puts Locktender's own entry into one of the three files or takes it out,
-  after it has read the file through the code that looks, and it was tested
-  against files that its tests made, on Linux, never against a file that an
-  AI app made.
-- **Only on a press.** The file is read when the page asks for the look, which
-  it does when the owner presses "Check the file" or "Check again". Showing
-  the text to copy, listing the apps and waiting for a first request read no
-  such file.
+- **Never a byte of the file in an answer.** The older look answers one of
+  nine words; beside `other`, one of three more; the place of the file; and a
+  line of text that Locktender composed without the file. The three routes
+  answer more, and still nothing that is read out of the file but fixed
+  words and two yes-or-no facts: one of thirteen words about the file, one of
+  three about why the entry could not be written, whether the entry is
+  switched off, under which other name it calls; and beside these the place
+  of the file, the places of up to two copies with the time each was last
+  changed, and the command the entry holds or would hold, which names the
+  Python that runs Locktender and the place of the vault (as the command to
+  start Locktender again does, in every answer about the state). So the look
+  tells whoever holds the session, for each of the three files, whether a
+  copy lies beside it, which is to say whether Locktender ever changed it;
+  and it tells that for a vault with no app at all, where the older look
+  answered only for a registered app. In a run for this page a marker was
+  written into three settings files as a value, as the token of another tool
+  and in a comment, and the app was asked through the three routes for each
+  of them: the marker was in none of its 55 answers, and neither was the name
+  of another entry.
+- **Written under rules.** The write changes one file per request, at the
+  fixed place, and keeps at most one copy of it beside it; it touches nothing
+  else outside the vault. It writes only a file it has just read through the
+  code that looks, or makes the file where its folder is there and the file
+  is not: never one that cannot be parsed, that is a link or a special file,
+  is larger than 1 MiB, has a second name or belongs to another account, and
+  never through a folder that is a link. It does not create a folder: an AI
+  app that was never opened has none, and stays without. It adds Locktender's own entry, or changes the command of an
+  entry of that name, or takes the entry out, by editing the text: every
+  other byte of a JSON file and every other line of a TOML file stays, and
+  the result, parsed again, must hold what the file held before, key for key
+  and in the same order. A request names the state of the file that the
+  owner was shown, and in any other state nothing is written; nor when the
+  file is another one, or was changed, between the look and the replace, or
+  was changed less than five seconds before. Before each change the bytes
+  that were read are kept in a copy beside the file. The new bytes go to a
+  temporary file in the same folder and take the file's place in one step.
+  The record comes first: an entry that says the file was about to be
+  changed is written before the replace, as a release is recorded before its
+  text is handed over, and if the change then does not happen a second entry
+  says so and the vault's settings are put back. Afterwards the file is read
+  back and must hold the entry. An entry of Locktender's name that points
+  somewhere else is never removed: the owner was not shown what it holds.
+  The write needs owner mode, always; taking the entry out needs it too.
+- **Only on a request.** The file is read when one of these routes is
+  called, and at no other time. Showing the text to copy, listing the apps
+  and the tiles a page can offer, and waiting for a first request read no
+  such file. Locktender does not look whether the AI app is running.
+- **Not in a demo.** A demo refuses the three routes before any file is
+  looked at, and the list of tiles it answers names no place of a settings
+  file. The older look knows no demo and still answers there; see below.
 
-What an adversary gains from the look: with the session, a word about a file
-that a program of the owner's account can read whole. The exception is the
-demo, which has no pairing. There any program on the computer, also one of
-another account, can ask for the look and learn that word about a file in the
-home folder of the account the demo runs under: whether the settings file of
-Claude Desktop, of Codex or of Grok Build is there, whether it is empty, and
-whether it has an entry named `locktender`. With the place of the file it also
-learns where that home folder is. Beside the path of the Python that runs it,
-this is the one thing a demo tells about anything outside its temporary folder.
+What an adversary gains from the look: with the session, fixed words about a
+file that a program of the owner's account can read whole, the places of
+that file and of its copies, and the command. The exception is the older look in a demo, which has no
+pairing. There any program on the computer, also one of another account, can
+ask for it and learn one word about a file in the home folder of the account
+the demo runs under: whether the settings file of Claude Desktop, of Codex
+or of Grok Build is there, whether it is empty, and whether it has an entry
+named `locktender`. With the place of the file it also learns where that home
+folder is. Beside the path of the Python that runs it, this is the one thing
+a demo tells about anything outside its temporary folder. It ends when the
+older look goes.
 
 Two more things about the look. It says what the file held at the moment of
-the press; a program of the same account can change the file afterwards, and
-with it what an AI app starts under the name `locktender`. And how long the
-answer takes grows with the size of the file (five milliseconds for a file of
-1 MiB against one for a small file in the run); nobody measured what that
-tells.
+the request; a program of the same account can change the file afterwards,
+and with it what an AI app starts under the name `locktender`. And how long
+the answer takes grows with the size of the file (five milliseconds for a
+file of 1 MiB against one for a small file in a run of the older look);
+nobody measured what that tells.
+
+**What the write gives an adversary.** With the session and inside owner
+mode: a request that writes Locktender's own entry, which starts Locktender's
+own program on this vault. That is nothing the same person could not do by
+registering an app, and a program of the owner's account could always write
+that file itself. A web page on another site and a program without the
+session reach none of the three routes: in a run for this page all 33 routes
+answered 401 without the session. What is new:
+
+1. A fault in the writer could damage a file that is not Locktender's.
+   Against it: the file is read before, only the bytes or lines of the entry
+   are changed, the result is compared with what was read, a copy is kept
+   before each change, the file is read back, and the tests. The tests ran
+   against files made for them, never against a file an AI app made. In one
+   run for this page, for a JSON file and two TOML files that held other
+   content, the file after the write was the file before it with one piece
+   put in. After the entry was taken out again the JSON file was the file it
+   had been, byte for byte, and each TOML file had one blank line more at its
+   end.
+2. Between the last comparison and the replace, another program's change to
+   the file is lost. The time is that of one system call.
+3. The copies are a second and a third place where the keys of other tools
+   lie, and they outlive those keys: a copy keeps what the file held after
+   the owner took a key out of the file. They have mode 0600, they stay until
+   the owner deletes them, and a folder kept under version control that
+   leaves out the settings file by its name will pick them up.
+4. A running AI app may write its file again and drop the entry. Nothing
+   notices that until the next look. Nobody tried what the three AI apps do.
+5. The entry makes the AI app start, at each of its starts and with the
+   owner's rights, the Python that ran Locktender at the request. The write
+   refuses a Python or a vault that lies under a folder for temporary files,
+   in a folder that everybody may write, or in one that belongs to another
+   account. It does not refuse a folder that a group may write, and it does
+   not follow a Python that is a link to the file behind it. If that Python
+   is later replaced, the AI app starts the replacement.
+6. The place of the file follows `HOME`, `XDG_CONFIG_HOME` and `GROK_HOME` as
+   Locktender was started with them: whoever sets these for Locktender moves
+   the write. Below that place no link is followed.
+7. One entry in `~/.codex/config.toml` connects the ChatGPT desktop app,
+   Codex and its IDE extension at once, under one name. A card that names
+   `chatgpt-desktop` may stand for a coding agent in a terminal.
+8. The request also changes the vault: it registers the app, and in a vault
+   with at most one group it opens that group to apps that send text to a
+   provider and gives the app "Ask me each time". It never gives "Can read",
+   and with several groups it gives no group. Where apps that run on this
+   computer were the only ones registered, they are no longer answered from
+   then on until the owner chooses; the look says so before.
+9. A `policy` entry of the record no longer always means that the settings
+   changed: one that came with these routes can stand for a file that was
+   about to be changed, with the settings as they were. A version of
+   Locktender from before reads such an entry as a save without a change.
+
+What it does not give: a way to choose the file, the name of the entry or the
+command. A request carries the name of one of three AI apps and the state
+the owner was shown, and nothing else.
 
 **The trial.** One route of the page's API, `POST /api/try`, hands the page
 one passage of the vault for the owner's own words, with no app involved, no
 entry in the record and no limit counted. It is there so that the owner can
 see what a question would bring before any app is connected; no page of this
 version calls it yet. Like every route it needs the session: in a run for
-this page all 30 routes answered 401 without it. It also needs the passphrase
+this page all 33 routes answered 401 without it. It also needs the passphrase
 typed within ten minutes, a permission apart from owner mode, and answers 20
 questions a minute at most. Inside those ten minutes, whoever holds the
 session can read up to 200 passages this way, and nothing shows it afterwards
@@ -861,8 +964,10 @@ API stays closed to it without the session.
   show for that reason is said
   [above](#the-two-views-and-what-came-with-them).
 - It can change the settings file of an AI app, also after Locktender looked
-  at it and found its entry there. What an AI app starts under the name
-  `locktender` is decided by that file, which is not Locktender's.
+  at it or wrote its entry there: it can point the entry elsewhere, remove
+  it, or change the copies that lie beside the file. What an AI app starts
+  under the name `locktender` is decided by that file, which is not
+  Locktender's.
 - It can delete files, and it can return the record to an earlier state by
   deleting its newest entries, which is not noticed
   ([what verification proves](GATE_FORMAT.md#what-verification-proves)).
@@ -1017,6 +1122,7 @@ that lets more text leave is accepted without it: registering an app, granting a
 collection or turning "Ask me each time" into "Can read", opening a collection
 to hosted apps, showing titles, raising any limit, answering hosted and local
 apps together, and whatever else makes an app answered that is not answered now.
+Nor is a request that would change an AI app's settings file.
 That last rule covers un-pausing an app, switching to the kind of app that is
 not answered, and removing the last app of the answered kind while apps of the
 other kind are registered. A review tried the first six kinds after owner mode
@@ -1027,12 +1133,20 @@ un-pausing, switching to the other kind, answering both and raising a limit were
 refused until the passphrase was typed, while pausing, lowering a limit,
 approving a waiting passage and adding a document went through.
 
-Three routes came with the two views, and none of them asks for owner mode,
-because none lets text leave: keeping the view or that setting up is finished,
-the look at a settings file, and in a demo telling the played app to ask
-again. In a second run for this page, after ten minutes by the clock,
-registering an app and turning "Ask me each time" into "Can read" were
-refused, while the view was changed and the look was answered.
+Of the routes that came later, these ask for no owner mode, because they let
+nothing leave and write nothing outside the vault: keeping the page's three
+words, the two looks at a settings file, and in a demo telling the played
+app to ask again. The route that takes Locktender's entry out of a settings
+file asks for owner mode when it would change the file, and where removing
+the app does; when it only stops answering an app and leaves the file as it
+is, it does not. The route that writes the entry always asks. The trial
+asks for the passphrase by its own clock (see "The trial"). In a run for
+this page, after ten minutes by a clock the run moved, registering an app,
+writing the entry and taking out an entry that was this vault's were
+refused, while the look was answered; an entry that pointed elsewhere was
+left in its file, and the app of its name was removed from the vault,
+without the passphrase. After the passphrase was typed for the trial alone,
+writing the entry was still refused.
 
 Passphrases are checked one at a time, and a wrong one is answered a second
 after its turn began at the earliest, so the page allows one guess a second. A
@@ -1047,10 +1161,12 @@ minutes ("The trial" above). In 956 responses over ten states of a vault, a
 review found, of 42 markers planted in documents, only the five that had been
 released or were shown for approval, and nowhere the passphrase, the words to
 replace or the pairing code. That review was made before the two views and
-before the trial. Of the routes added since, the look at a settings file is
-the one that reads something that must not be passed on: in a run for this
-page a marker written into settings files was in none of its 38 answers. The
-trial question is the one that passes text on: its answer holds the passage
+before the trial. Of the routes added since, those that deal with a settings
+file read something that must not be passed on: in a run for this page a
+marker written into settings files was in none of the 38 answers of the
+older look, and in a later run in none of the answers of the three routes
+that look, write and remove. The trial question is the one that passes text
+on: its answer holds the passage
 with the words to replace already replaced, and no other answer repeats it.
 
 The trial question is refused once ten minutes have passed since the
@@ -1058,14 +1174,20 @@ passphrase was typed, like a change that lets more leave, but by its own
 clock: the passphrase typed for a question opens no change. It is refused
 before the question is looked at.
 
-Five things are in an answer by design. The session is the answer to the right
+Seven things are in an answer by design. The session is the answer to the right
 pairing code, and in the demo to the page's first question. The passphrase of
 the demo is in every answer about the demo's state, because the demo's page
 shows it. The command that starts Locktender again is in every answer about
 the state, with the full paths of the Python that runs it and of the vault's
-folder, because the Basic page shows it. The look at a settings file answers
-with a word about a file of another program, and with the place of that file.
-And the trial question is answered with one passage of the vault.
+folder, because the Basic page shows it. A look at a settings file answers
+with words about a file of another program, and with the place of that file.
+The three newer routes also name the places of its copies and since when
+they lie there, and the list of tiles names the places of the three files.
+And they hold the command an entry holds or would hold, which names the
+Python and the place of the vault. These two are answered to whoever holds
+the session, for all three programs, also on a vault with no app: the look
+before answered one word, and only for a registered app. The trial question
+is answered with one passage of the vault.
 
 **Does not hold.** Without the passphrase that person can read every text that
 was ever released, on the Activity page of Pro and under "What left the vault"
@@ -1203,13 +1325,32 @@ vault cannot do, the computer has to: a screen lock and full-disk encryption.
   calls that were stopped in the last 24 hours as far as the 120 newest
   refusals in the record reach. Older stops, the owner's own changes and the
   sessions are in Pro.
-- **One file that is not Locktender's is read.** When the owner presses
-  "Check the file", Locktender reads the settings file of the AI app that is
-  being connected, at a place that no request chooses, and answers with a
-  word about it. This version writes no such file: the package holds a
-  module that can, `hostwrite`, and no route calls it yet. The word says what
-  the file held at that moment: a program of the owner's account can change
-  the file afterwards.
+- **Files that are not Locktender's are read and written.** On a request of
+  the page Locktender reads the settings file of Claude Desktop, of the
+  ChatGPT desktop app and Codex, or of Grok Build, at a place that no request
+  chooses, and on a request that needs owner mode it replaces that file with
+  one that differs by its own entry. Before each change it keeps a copy of
+  the file as it was, in one of two files beside it. It writes nothing
+  through a link and removes no entry that points elsewhere. What a look says
+  is what the file held at that moment. It was not tried with the AI apps,
+  nor by hand on a Mac. A program of the owner's account can change the file
+  and the copies afterwards.
+- **Grok.** By xAI's pages, a project's own settings can define a server of
+  the same name, and "a project server with the same name as a user one
+  replaces it entirely": in a folder whose settings define an entry named
+  like Locktender's, the program behind that name is the project's; it sees
+  the question and answers what it likes. Codex reads the settings of trusted
+  projects in the same way. Grok Build also loads the entries that Claude
+  Code keeps in `~/.claude.json`: until it has its own entry, or the owner
+  sets `mcps = false` under `[compat.claude]`, a request from it arrives
+  under the name `claude-code`, and the card shows Anthropic as the receiver
+  while the text goes to xAI. And Grok Bot can be allowed to run commands on
+  the owner's computer; it is then a program of the owner's account
+  (position 3). None of this was tried.
+- **One file, several programs.** The settings file `~/.codex/config.toml` is
+  read by the ChatGPT desktop app, Codex and its IDE extension, by OpenAI's
+  page. Locktender cannot tell them apart: all call under the one name the
+  entry holds.
 - **Five wrong pairing codes switch pairing off** until Locktender is started
   again, and any local program can cause that. They are counted over the whole
   run, whoever sends them. It gains nothing: a page that is paired already goes
@@ -1328,7 +1469,11 @@ Tested:
   where a browser was needed, Chromium. The runs for the two views, the
   interface file and the three routes used no browser: they called the page's
   API directly. So did the run for the trial question, with a clock it could
-  move.
+  move, and the run for the settings files.
+- The write into a settings file: by Locktender's own tests, against files
+  made for them in home folders made for them, on Linux and, in CI, on macOS;
+  and in one run on Linux through the three routes, in a home folder made
+  for it, for a JSON file and two TOML files that held other content.
 
 Not tested:
 
@@ -1348,10 +1493,18 @@ Not tested:
   tried in a browser for this page.
 - The trial question under a hostile review, and from a page: no page calls
   it yet.
-- The module that can write an AI app's settings file, `hostwrite`, beyond
-  its own tests. Those ran on Linux, against files made for them in home
-  folders made for them. It was not run on a Mac, not against a settings file
-  that an AI app made, and no review has attacked it. Nothing calls it yet.
+- The write against a settings file that an AI app made, and everything it
+  rests on that comes from the makers' pages: whether Claude Desktop, the
+  ChatGPT desktop app, Codex and Grok Build read the entry, keep an entry
+  they did not write, need to be started again, or change anything in the
+  command; what a program does that watches its settings file when the name
+  suddenly leads to a new file; and which program reads `~/.codex/config.toml`
+  on Linux.
+- The write by hand on a Mac, and whether macOS asks for a permission before
+  a program started from a terminal may read or write the settings folder of
+  Claude Desktop.
+- The three routes of the settings file under a hostile review, and from a
+  page: no page calls them yet.
 
 **Not audited.** Nobody outside the project has reviewed Locktender, its format
 or this page.

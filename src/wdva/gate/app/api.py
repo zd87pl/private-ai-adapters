@@ -81,8 +81,9 @@ class Service(Protocol):
     def reauth(self, *, passphrase: str, scope: str | None = None) -> JSONObject:
         """Check the passphrase again; what needs it is then allowed for a while.
 
-        Without ``scope``: actions that widen access, and trial questions.
-        With ``scope="trial"``: trial questions only.
+        Without ``scope``: actions that widen access, a write into another
+        program's settings file, and trial questions. With ``scope="trial"``:
+        trial questions only.
         """
         ...
 
@@ -179,7 +180,7 @@ class Service(Protocol):
     # -- apps -------------------------------------------------------------------
 
     def apps(self) -> JSONObject:
-        """The registered apps with their grants, limits and use."""
+        """The registered apps with their grants, limits and use, and the tiles to connect one."""
         ...
 
     def add_app(self, *, name: str, hosted: bool, destination: str | None = None) -> JSONObject:
@@ -203,7 +204,38 @@ class Service(Protocol):
         ...
 
     def connect_check(self, *, name: str, host: str | None = None) -> JSONObject:
-        """Whether one application's settings file holds this app's entry, in one word."""
+        """Whether one application's settings file holds this app's entry, in one word.
+
+        The look before :meth:`connect_look`, for a registered app. It stays
+        for the page that still calls it.
+        """
+        ...
+
+    # -- the settings file of an agent application ---------------------------------
+
+    def connect_look(self, *, host: str) -> JSONObject:
+        """What one application's settings file holds of this vault's entry, in fixed words.
+
+        Reads that file and changes nothing, in the vault or outside.
+        """
+        ...
+
+    def connect_write(self, *, host: str, expect: str) -> JSONObject:
+        """Register one application and write the vault's entry into its settings file.
+
+        The one entry, into the one file of that application, and only while
+        the file is in the state ``expect`` that the owner was shown. It
+        always needs owner mode: it writes a file of another program.
+        """
+        ...
+
+    def connect_remove(self, *, host: str, expect: str) -> JSONObject:
+        """Stop answering one application and take the vault's entry out of its settings file.
+
+        The file is changed only where ``expect`` says that the entry is this
+        vault's; then, and where removing the app makes other apps answered,
+        it needs owner mode. Otherwise it only takes away.
+        """
         ...
 
     # -- settings ---------------------------------------------------------------
