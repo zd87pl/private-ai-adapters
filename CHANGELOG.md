@@ -59,16 +59,16 @@ changes only when the bytes on disk do.
   when no file is at hand. The fourth shows how to add Locktender to that app
   and the start of a question to copy, waits for the app's first request, and
   shows the passage the app asks for, with its exact text and the buttons
-  "Release once" and "Don’t release". For Claude Desktop and the ChatGPT
-  desktop app that step has a button "Check the file". A press makes
-  Locktender read that app's one settings file and tell the page one of a few
-  fixed answers, such as whether its own entry is there, and nothing of what
-  the file holds; the page asks for that look at no other time. It is the one
-  file of another program that Locktender reads. Locktender writes no file of
-  another program and changes no settings of any AI app: you copy the text and
-  put it where the AI app reads it. Every step after the first can be skipped
-  or left for later; until setting up is over, a card on the Basic page,
-  "Finish setting up", names the next one.
+  "Release once" and "Don’t release". For Claude Desktop, the ChatGPT
+  desktop app and Grok Build that step has a button "Check the file". A press
+  makes Locktender read that app's one settings file and tell the page one of a
+  few fixed answers, such as whether its own entry is there, and nothing of
+  what the file holds; the page asks for that look at no other time. It is the
+  one kind of file of another program that Locktender reads. Locktender writes
+  no file of another program and changes no settings of any AI app: you copy
+  the text and put it where the AI app reads it. Every step after the first can
+  be skipped or left for later; until setting up is over, a card on the Basic
+  page, "Finish setting up", names the next one.
 - **The demo has a guide.** It stands on the Basic page under "Approvals" and
   says where the demo is: an app is about to ask, a passage waits, it was
   released or not, it was read. The played app asks again for the passage that
@@ -89,7 +89,9 @@ changes only when the bytes on disk do.
   or newer and the MCP SDK.
 - **`wdva gate config HOST`**: prints the configuration that connects one
   application that starts local MCP servers. `HOST` is `claude-desktop`,
-  `claude-code`, `chatgpt-desktop`, `codex`, `openclaw` or `generic`. The
+  `claude-code`, `chatgpt-desktop`, `codex`, `grok-build`, `openclaw` or
+  `generic`. `grok-build` is xAI's coding agent for the terminal: it prints
+  the section for `~/.grok/config.toml` and the `grok mcp add` line. The
   ChatGPT desktop app has a `HOST` of its own, apart from Codex:
   `chatgpt-desktop` prints the section for `~/.codex/config.toml`, the file
   that app shares with Codex according to OpenAI's documentation, and `codex`

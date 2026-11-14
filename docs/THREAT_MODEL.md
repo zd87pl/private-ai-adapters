@@ -394,7 +394,7 @@ code. One machine, one run: an observation, not a proof.
 | **Two or three words about the page**: which of its two views is in use, whether setting up was finished, and a language for the page once one is kept | In `run/interface.json` in the store directory, in plain text. | File modes only. They are not sealed, and changing them never asks for the passphrase. They decide which page opens first and whether the page still offers to finish setting up, and nothing about what may leave. The language is protected by less than the other two: the page's port tells it to whoever asks, before pairing. |
 | **What was released** | In the record, sealed, with its exact text. Outside the vault: in the AI app, in that AI app's own files and, for a hosted one, at its provider. | Inside the vault, the lock. Outside, nothing. |
 | **The files the documents came from** | Wherever the owner keeps them. Locktender seals a copy. Adding a document neither moves nor deletes the file. | Nothing Locktender does. A file that stays in a folder an AI app can read can be read there by that app, without Locktender ("Where the original lies" under [Known limits](#known-limits)). |
-| **The settings file of an AI app**, which may hold the entries of other tools, with their keys | In the owner's home folder. It belongs to the AI app. Locktender looks into it when the owner presses "Check the file", and never writes it. | The look answers with a word about the file and with nothing from it. |
+| **The settings file of an AI app**, which may hold the entries of other tools, with their keys | In the owner's home folder. It belongs to the AI app. Locktender looks into it when the owner presses "Check the file". This version never writes it: the module that could, `hostwrite`, is called by nothing yet. | The look answers with a word about the file and with nothing from it. |
 
 ### The mechanisms, by name
 
@@ -569,20 +569,34 @@ Activity page of Pro.
 **The look at a settings file.** In the step "First question" of setting up,
 the button "Check the file" makes Locktender read one file that is neither its
 own nor in the vault's folder: the settings file of the AI app that is being
-connected. That is `claude_desktop_config.json` for Claude Desktop and
-`~/.codex/config.toml` for the ChatGPT desktop app and for Codex; for every
-other app there is no such look. It is the only file of another program that
-Locktender reads, and it may hold the entries of other tools, with their keys.
+connected. That is `claude_desktop_config.json` for Claude Desktop,
+`~/.codex/config.toml` for the ChatGPT desktop app and for Codex, and
+`~/.grok/config.toml` for Grok Build; for every other app there is no such
+look. It is the only kind of file of another program that Locktender reads,
+and it may hold the entries of other tools, with their keys.
 
-- **A fixed place.** Where the file lies follows from the AI app, the system
-  and the home folder of the account. A request picks one of ten known names
-  of AI apps and nothing more of the place. No part of a path comes from it:
-  in a run for this page a name of `../../etc/passwd` was answered 404, and a
+- **A fixed place.** Where the file lies follows from the AI app, the system,
+  the home folder of the account, and two variables of the environment
+  Locktender was started in: `XDG_CONFIG_HOME` for Claude Desktop outside
+  macOS, and `GROK_HOME` for Grok Build, each only when it holds an absolute
+  path. Whoever sets `HOME` or these two for Locktender moves the look.
+  `CODEX_HOME` is not followed. A request picks one of eleven known names of
+  AI apps and nothing more of the place. No part of a path comes from it: in
+  a run for this page a name of `../../etc/passwd` was answered 404, and a
   request with a field `path` 400.
 - **Read with care.** Only a regular file of at most 1 MiB is opened, without
   following a link and without waiting. A symbolic link, a directory, a named
   pipe and a larger file were each answered `not_read` in the run, in a
-  millisecond or two.
+  millisecond or two. From this version on a folder is not gone through
+  either when it is a symbolic link: each folder below the home folder (or
+  below the folder a variable names) is looked at and opened without
+  following a link, and the file is reached through the folder that was
+  opened. A version before this one followed such a link, and so read
+  whatever the link led to. In a run for this version, with the right entry
+  behind a linked settings folder and again behind a linked `~/.config`, the
+  answer was `not_read` and nothing behind the link was read. The home folder
+  itself, and a folder a variable names, are taken as the system resolves
+  them.
 - **Never a byte of the file in an answer.** The answer is one of nine words
   (`present`, `differs`, `other`, `empty`, `no_file`, `no_folder`,
   `unreadable`, `not_read`, `unsupported`); beside `other`, one of three more
@@ -590,10 +604,15 @@ Locktender reads, and it may hold the entries of other tools, with their keys.
   Locktender composed without the file. In the run a marker was written into
   the settings files as a value, as the token of another tool, in a comment
   and inside Locktender's own entry. It was in none of 38 answers.
-- **Never written.** The code that looks only reads, and Locktender has no
-  code that writes, creates or renames a file of another program: the owner
-  copies the text and puts it where the AI app reads it. After the 38 looks
-  the home folder held what the run itself had put there.
+- **Not written by anything the owner can press.** The code that looks only
+  reads. One module, `hostwrite`, can write such a file; no route calls it
+  yet. In this version the owner copies the text and puts it where the AI app
+  reads it. After the 38 looks the home folder held what the run itself had
+  put there. The module is there for a press that a later version brings. It
+  puts Locktender's own entry into one of the three files or takes it out,
+  after it has read the file through the code that looks, and it was tested
+  against files that its tests made, on Linux, never against a file that an
+  AI app made.
 - **Only on a press.** The file is read when the page asks for the look, which
   it does when the owner presses "Check the file" or "Check again". Showing
   the text to copy, listing the apps and waiting for a first request read no
@@ -603,11 +622,11 @@ What an adversary gains from the look: with the session, a word about a file
 that a program of the owner's account can read whole. The exception is the
 demo, which has no pairing. There any program on the computer, also one of
 another account, can ask for the look and learn that word about a file in the
-home folder of the account the demo runs under: whether Claude Desktop's or
-Codex's settings file is there, whether it is empty, and whether it has an
-entry named `locktender`. With the place of the file it also learns where
-that home folder is. Beside the path of the Python that runs it, this is the
-one thing a demo tells about anything outside its temporary folder.
+home folder of the account the demo runs under: whether the settings file of
+Claude Desktop, of Codex or of Grok Build is there, whether it is empty, and
+whether it has an entry named `locktender`. With the place of the file it also
+learns where that home folder is. Beside the path of the Python that runs it,
+this is the one thing a demo tells about anything outside its temporary folder.
 
 Two more things about the look. It says what the file held at the moment of
 the press; a program of the same account can change the file afterwards, and
@@ -1187,9 +1206,10 @@ vault cannot do, the computer has to: a screen lock and full-disk encryption.
 - **One file that is not Locktender's is read.** When the owner presses
   "Check the file", Locktender reads the settings file of the AI app that is
   being connected, at a place that no request chooses, and answers with a
-  word about it. It writes no such file. The word says what the file held at
-  that moment: a program of the owner's account can change the file
-  afterwards.
+  word about it. This version writes no such file: the package holds a
+  module that can, `hostwrite`, and no route calls it yet. The word says what
+  the file held at that moment: a program of the owner's account can change
+  the file afterwards.
 - **Five wrong pairing codes switch pairing off** until Locktender is started
   again, and any local program can cause that. They are counted over the whole
   run, whoever sends them. It gains nothing: a page that is paired already goes
@@ -1328,6 +1348,10 @@ Not tested:
   tried in a browser for this page.
 - The trial question under a hostile review, and from a page: no page calls
   it yet.
+- The module that can write an AI app's settings file, `hostwrite`, beyond
+  its own tests. Those ran on Linux, against files made for them in home
+  folders made for them. It was not run on a Mac, not against a settings file
+  that an AI app made, and no review has attacked it. Nothing calls it yet.
 
 **Not audited.** Nobody outside the project has reviewed Locktender, its format
 or this page.

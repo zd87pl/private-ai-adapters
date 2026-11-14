@@ -400,7 +400,7 @@ def test_the_host_configuration_and_the_data_directory_carry_the_new_name(rename
     assert Path(told["directory"]).name == "example-desk"
     assert told["variable"] == "WDVA_GATE_STORE"
     hosts = told["hosts"]
-    assert len(hosts) == 10
+    assert len(hosts) == 11
     for host, shown in hosts.items():
         assert_renamed(shown["text"], f"the configuration text for {host}")
         assert_renamed(json.dumps(shown["json"]), f"the configuration for {host}")
@@ -417,6 +417,11 @@ def test_the_host_configuration_and_the_data_directory_carry_the_new_name(rename
     # The ChatGPT desktop app is an entry of its own, with the file alone.
     (only,) = hosts["chatgpt-desktop"]["json"]["blocks"]
     assert only["text"] == hosts["codex"]["json"]["blocks"][1]["text"]
+    # Grok Build takes the same lines, and a command of its own.
+    assert hosts["grok-build"]["json"]["blocks"][0]["text"] == only["text"]
+    assert hosts["grok-build"]["json"]["blocks"][1]["text"].startswith(
+        "grok mcp add example-desk -- "
+    )
     # The pieces for a file that holds other settings carry the new key too.
     inner = hosts["claude-desktop"]["json"]["blocks"][0]["inner"]
     assert inner["entry"].startswith('"example-desk": {')

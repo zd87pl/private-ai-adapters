@@ -2395,12 +2395,13 @@ def test_apps_with_their_use(unlocked: GateService, gate_clock: FakeClock) -> No
         {"name": "tax", "allow_hosted": True},
     ]
     ids = [host["id"] for host in answer["known"]]
-    assert len(ids) == 10
-    assert ids[:6] == [
+    assert len(ids) == 11
+    assert ids[:7] == [
         "claude-desktop",
         "claude-code",
         "chatgpt-desktop",
         "codex",
+        "grok-build",
         "openclaw",
         "generic",
     ]
@@ -3719,7 +3720,7 @@ def test_the_launch_command_starts_this_installation_on_this_vault(
 
 def test_the_chatgpt_desktop_app_is_an_entry_of_its_own(unlocked: GateService, home: Path) -> None:
     known = {entry["id"]: entry for entry in unlocked.apps()["known"]}
-    assert len(known) == 10
+    assert len(known) == 11
     assert (known["chatgpt-desktop"]["label"], known["chatgpt-desktop"]["name"]) == (
         "ChatGPT desktop app",
         "chatgpt-desktop",
@@ -3761,6 +3762,7 @@ def test_connect_gives_one_place_for_this_computer_and_a_note_without_an_address
         "claude-code",
         "chatgpt-desktop",
         "codex",
+        "grok-build",
         "openclaw",
         "generic",
     ]
@@ -3775,7 +3777,8 @@ def test_connect_gives_one_place_for_this_computer_and_a_note_without_an_address
         assert "MCP" not in note
         assert "It has not been tried with" in note
         if entry["id"] != "generic":
-            assert f"for {entry['label']}, as read on 2026-11-12." in note
+            read = "2026-11-14" if entry["id"] == "grok-build" else "2026-11-12"
+            assert f"for {entry['label']}, as read on {read}." in note
         # The note with the address is still there for the sheet that shows it today.
         assert "://" in answer["notes"][-1]
         # What to do in the application afterwards.
@@ -4053,21 +4056,36 @@ def test_the_check_reads_one_fixed_file_and_only_when_asked(
     decoy = home / ".codex" / "config.toml"
     decoy.parent.mkdir()
     decoy.write_text("not = 'looked at'\n", encoding="utf-8")
-    opened: list[str] = []
-    real_open = os.open
+    # The look opens the folders on the way to the file, each through the one above it, and
+    # then the file by its name through its folder. What is noted here is the full path each
+    # of them stands for, and whether it was opened as a folder.
+    opened: list[tuple[str, bool]] = []
+    places: dict[int, str] = {}
+    real_open, real_lstat = os.open, os.lstat
 
     def noting(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
-        opened.append(os.fspath(path))
-        return real_open(path, flags, *args, **kwargs)
+        folder = kwargs.get("dir_fd")
+        full = os.fspath(path) if folder is None else os.path.join(places[folder], path)
+        opened.append((full, bool(flags & os.O_DIRECTORY)))
+        descriptor = real_open(path, flags, *args, **kwargs)
+        places[descriptor] = full
+        return descriptor
 
     monkeypatch.setattr(hostcheck.os, "open", noting)
     # Not when the form is asked for, the list of apps, the state or anything else that reads.
     every_answer(unlocked)
     unlocked.connect(name="claude-desktop", host="codex")
-    assert [path for path in opened if path.startswith(str(home))] == []
-    # On the one request: the one file of that application, once, for reading.
+    assert [path for path, _ in opened if path.startswith(str(home))] == []
+    # On the one request: the one file of that application, once, for reading, reached
+    # through its own folders and no other.
     assert unlocked.connect_check(name="claude-desktop")["state"] == "present"
-    assert [path for path in opened if path.startswith(str(home))] == [str(place)]
+    under_home = [(path, folder) for path, folder in opened if path.startswith(str(home))]
+    assert [path for path, folder in under_home if not folder] == [str(place)]
+    on_the_way = [home]
+    for part in place.parent.relative_to(home).parts:
+        on_the_way.append(on_the_way[-1] / part)
+    assert [path for path, folder in under_home if folder] == [str(path) for path in on_the_way]
+    assert not [path for path, _ in under_home if ".codex" in path]
     # A file that passed the first look and is something else when it is opened is not read.
     opened.clear()
     looked = os.lstat(place)
@@ -4077,7 +4095,9 @@ def test_the_check_reads_one_fixed_file_and_only_when_asked(
     monkeypatch.setattr(
         hostcheck.os,
         "lstat",
-        lambda path, *a, **k: looked if os.fspath(path) == str(place) else os.lstat(path, *a, **k),
+        lambda path, *a, **k: (
+            looked if os.fspath(path) == place.name else real_lstat(path, *a, **k)
+        ),
     )
     assert unlocked.connect_check(name="claude-desktop")["state"] == "not_read"
     place.unlink()

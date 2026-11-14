@@ -359,9 +359,9 @@ to ask this vault for text, under this rule:"
 
 Under the rule: "A passage is one piece of a document, at most 800 characters."
 
-- **The list.** Claude Desktop, Claude Code, ChatGPT desktop app, Codex, OpenClaw and "Another
-  app". Each row says where the app's text goes, for example "Sends to Anthropic". No row is
-  ticked for you. Claude, ChatGPT and Grok in the browser or on a phone are not in the list; a
+- **The list.** Claude Desktop, Claude Code, ChatGPT desktop app, Codex, Grok Build, OpenClaw and
+  "Another app". Each row says where the app's text goes, for example "Sends to Anthropic". No
+  row is ticked for you. Claude, ChatGPT and Grok in the browser or on a phone are not in the list; a
   line to unfold, "ChatGPT, Claude or Grok on the web or on a phone?", says why: "Those cannot use
   this vault."
 - **The name.** For a listed app you type nothing: "It will be listed under the name
@@ -471,9 +471,9 @@ this page: in a text editor or in Terminal, and in your AI app.
 
 1. **"Add Locktender to Claude Desktop".** The app has to be told once how to start the small
    program that carries its requests to Locktender. How it is told depends on the app:
-   - **Claude Desktop and the ChatGPT desktop app** keep one settings file at a place Locktender
-     knows. The screen shows the place, "The settings file of Claude Desktop on this computer:",
-     and a button "Check the file", which is described below.
+   - **Claude Desktop, the ChatGPT desktop app and Grok Build** keep one settings file at a
+     place Locktender knows. The screen shows the place, "The settings file of Claude Desktop on
+     this computer:", and a button "Check the file", which is described below.
    - **Claude Code and Codex** take one line in Terminal. On a Mac the screen says "Open a new
      Terminal window (⌘N; the first one is busy running Locktender), paste this line and press
      Return:", and under the line: "It tells Claude Code how to start the small program that
@@ -503,8 +503,11 @@ only whether its own entry is there. Then this page says what to do." What holds
 
 - It happens when you press "Check the file" or "Check again", and at no other time.
 - The place of the file is fixed by the app and your computer. It is the one file of another
-  program that Locktender ever reads.
-- A file that is a link, or larger than 1 MiB, is not opened.
+  program that Locktender reads at that press, and it reads no other kind of file that is not
+  its own.
+- A file that is a link, or larger than 1 MiB, is not opened. A settings folder that is a link,
+  or that lies in a folder of your home folder that is a link, is not gone through: nothing
+  behind such a link is read.
 - Nothing from the file reaches the page but one of the answers in the table below.
 - Nothing is written. Locktender writes no file outside the vault's folder and changes no
   settings of any app. In the words of the screen: "This part happens outside this page. Nothing
@@ -515,12 +518,12 @@ only whether its own entry is there. Then this page says what to do." What holds
 | --- | --- |
 | "✓ Locktender is in the settings file of Claude Desktop." | Nothing more here. Go on with line 2. |
 | "The file is not there yet." | In three steps: "Make this file in a plain-text editor:", with the place and "Copy the path"; "Put the text below into it and save it."; "Check again". |
-| "The file is there and holds no settings yet." | Open it in a plain-text editor and, for Claude Desktop, "Replace everything in it with the text below and save it." For the ChatGPT desktop app: "Put the text below at the very end of it, on a new line, and save it." |
-| "The file holds other settings. Keep them." | For Claude Desktop the screen says where the entry goes, in one of three ways: "Inside “mcpServers”, after its last entry, type a comma, then paste this:", "Between the braces after “mcpServers”, paste this:" or "Right after the first “{”, paste this, then type a comma:". Each is followed by "Then save the file." For the ChatGPT desktop app: "Put the text below at the very end of it, on a new line, and save it." |
-| "The file already has an entry named “locktender”, and it points somewhere else: another vault, or an earlier installation." | "Replace that entry with this one:". For the ChatGPT desktop app the screen speaks of a section and says: "Replace that section, down to the next line that starts with “[”, with this:". |
+| "The file is there and holds no settings yet." | Open it in a plain-text editor and, for Claude Desktop, "Replace everything in it with the text below and save it." For the ChatGPT desktop app and Grok Build: "Put the text below at the very end of it, on a new line, and save it." |
+| "The file holds other settings. Keep them." | For Claude Desktop the screen says where the entry goes, in one of three ways: "Inside “mcpServers”, after its last entry, type a comma, then paste this:", "Between the braces after “mcpServers”, paste this:" or "Right after the first “{”, paste this, then type a comma:". Each is followed by "Then save the file." For the ChatGPT desktop app and Grok Build: "Put the text below at the very end of it, on a new line, and save it." |
+| "The file already has an entry named “locktender”, and it points somewhere else: another vault, or an earlier installation." | "Replace that entry with this one:". For the ChatGPT desktop app and Grok Build the screen speaks of a section and says: "Replace that section, down to the next line that starts with “[”, with this:". |
 | "The settings folder of Claude Desktop is not on this computer:", with the folder | "Is Claude Desktop installed? Open it once, then check again." |
 | "Locktender could not read the file as JSON, so it cannot say what is in it. A comma or a bracket may be missing or doubled." | The screen shows the place of the file and the whole text. Mend the file in a plain-text editor, then "Check again". |
-| "Locktender does not read a settings file that is a link, or larger than 1 MiB, so it cannot say what is in it." | The same. |
+| "Locktender does not read a settings file that is a link, or larger than 1 MiB, so it cannot say what is in it." | The same. The screen says this sentence also where the folder of the file, or a folder above it in your home folder, is a link, as it is for somebody who keeps settings in a repository and links them into place. Locktender then read nothing of the file. |
 
 "Show the text without checking" shows the text to copy without a look at the file.
 
@@ -737,6 +740,7 @@ The apps Locktender has a form for:
 | Claude Code | `claude-code` | A `claude mcp add` command line, or a JSON entry | Terminal, or `.mcp.json` in a project. One of the two, not both. |
 | ChatGPT desktop app | `chatgpt-desktop` | A TOML entry | `~/.codex/config.toml`. According to OpenAI's documentation the ChatGPT desktop app reads the same file as Codex. |
 | Codex | `codex` | A `codex mcp add` command line, or a TOML entry | Terminal, or `~/.codex/config.toml`. One of the two, not both. |
+| Grok Build | `grok-build` | A TOML entry, or a `grok mcp add` command line | `~/.grok/config.toml`, or Terminal. One of the two, not both. |
 | OpenClaw | `openclaw` | An entry for its `mcp` servers | `~/.openclaw/openclaw.json` |
 | Another app | `generic` | The `mcpServers` entry that most apps read, and the bare command | The app's own documentation says where. |
 
@@ -766,6 +770,37 @@ configuration in `~/.codex/config.toml`. Three cautions:
   answers that the file "already has a section" that "points somewhere else": it found the
   section with the other name. If both programs read the file, as that page says, one section
   serves both, and in the record their calls stand under one name.
+
+**Grok Build.** Grok Build is xAI's coding agent for the terminal; its command is `grok`.
+According to xAI's documentation, as read on 2026-11-14
+([settings](https://docs.x.ai/build/settings),
+[MCP servers](https://docs.x.ai/build/features/mcp-servers)), it keeps its settings in
+`~/.grok/config.toml`, or in `config.toml` in the folder that the variable `GROK_HOME` names,
+and reads a local program from a table of the form Codex uses: `[mcp_servers.locktender]` with
+`command` and `args`. Locktender gives it that entry, and the line
+`grok mcp add locktender -- …` for Terminal; use one of the two, not both. On the screen "Ask
+your first question", "Check the file" looks at that file. It works out the place from the
+environment Locktender itself was started in: if Grok Build is started with another `GROK_HOME`
+than Locktender was, the file that is looked at is not the one Grok Build reads. Three things to
+know, each from xAI's pages:
+
+- "Grok also loads MCP configurations from `~/.claude.json`", where `claude mcp add --scope
+  user` puts the entry for Claude Code. If you connected Claude Code that way and Grok Build has
+  no entry of its own, a request from Grok Build arrives under the name `claude-code`: the
+  approval card then says that the text would go to Anthropic, while it goes to xAI. The
+  entries of other tools are "merged below `config.toml` in priority", so an entry in Grok
+  Build's own file comes first; and the page says how to switch the loading off by hand:
+  `mcps = false` under `[compat.claude]` in `~/.grok/config.toml`.
+- "A project server with the same name as a user one replaces it entirely." In a folder whose
+  own `.grok/config.toml` defines a server named `locktender`, Grok Build starts that one, and
+  not the program of your vault. (By OpenAI's documentation, Codex reads the settings of
+  projects it trusts in the same way.)
+- "String fields such as `url`, `command`, `args`, `env`, and `headers` support `${VAR}`
+  expansion." A vault or a Python whose path holds `${` would reach Grok Build as something
+  else. Whether Grok Build also replaces `$NAME` or `~` is not said there, and was not tried.
+
+None of this was tried with Grok Build. Grok on the web or on a phone, and Grok Bot, cannot be
+connected: see below.
 
 **One entry, two places in Claude Desktop.** According to
 [Anthropic's documentation](https://code.claude.com/docs/en/desktop), as read on 2026-11-13,
@@ -1374,10 +1409,12 @@ replacement.
 
 **What Locktender touches outside the vault's folder.** It writes nothing there: no file, and no
 setting of any app. (A demo's vault is a temporary folder of its own, and counts as its vault.)
-Of the files of other programs it reads one, and only when you press "Check the file" or "Check
-again" on the screen "Ask your first question": the settings file of Claude Desktop or of the
-ChatGPT desktop app. The page is told one of a few fixed answers about it and nothing of what is
-in it ([Step 4](#step-4-first-question)).
+Of the files of other programs it reads one kind, and only when you press "Check the file" or
+"Check again" on the screen "Ask your first question": the settings file of Claude Desktop, of
+the ChatGPT desktop app and Codex, or of Grok Build. The page is told one of a few fixed answers
+about it and nothing of what is in it ([Step 4](#step-4-first-question)). (The package holds a
+module that can write Locktender's entry into such a file. Nothing in this version calls it:
+no press and no command.)
 
 While the vault is unlocked, its key and whatever text is being handled are in the memory of the
 Locktender program. A program that runs under your account has ways to them. This is the same for
@@ -1574,7 +1611,8 @@ answers. It needs Python 3.11 or newer and the MCP SDK.
 
 **`wdva gate config HOST --client NAME`** prints the configuration that connects one app. It
 writes no file, reads no settings file of any app, and changes no app. `HOST` is one of
-`claude-desktop`, `claude-code`, `chatgpt-desktop`, `codex`, `openclaw` and `generic`, or one of
+`claude-desktop`, `claude-code`, `chatgpt-desktop`, `codex`, `grok-build`, `openclaw` and
+`generic`, or one of
 `chatgpt-web`, `claude-web`, `grok-web` and `grok-bot`, for which it prints why they cannot be
 connected. `NAME` has 1 to 32 characters from a-z, 0-9 and "-" and starts with a letter.
 

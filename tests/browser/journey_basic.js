@@ -125,7 +125,7 @@ const FIRST_RELEASE = { presses: 1, screens: 0 };
 /** The words of the interface this walk reads. Everything else is found by role, id, key or class. */
 const TEXT = {
   steps: ['Passphrase', 'App', 'Documents', 'First question'],
-  apps: ['Claude Desktop', 'Claude Code', 'ChatGPT desktop app', 'Codex', 'OpenClaw', 'Another app'],
+  apps: ['Claude Desktop', 'Claude Code', 'ChatGPT desktop app', 'Codex', 'Grok Build', 'OpenClaw', 'Another app'],
   chooseAnApp: 'Choose an app',
   general: 'Text that an app receives from your documents is sent to the company behind the app and cannot be recalled.',
   sentence: (name, destination) => `Text that ${name} receives from your documents is sent to ${destination} and cannot be recalled.`,
@@ -559,7 +559,7 @@ async function runA(browser, work, files) {
     known = listed.find((entry) => entry.id === DESKTOP);
     check(JSON.stringify(await rows.evaluateAll((nodes) => nodes.map((node) => node.value))) === JSON.stringify(listed.map((entry) => entry.id)), 'the apps offered are not the ones that can be connected');
     check(JSON.stringify((await form.locator('.choice-label').allTextContents()).map(trimmed)) === JSON.stringify(TEXT.apps), `the rows read ${JSON.stringify(await form.locator('.choice-label').allTextContents())}`);
-    check((await rows.count()) === 6 && (await form.locator('input[name="first-app-known"]:checked').count()) === 0, 'a row is ticked before the owner chose one');
+    check((await rows.count()) === 7 && (await form.locator('input[name="first-app-known"]:checked').count()) === 0, 'a row is ticked before the owner chose one');
     check((await walk.count('input[name="first-mode"]')) === 0, 'the first run asks what the app may do');
     check((await add.isDisabled()) && trimmed(await add.textContent()) === TEXT.chooseAnApp, `before a choice the button reads "${trimmed(await add.textContent())}"`);
     check((await walk.text('#first-sentence')) === TEXT.general, `before a choice the form says: ${await walk.text('#first-sentence')}`);
@@ -1601,7 +1601,7 @@ async function runB(browser, work) {
     await form.locator('input[name="first-app-known"]').first().waitFor({ state: 'attached', timeout: WAIT });
     // Setting up is over: no stepper, and the quiet button leads back in place of skipping on.
     check((await walk.count('ol.steps')) === 0 && trimmed(await form.locator('.gate-actions .btn-quiet').textContent()) === 'Cancel', 'the step still looks like a part of setting up');
-    check((await form.locator('input[name="first-app-known"]').count()) === 6 && (await form.locator('input[name="first-app-known"]:checked').count()) === 0, 'the step does not offer the six apps with none ticked');
+    check((await form.locator('input[name="first-app-known"]').count()) === 7 && (await form.locator('input[name="first-app-known"]:checked').count()) === 0, 'the step does not offer the seven apps with none ticked');
     const command = (await walk.state()).launch.command;
     const exit = await stopApp(walk.app, 'SIGINT');
     check(exit && exit.code === 0 && walk.app.err === '', `the app ended with ${JSON.stringify(exit)} and said: ${walk.app.err}`);

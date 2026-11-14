@@ -39,8 +39,18 @@ pytestmark = pytest.mark.skipif(
 # The product's name comes from one place; the tests take it from there too.
 PRODUCT, SLUG = brand.PRODUCT, brand.SLUG
 
-LOCAL = ["claude-desktop", "claude-code", "chatgpt-desktop", "codex", "openclaw", "generic"]
+LOCAL = [
+    "claude-desktop",
+    "claude-code",
+    "chatgpt-desktop",
+    "codex",
+    "grok-build",
+    "openclaw",
+    "generic",
+]
 WEB_ONLY = ["chatgpt-web", "claude-web", "grok-web", "grok-bot"]
+# The day each form was read on its maker's pages. Grok Build was read later than the rest.
+READ = {**dict.fromkeys(LOCAL + WEB_ONLY, "2026-11-12"), "grok-build": "2026-11-14"}
 
 # A store path with everything a configuration format has to escape.
 AWKWARD = "/srv/my vault/café \"q\" 'a' \\b $HOME `id` #x {y} 日本\ttab"
@@ -137,6 +147,7 @@ def commands_in(config: hostconfig.HostConfig) -> list[list[str]]:
                         SLUG,
                     ],
                     ["codex", "mcp", "add", SLUG],
+                    ["grok", "mcp", "add", SLUG],
                 )
                 words = words[separator + 1 :]
             found.append(words)
@@ -151,7 +162,9 @@ def test_known_hosts_are_data_with_source_and_date() -> None:
     for entry in KNOWN_HOSTS:
         assert entry.label
         assert entry.source.startswith("https://")
-        assert datetime.date.fromisoformat(entry.read) == datetime.date(2026, 11, 12)
+        assert datetime.date.fromisoformat(entry.read) == datetime.date.fromisoformat(
+            READ[entry.id]
+        )
         assert entry.local_program is (entry.id in LOCAL)
         assert entry.hosted is True  # the careful suggestion: the owner says otherwise
         if entry.name:
@@ -176,7 +189,7 @@ def test_known_hosts_are_data_with_source_and_date() -> None:
     }
     # The ChatGPT desktop app and Codex are two entries: who has only the former has no
     # `codex` command to run.
-    assert len(KNOWN_HOSTS) == 10
+    assert len(KNOWN_HOSTS) == 11
     assert by_id["chatgpt-desktop"].as_dict() == {
         "id": "chatgpt-desktop",
         "label": "ChatGPT desktop app",
@@ -190,6 +203,19 @@ def test_known_hosts_are_data_with_source_and_date() -> None:
         "codex",
         "OpenAI",
     )
+    # Grok Build, xAI's program for this computer, follows Codex in the list.
+    grok = by_id["grok-build"]
+    assert grok == hostconfig.KnownHost(
+        id="grok-build",
+        label="Grok Build",
+        name="grok-build",
+        destination="xAI",
+        hosted=True,
+        local_program=True,
+        source="https://docs.x.ai/build/features/mcp-servers",
+        read="2026-11-14",
+    )
+    assert KNOWN_HOSTS.index(grok) == KNOWN_HOSTS.index(by_id["codex"]) + 1
     assert (by_id["generic"].name, by_id["generic"].destination) == ("", "")
     assert [by_id[name].name for name in WEB_ONLY] == ["", "", "", ""]
     assert [by_id[name].destination for name in WEB_ONLY] == ["OpenAI", "Anthropic", "xAI", "xAI"]
@@ -298,6 +324,7 @@ def test_each_application_gets_its_documented_shapes() -> None:
         "claude-code": [("shell", ()), ("json", (".mcp.json",))],
         "chatgpt-desktop": [("toml", ("~/.codex/config.toml",))],
         "codex": [("shell", ()), ("toml", ("~/.codex/config.toml",))],
+        "grok-build": [("toml", ("~/.grok/config.toml",)), ("shell", ())],
         "openclaw": [("json5", ("~/.openclaw/openclaw.json",))],
         "generic": [("json", ()), ("shell", ())],
     }
@@ -323,6 +350,21 @@ def test_each_application_gets_its_documented_shapes() -> None:
     )
     assert len(chatgpt.notes) == 2
     assert chatgpt.source in chatgpt.notes[-1]
+    # Grok Build takes the lines of Codex in a file of its own, or a command of its own.
+    grok = render("grok-build", client="a", store=PLAIN)
+    assert [block.title for block in grok.blocks] == [
+        "Add this to ~/.grok/config.toml",
+        "Or run this in a terminal",
+    ]
+    assert grok.blocks[0].text == codex.blocks[1].text
+    assert grok.blocks[1].text.startswith(f"grok mcp add {SLUG} -- ")
+    assert shlex.split(grok.blocks[1].text)[5:] == expected_command("a", PLAIN)
+    assert grok.notes[0] == "Use one of the two, not both."
+    assert len(grok.notes) == 2
+    assert grok.notes[-1] == (
+        "This form follows xAI's documentation (https://docs.x.ai/build/features/mcp-servers) "
+        "as read on 2026-11-14. It has not been tried with the application itself."
+    )
     desktop = render("claude-desktop", client="a", store=PLAIN)
     assert "Quit and restart Claude Desktop afterwards." in desktop.notes
     assert (
@@ -367,8 +409,8 @@ def test_the_text_for_a_terminal_holds_every_block_and_its_source() -> None:
             for place in block.where:
                 assert f"  {place}" in text
         assert config.source in text
-        assert config.read == "2026-11-12"
-        assert "2026-11-12" in text
+        assert config.read == READ[host]
+        assert READ[host] in text
         assert "has not been tried with the application itself" in " ".join(text.split())
         assert config.source in config.notes[-1]
 
@@ -432,7 +474,8 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A home directory that belongs to the test, which does not exist: nothing is read here."""
     place = tmp_path / "home"
     monkeypatch.setenv("HOME", str(place))
-    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    for variable in ("XDG_CONFIG_HOME", "GROK_HOME", "CODEX_HOME"):
+        monkeypatch.delenv(variable, raising=False)
     return place
 
 
@@ -453,7 +496,7 @@ def test_the_plain_note_names_no_page_and_the_note_with_the_address_stays() -> N
         else:
             assert note == (
                 f"This follows the published instructions for {config.label}, as read on "
-                f"2026-11-12. It has not been tried with {config.label} itself."
+                f"{READ[host]}. It has not been tried with {config.label} itself."
             )
         # The sheet that shows the source keeps its note, with the address.
         assert config.source in config.notes[-1]
@@ -486,6 +529,11 @@ def test_what_to_do_in_the_application_afterwards_is_said_for_each() -> None:
         },
         "codex": {
             "title": "Start a new Codex session and paste the question",
+            "text": "A session reads its settings when it starts.",
+            "desktop": False,
+        },
+        "grok-build": {
+            "title": "Start a new Grok Build session and paste the question",
             "text": "A session reads its settings when it starts.",
             "desktop": False,
         },
@@ -568,6 +616,7 @@ def test_one_place_is_the_place_on_this_computer(
             "claude-code": [None, ".mcp.json"],
             "chatgpt-desktop": ["~/.codex/config.toml"],
             "codex": [None, "~/.codex/config.toml"],
+            "grok-build": ["~/.grok/config.toml", None],
             "openclaw": ["~/.openclaw/openclaw.json"],
             "generic": [None, None],
         }
@@ -575,6 +624,15 @@ def test_one_place_is_the_place_on_this_computer(
         for found in places.values():
             assert not [text for text in found if text and ("%" in text or "\\" in text)]
         assert render("codex", client="a", store=PLAIN, platform=platform).platform == platform
+    # The place of Grok Build's file follows GROK_HOME, as the look at it does.
+    monkeypatch.setenv("GROK_HOME", "/somewhere/grok")
+    for platform in hostconfig.PLATFORMS:
+        grok = render("grok-build", client="a", store=PLAIN, platform=platform).blocks[0]
+        assert (grok.where, grok.where_here) == (
+            ("~/.grok/config.toml",),
+            "/somewhere/grok/config.toml",
+        )
+    monkeypatch.delenv("GROK_HOME")
     # Without a platform named: the one this runs on.
     here = "macos" if sys.platform == "darwin" else "linux"
     assert hostconfig.platform_name() == here
@@ -604,13 +662,45 @@ def test_the_settings_file_is_fixed_by_the_application_and_the_home(
                 home / ".codex" / "config.toml",
                 "toml",
             )
+    for platform in hostconfig.PLATFORMS:
+        assert hostconfig.settings_file("grok-build", platform) == (
+            home / ".grok" / "config.toml",
+            "toml",
+        )
+    # GROK_HOME counts only when it holds an absolute path.
+    monkeypatch.setenv("GROK_HOME", str(home / "grok of mine"))
+    assert hostconfig.settings_file("grok-build", "linux") == (
+        home / "grok of mine" / "config.toml",
+        "toml",
+    )
+    for ignored in ("", "relative/place", "~/x", "."):
+        monkeypatch.setenv("GROK_HOME", ignored)
+        assert hostconfig.settings_file("grok-build", "linux") == (
+            home / ".grok" / "config.toml",
+            "toml",
+        )
+    monkeypatch.delenv("GROK_HOME")
+    # CODEX_HOME moves nothing: OpenAI's page does not say that the file moves with it.
+    for value in (str(home / "codex of mine"), "", "relative"):
+        monkeypatch.setenv("CODEX_HOME", value)
+        for host in ("chatgpt-desktop", "codex"):
+            assert hostconfig.settings_file(host, "linux") == (
+                home / ".codex" / "config.toml",
+                "toml",
+            )
+    monkeypatch.delenv("CODEX_HOME")
     for host in ("claude-code", "openclaw", "generic", *WEB_ONLY, "nothing", "", "../codex"):
         assert hostconfig.settings_file(host, "linux") is None
+        assert hostconfig.settings_place(host, "linux") is None
     with pytest.raises(ValueError, match="platform"):
         hostconfig.settings_file("codex", "windows")
+    with pytest.raises(ValueError, match="platform"):
+        hostconfig.settings_place("grok-build", "windows")
     # A home that cannot be a place gives no file to look at.
     monkeypatch.setenv("HOME", "relative/home")
-    assert hostconfig.settings_file("codex", "linux") is None
+    for host in ("claude-desktop", "codex", "grok-build"):
+        assert hostconfig.settings_file(host, "linux") is None
+        assert hostconfig.settings_place(host, "linux") is None
     monkeypatch.setenv("HOME", str(home))
 
     assert hostconfig.shown_path(home / "a b" / "c.json") == "~/a b/c.json"
@@ -618,6 +708,118 @@ def test_the_settings_file_is_fixed_by_the_application_and_the_home(
     assert hostconfig.shown_path("/somewhere/else/c.json") == "/somewhere/else/c.json"
     assert hostconfig.shown_path(str(home) + "-beside/c.json") == str(home) + "-beside/c.json"
     assert not home.exists()
+
+
+def test_each_variable_moves_one_file_or_refuses(
+    home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The place: the file, its format, the folder it starts from, and the variable that chose."""
+    claude = "claude_desktop_config.json"
+    hosts = ("claude-desktop", "chatgpt-desktop", "codex", "grok-build")
+
+    def places(platform: str = "linux") -> dict[str, Any]:
+        return {host: hostconfig.settings_place(host, platform) for host in hosts}
+
+    plain = {
+        "claude-desktop": (home / ".config" / "Claude" / claude, "json", home, None),
+        "chatgpt-desktop": (home / ".codex" / "config.toml", "toml", home, None),
+        "codex": (home / ".codex" / "config.toml", "toml", home, None),
+        "grok-build": (home / ".grok" / "config.toml", "toml", home, None),
+    }
+    mac = {
+        **plain,
+        "claude-desktop": (
+            home / "Library" / "Application Support" / "Claude" / claude,
+            "json",
+            home,
+            None,
+        ),
+    }
+    assert places() == plain
+    assert places("macos") == mac
+    for host in hosts:
+        for platform in hostconfig.PLATFORMS:
+            place = hostconfig.settings_place(host, platform)
+            assert place is not None
+            assert hostconfig.settings_file(host, platform) == place[:2]
+            # The file lies below the folder the place starts from.
+            assert place[0].parent.relative_to(place[2]).parts in (
+                (".config", "Claude"),
+                ("Library", "Application Support", "Claude"),
+                (".codex",),
+                (".grok",),
+            )
+
+    # XDG_CONFIG_HOME moves the file of Claude Desktop, outside macOS, and no other.
+    config_home = tmp_path / "config of mine"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    assert places() == {
+        **plain,
+        "claude-desktop": (
+            config_home / "Claude" / claude,
+            "json",
+            config_home,
+            "XDG_CONFIG_HOME",
+        ),
+    }
+    assert places("macos") == mac
+    for ignored in ("", "relative/place", "~/x"):
+        monkeypatch.setenv("XDG_CONFIG_HOME", ignored)
+        assert places() == plain
+    monkeypatch.delenv("XDG_CONFIG_HOME")
+
+    # GROK_HOME moves the file of Grok Build, on either system, and no other.
+    grok_home = tmp_path / "grok of mine"
+    monkeypatch.setenv("GROK_HOME", str(grok_home))
+    moved = (grok_home / "config.toml", "toml", grok_home, "GROK_HOME")
+    assert places() == {**plain, "grok-build": moved}
+    assert places("macos") == {**mac, "grok-build": moved}
+    for ignored in ("", "relative/place", "~/x"):
+        monkeypatch.setenv("GROK_HOME", ignored)
+        assert places() == plain
+    monkeypatch.delenv("GROK_HOME")
+
+    # CODEX_HOME moves nothing. (That it refuses a write is the writer's rule.)
+    for value in (str(tmp_path / "codex of mine"), "", "relative/place"):
+        monkeypatch.setenv("CODEX_HOME", value)
+        assert places() == plain
+        assert places("macos") == mac
+    monkeypatch.delenv("CODEX_HOME")
+
+    # HOME moves all of them.
+    other = tmp_path / "another home"
+    monkeypatch.setenv("HOME", str(other))
+    assert places() == {
+        host: (other / place[0].relative_to(home), place[1], other, None)
+        for host, place in plain.items()
+    }
+    # Nothing else of the environment takes part.
+    monkeypatch.setenv("HOME", str(home))
+    for variable in ("XDG_DATA_HOME", "APPDATA", "CLAUDE_CONFIG_DIR", "GROK_CONFIG", "PWD"):
+        monkeypatch.setenv(variable, str(tmp_path / "elsewhere"))
+    assert places() == plain
+    assert not home.exists(), "saying where a file lies made something"
+
+
+def test_the_tiles_are_four_and_name_the_programs_that_read_a_file() -> None:
+    tiles = [(tile.tile, tile.host, tile.label, tile.readers) for tile in hostconfig.TILES]
+    assert tiles == [
+        ("claude", "claude-desktop", "Claude Desktop", ("Claude Desktop",)),
+        ("chatgpt", "chatgpt-desktop", "ChatGPT", ("ChatGPT", "Codex")),
+        ("grok", "grok-build", "Grok Build", ("Grok Build",)),
+        ("custom", "generic", "", ()),
+    ]
+    for tile in hostconfig.TILES:
+        entry = known_host(tile.host)
+        assert entry.local_program
+        # A tile that names a program stands for one with a settings file known here.
+        assert bool(tile.label) is (hostconfig.settings_file(tile.host) is not None)
+        assert bool(tile.readers) is bool(tile.label)
+    # The names whose settings file is the same one.
+    assert hostconfig.same_file("chatgpt-desktop") == ("codex",)
+    assert hostconfig.same_file("codex") == ("chatgpt-desktop",)
+    for host in ("claude-desktop", "grok-build", "claude-code", "generic", "grok-web", "nothing"):
+        assert hostconfig.same_file(host) == ()
 
 
 def test_the_line_that_opens_a_settings_file_has_the_agreed_forms() -> None:

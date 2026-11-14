@@ -10,7 +10,8 @@ That holds for what it says about a settings file too: where the file of an
 application lies on this computer (:func:`settings_file`) is a path worked out
 from the home directory, and the line that opens it in a text editor
 (:func:`open_line`) is text for the owner to read and run. The one module that
-reads such a file is :mod:`wdva.gate.hostcheck`.
+reads such a file is :mod:`wdva.gate.hostcheck`, and the one that writes one is
+:mod:`wdva.gate.hostwrite`.
 
 The command is the same for every application (:func:`host_command`). It names
 the Python interpreter that runs this package and the store by their full
@@ -53,9 +54,11 @@ __all__ = [
     "PYTHON_MESSAGE",
     "REPOSITORY",
     "SERVER_KEY",
+    "TILES",
     "Block",
     "HostConfig",
     "KnownHost",
+    "Tile",
     "check_client_name",
     "host_command",
     "install_line",
@@ -65,8 +68,10 @@ __all__ = [
     "platform_name",
     "render",
     "render_text",
+    "same_file",
     "sdk_status",
     "settings_file",
+    "settings_place",
     "shown_path",
 ]
 
@@ -170,6 +175,16 @@ KNOWN_HOSTS: tuple[KnownHost, ...] = (
         read=_DOCS_READ,
     ),
     KnownHost(
+        id="grok-build",
+        label="Grok Build",
+        name="grok-build",
+        destination="xAI",
+        hosted=True,
+        local_program=True,
+        source="https://docs.x.ai/build/features/mcp-servers",
+        read="2026-11-14",
+    ),
+    KnownHost(
         id="openclaw",
         label="OpenClaw",
         name="openclaw",
@@ -238,6 +253,7 @@ _DOCUMENTED_BY = {
     "claude-code": "Anthropic's documentation",
     "chatgpt-desktop": "OpenAI's documentation",
     "codex": "OpenAI's documentation",
+    "grok-build": "xAI's documentation",
     "openclaw": "OpenClaw's documentation",
     "generic": "the Model Context Protocol documentation",
     "chatgpt-web": "OpenAI's documentation",
@@ -293,6 +309,11 @@ _AFTER: dict[str, tuple[str, str, bool]] = {
         "A session reads its settings when it starts.",
         False,
     ),
+    "grok-build": (
+        "Start a new Grok Build session and paste the question",
+        "A session reads its settings when it starts.",
+        False,
+    ),
     "openclaw": (
         "Restart OpenClaw and paste the question",
         "It reads its settings when it starts.",
@@ -306,7 +327,41 @@ _AFTER: dict[str, tuple[str, str, bool]] = {
 }
 
 # The applications with one settings file the gate knows the place of, and its format.
-_SETTINGS_FORMAT = {"claude-desktop": "json", "chatgpt-desktop": "toml", "codex": "toml"}
+_SETTINGS_FORMAT = {
+    "claude-desktop": "json",
+    "chatgpt-desktop": "toml",
+    "codex": "toml",
+    "grok-build": "toml",
+}
+
+# Applications that read one and the same settings file, according to their documentation.
+_SAME_FILE = (("chatgpt-desktop", "codex"),)
+
+
+@dataclass(frozen=True)
+class Tile:
+    """One of the applications an interface offers to connect with one press.
+
+    ``tile`` is the word the tile is known by, ``host`` the id of
+    :data:`KNOWN_HOSTS` it stands for, ``label`` the name a sentence uses for
+    the program (a proper name without a generic noun, so that it fits a
+    sentence of any language), and ``readers`` the programs that read the
+    settings file of that host, according to their makers' documentation.
+    """
+
+    tile: str
+    host: str
+    label: str
+    readers: tuple[str, ...]
+
+
+TILES: tuple[Tile, ...] = (
+    Tile("claude", "claude-desktop", "Claude Desktop", ("Claude Desktop",)),
+    Tile("chatgpt", "chatgpt-desktop", "ChatGPT", ("ChatGPT", "Codex")),
+    Tile("grok", "grok-build", "Grok Build", ("Grok Build",)),
+    Tile("custom", "generic", "", ()),
+)
+"""The four tiles, in the order they are shown. The last one stands for any other program."""
 
 
 @dataclass(frozen=True)
@@ -565,15 +620,32 @@ def _platform(platform: str | None) -> str:
     return platform
 
 
-def settings_file(host: str, platform: str | None = None) -> tuple[Path, str] | None:
-    """The one settings file of the application ``host`` on this computer, and its format.
+def settings_place(
+    host: str, platform: str | None = None
+) -> tuple[Path, str, Path, str | None] | None:
+    """Where the one settings file of the application ``host`` lies on this computer.
 
-    Returns the absolute path and ``"json"`` or ``"toml"``, or ``None`` for an
-    application the gate knows no such file of (and when the home directory
-    cannot be told). The path depends on the application, the system and the
-    home directory, and on nothing else: for Claude Desktop outside macOS it
-    lies under ``$XDG_CONFIG_HOME`` when that names an absolute path, else under
-    ``~/.config``. The file need not exist. Nothing is read here.
+    Returns the absolute path of the file, its format (``"json"`` or
+    ``"toml"``), the **base** and the name of the environment variable that
+    decided the place, or ``None`` where none did. The base is the folder below
+    which every part of the path is the application's own choice: the home
+    directory, or the folder a variable names. Returns ``None`` for an
+    application the gate knows no such file of, and when the home directory
+    cannot be told.
+
+    The place depends on the application, the system, the home directory and
+    two variables of this program's own environment, and on nothing else:
+
+    * Claude Desktop outside macOS keeps its file under ``$XDG_CONFIG_HOME``,
+      else under ``~/.config``;
+    * Grok Build keeps its file in ``$GROK_HOME``, else in ``~/.grok``
+      (xAI: "user config is ``~/.grok/config.toml`` or
+      ``$GROK_HOME/config.toml``").
+
+    A variable counts only when it holds an absolute path. ``CODEX_HOME`` is
+    not followed: OpenAI's documentation names the file only as
+    ``~/.codex/config.toml`` and does not say that it moves with that variable.
+    The file need not exist. Nothing is read here.
     """
     system = _platform(platform)
     language = _SETTINGS_FORMAT.get(host)
@@ -586,14 +658,48 @@ def settings_file(host: str, platform: str | None = None) -> tuple[Path, str] | 
     if not home.is_absolute():
         return None
     if host == "claude-desktop":
+        name = "claude_desktop_config.json"
         if system == "macos":
-            folder = home / "Library" / "Application Support" / "Claude"
-        else:
-            config_home = os.environ.get("XDG_CONFIG_HOME", "")
-            base = Path(config_home) if os.path.isabs(config_home) else home / ".config"
-            folder = base / "Claude"
-        return folder / "claude_desktop_config.json", language
-    return home / ".codex" / "config.toml", language
+            return home / "Library" / "Application Support" / "Claude" / name, language, home, None
+        config_home = os.environ.get("XDG_CONFIG_HOME", "")
+        if os.path.isabs(config_home):
+            base = Path(config_home)
+            return base / "Claude" / name, language, base, "XDG_CONFIG_HOME"
+        return home / ".config" / "Claude" / name, language, home, None
+    if host == "grok-build":
+        grok_home = os.environ.get("GROK_HOME", "")
+        if os.path.isabs(grok_home):
+            base = Path(grok_home)
+            return base / "config.toml", language, base, "GROK_HOME"
+        return home / ".grok" / "config.toml", language, home, None
+    return home / ".codex" / "config.toml", language, home, None
+
+
+def settings_file(host: str, platform: str | None = None) -> tuple[Path, str] | None:
+    """The one settings file of the application ``host`` on this computer, and its format.
+
+    The first two members of :func:`settings_place`: the absolute path and
+    ``"json"`` or ``"toml"``, or ``None`` for an application the gate knows no
+    such file of (and when the home directory cannot be told). The file need
+    not exist. Nothing is read here.
+    """
+    place = settings_place(host, platform)
+    return None if place is None else (place[0], place[1])
+
+
+def same_file(host: str) -> tuple[str, ...]:
+    """The other names an application can be connected under through the same settings file.
+
+    For the ChatGPT desktop app that is ``codex``, and the other way round:
+    according to OpenAI's documentation both read ``~/.codex/config.toml``. An
+    entry made for one of them is found by a look for the other. Empty for
+    every other application.
+    """
+    names: list[str] = []
+    for group in _SAME_FILE:
+        if host in group:
+            names.extend(known_host(other).name for other in group if other != host)
+    return tuple(names)
 
 
 def shown_path(path: str | os.PathLike[str]) -> str:
@@ -612,7 +718,7 @@ def _where_here(entry: KnownHost, block: Block, platform: str) -> str | None:
     """The one place of ``block`` that applies on this computer, or ``None``."""
     if not block.where:
         return None
-    if entry.id == "claude-desktop":
+    if entry.id in ("claude-desktop", "grok-build"):  # a variable can move these two
         place = settings_file(entry.id, platform)
         return None if place is None else shown_path(place[0])
     return block.where[0] if len(block.where) == 1 else None
@@ -724,6 +830,21 @@ def _blocks(entry: KnownHost, command: Sequence[str]) -> tuple[tuple[Block, ...]
             "The ChatGPT desktop app reads the same file as Codex, and Grok Build takes the "
             "same form in ~/.grok/config.toml, according to their documentation.",
         )
+    elif entry.id == "grok-build":
+        blocks = (
+            Block(
+                "Add this to ~/.grok/config.toml",
+                "toml",
+                _codex_toml(command),
+                ("~/.grok/config.toml",),
+            ),
+            Block(
+                "Or run this in a terminal",
+                "shell",
+                _shell("grok", "mcp", "add", SERVER_KEY, "--", *command),
+            ),
+        )
+        notes = ("Use one of the two, not both.",)
     elif entry.id == "openclaw":
         blocks = (
             Block(

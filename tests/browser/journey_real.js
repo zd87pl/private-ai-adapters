@@ -503,9 +503,9 @@ run(async () => {
     const block = connect.locator('.config pre.code').first();
     await block.waitFor({ state: 'visible', timeout: WAIT });
     check((await connect.locator('.sheet-title').textContent()).includes(known.label), `the sheet is not about ${known.label}`);
-    // The sheet can show the text for every program the app knows: ten of them.
+    // The sheet can show the text for every program the app knows: eleven of them.
     const hosts = await connect.locator('#connect-host option').evaluateAll((nodes) => nodes.map((node) => node.value));
-    check(hosts.length === 10 && JSON.stringify(hosts) === JSON.stringify((await get('/api/apps')).known.map((entry) => entry.id)), `the sheet offers the text for ${JSON.stringify(hosts)}`);
+    check(hosts.length === 11 && JSON.stringify(hosts) === JSON.stringify((await get('/api/apps')).known.map((entry) => entry.id)), `the sheet offers the text for ${JSON.stringify(hosts)}`);
     const text = await block.textContent();
     const server = Object.values(JSON.parse(text).mcpServers)[0];
     check(server.args.join(' ').includes(`gate mcp --client ${HOSTED} --store ${store}`), `the configuration does not name this vault: ${text}`);

@@ -1076,17 +1076,17 @@ more field of the state, `trial`, belongs to [the trial question](#the-trial-que
 | | `launch` | `{"command", "port_fixed"}`. `command` is one line of text that starts this installation of the app again: the Python interpreter by its full path, `-m wdva gate app`, `--store` with the absolute path of the store, then `--port` when the app was started with a port, `--lock-after` when it was started with another span than the 8 hours of the default, and `--no-browser` and `--window` when it was started with them. It never holds `--demo` or `--view`. The app composes it once, at start, from its own interpreter and arguments; nothing from a request goes into it. In a demo it is the command for a store of one's own, without `--store` unless the demo was started with one. It is `null` when Python cannot say where its interpreter is. `port_fixed` says whether the app was started with a port |
 | `GET /api/settings` | `changed_from_new` | Which of `defaults`, `groups`, `per_document` and `approval` hold other figures than a new store has. `[]` for a new store |
 | | `ceilings.passage_chars` | 800: the length of a passage that new stores are made with. It is the constant of the code, not `chunk_chars` read from the key slot |
-| `GET /api/apps` | `known` | Ten entries of `{"id", "label", "name", "destination", "hosted", "local_program"}`. Six can be connected: `claude-desktop`, `claude-code`, `chatgpt-desktop`, `codex`, `openclaw` and `generic` ("Another app"). Four cannot, and have `"local_program": false`: `chatgpt-web`, `claude-web`, `grok-web` and `grok-bot` |
+| `GET /api/apps` | `known` | Eleven entries of `{"id", "label", "name", "destination", "hosted", "local_program"}`. Seven can be connected: `claude-desktop`, `claude-code`, `chatgpt-desktop`, `codex`, `grok-build`, `openclaw` and `generic` ("Another app"). Four cannot, and have `"local_program": false`: `chatgpt-web`, `claude-web`, `grok-web` and `grok-bot` |
 | `GET /api/apps/<name>/connect` | `platform` | `"macos"` or `"linux"`: the system the app runs on, for which the places in the answer were chosen |
 | | `plain_note` | What the text follows and that it was not tried, without an address, for example "This follows the published instructions for Claude Desktop, as read on 2026-11-12. It has not been tried with Claude Desktop itself." |
 | | `after` | `{"title", "text", "desktop"}`: what the owner does in the application once the text is in place, and whether it is a desktop app that has to be quit |
-| | `blocks[].where_here` | Of the places listed in `where`, the one that applies on this computer, or `null`. For Claude Desktop it is the place of its settings file here, written with `~` |
+| | `blocks[].where_here` | Of the places listed in `where`, the one that applies on this computer, or `null`. For Claude Desktop and for Grok Build it is the place of the settings file here, written with `~` where it lies in the home directory; a variable that moves the file ([below](#the-look-at-a-settings-file)) moves this place with it, so it need not be one of `where` |
 | | `blocks[].inner` | For a block of JSON: `{"entry", "section"}`, the entry `"locktender": {…}` alone and the member `"mcpServers": {…}` alone, each as text without the braces around it, for a file that holds other settings already. `null` for a block in another format |
 
 The other fields of a configuration are `host`, `label`, `local_program`, `blocks` (each with
 `title`, `language`, `text` and `where`), `notes`, `explanation` and `ready`. For one of the four
 products that cannot be connected, `blocks` is empty, `explanation` says why, and `plain_note`
-and `after` are `null`. `host` in the query is one of the ten ids; without it the client's name
+and `after` are `null`. `host` in the query is one of the eleven ids; without it the client's name
 is taken when it is such an id, and `generic` otherwise.
 
 ### The trial question
@@ -1177,53 +1177,81 @@ Of 23 questions sent in one minute, 20 were answered and three were refused with
 An AI application starts Locktender's program because of an entry in its own settings file, and
 the owner puts that entry there: the app changes no file of another program.
 `POST /api/apps/<name>/connect/check` looks whether the entry has arrived. It is the one route,
-and `wdva.gate.hostcheck` the one module, that reads a file of another program.
+and `wdva.gate.hostcheck` the one module, that reads a file of another program. (The package
+also holds a module that can write the entry into such a file, `wdva.gate.hostwrite`. No route
+calls it in this version; what it reads, it reads through `hostcheck`.)
 
 **Which file.** The body is `{}` or `{"host": id}`, with `host` chosen as for a configuration. The
-app knows the settings file of three applications:
+app knows the settings file of four applications, which are three files:
 
 | `host` | File | Format |
 | --- | --- | --- |
 | `claude-desktop` | On macOS `~/Library/Application Support/Claude/claude_desktop_config.json`. Elsewhere `$XDG_CONFIG_HOME/Claude/claude_desktop_config.json` when that variable holds an absolute path, else `~/.config/Claude/claude_desktop_config.json` | JSON |
 | `chatgpt-desktop`, `codex` | `~/.codex/config.toml`. The variable `CODEX_HOME` is not looked at | TOML |
+| `grok-build` | `$GROK_HOME/config.toml` when that variable holds an absolute path, else `~/.grok/config.toml`, on either system. This follows xAI's documentation as read on 2026-11-14 ("user config is `~/.grok/config.toml` or `$GROK_HOME/config.toml`"). It was not tried with Grok Build | TOML |
 
 For every other `host` the answer is `unsupported` and no file is looked at. The place follows
 from the id, the system, and the home directory and environment of the account the app runs
-under. A request chooses among the ids and nothing more: no part of a path comes from it. In a
-run for this page a `host` of `../../etc/passwd` was answered 404, and a body with a field
-`path` 400.
+under: `HOME`, and the two variables of the table. An application that was started with other
+values reads another file than the one looked at. A request chooses among the ids and nothing
+more: no part of a path comes from it. In a run for this page a `host` of `../../etc/passwd` was
+answered 404, and a body with a field `path` 400.
 
 **How it is read.**
 
-1. The folder and then the file are looked at (`stat`, `lstat`) before anything is opened. What
-   is not a regular file (a symbolic link, a directory, a named pipe, a device) or is larger than
-   1 MiB is never opened.
-2. A file that passed is opened for reading only, without following a link and without waiting.
+1. The folder of the file is reached without following a link. The place starts from a folder
+   that is taken as the system resolves it: the home directory, or the folder a variable names.
+   Every folder below it on the way to the file (`.config` and `Claude`, say) is looked at
+   (`lstat`) and then opened through the one above it, without following a link, and what was
+   opened must be the folder that was looked at. A folder that is a symbolic link is not gone
+   through, and nothing behind it is looked at or read: the answer is `not_read`. A version
+   before this one followed such a link.
+2. The file is looked at and opened through the one folder that was opened, so a folder that
+   is exchanged while a look runs changes nothing. What is not a regular file (a symbolic link,
+   a directory, a named pipe, a device) or is larger than 1 MiB is never opened.
+3. A file that passed is opened for reading only, without following a link and without waiting.
    What was opened is looked at once more before a byte is read, and a file that has grown past
-   1 MiB by the time it is read counts as not read. No read can block: in the run a named pipe
-   that nobody wrote to was answered `not_read` in about a millisecond.
-3. Nothing is written, created, renamed or started, there or anywhere. After 38 looks in the run
+   1 MiB by the time it is read, or changed its size while it was read, counts as not read. No
+   read can block: in the run a named pipe that nobody wrote to was answered `not_read` in about
+   a millisecond.
+4. Nothing is written, created, renamed or started, there or anywhere. After 38 looks in the run
    the home directory held what the run itself had put there and nothing else.
-4. The file is read when this route is called, and at no other time: not for a configuration,
+5. The file is read when this route is called, and at no other time: not for a configuration,
    not for the list of apps, not on a timer. The page calls the route when the owner presses
    "Check the file" or "Check again".
+
+The figures above are from a run through the route, made before the folders were reached this
+way and before Grok Build's file was known. For this version the reader was run by itself, on
+Linux, without a page and without an application, in a home directory made for the run. With
+the right entry in a folder that the settings folder was a link to, and again with `~/.config`
+as the link, the answer was `not_read`, and nothing of the file behind the link was read. A
+named pipe was answered `not_read` in 0.6 milliseconds. The file of Grok Build gave
+`no_folder`, `no_file`, `other` and `present`, and with `GROK_HOME` set the place named was the
+one in that folder. The 21 looks of that run left the home directory as it was, and a marker
+written into the files was in none of the answers.
 
 **The answer** is `{"state", "path", "folder", "open_line", "section"}`.
 
 | `state` | What was found |
 | --- | --- |
-| `present` | An entry named `locktender` whose `command` and `args` are exactly those of the configuration for this client and this store. Other members of the entry are not compared |
+| `present` | An entry named `locktender` whose `command` and `args` are exactly those of the configuration for this client and this store. Other members of the entry (`enabled`, `env`, a table below it) are not compared: an entry that is switched off is `present` too |
 | `differs` | An entry named `locktender` with another `command` or other `args` |
 | `other` | Settings, and no entry of that name |
 | `empty` | Nothing, or white space only; a JSON object without keys, or with an empty `mcpServers` as its only key; a TOML file without keys, or with an empty `mcp_servers` table alone |
 | `no_file` | The folder is there and the file is not |
 | `no_folder` | The folder is not there, or is not a directory |
-| `unreadable` | The file is not what it should be: not UTF-8, not valid JSON or TOML, a JSON key written twice, `NaN` or `Infinity`, a byte-order mark, something other than an object at the top, or `mcpServers` (`mcp_servers`) that is not an object (a table). Also when the system refuses to look at the file or to open it |
-| `not_read` | Not a regular file, or larger than 1 MiB. It was not opened |
+| `unreadable` | The file is not what it should be: not UTF-8, not valid JSON or TOML, a JSON key written twice, `NaN` or `Infinity`, a byte-order mark, something other than an object at the top, or `mcpServers` (`mcp_servers`) that is not an object (a table). Also when the system refuses to look at the file or a folder on the way, or to open one of them |
+| `not_read` | Not a regular file, or larger than 1 MiB: it was not opened. Or a folder on the way to it is a symbolic link: nothing behind the link was looked at |
 | `unsupported` | The app knows no settings file for this `host`; or the file is TOML and the app runs on a Python older than 3.11, which has no reader for it |
 
 - `path` and `folder` are the place of the file and of its folder, written with `~` where they
   lie in the home directory. They are `null` for `unsupported`.
+- The module's own look (`hostcheck.look`, which no route answers from yet) has four words
+  more than the nine of this route, and this route gives each as the word it had before:
+  `present_more` (the entry holds the command and other members besides) as `present`;
+  `present_as` (the entry holds the command of this store under the other name that the same
+  file serves, `codex` for `chatgpt-desktop` and the other way round) as `differs`; `linked`
+  as `not_read`; and `no_access` (the system refused) as `unreadable`.
 - `section` is given for a JSON file in the state `other`: `"none"` when it has no `mcpServers`,
   `"empty"` when that is empty, `"filled"` when it holds entries of other programs. Otherwise
   `null`.
@@ -1250,7 +1278,7 @@ were not: `unsupported` on an older Python, and `unreadable` after a refusal by 
 which a run as root cannot produce. The marker was in none of the 38 answers.
 
 **Errors and rights.** 404 `not_found` when no client has that name, and when `host` is not one
-of the ten ids. 400 `invalid` for a body with another field, and for a client whose name cannot
+of the eleven ids. 400 `invalid` for a body with another field, and for a client whose name cannot
 stand in a configuration. 409 `locked` while the store is locked. Owner mode is never asked for:
 the route changes nothing and lets nothing leave the store. In a run for this page it was
 answered after owner mode had run out, when registering a client was refused. It needs the
