@@ -114,7 +114,9 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """
     place = tmp_path / "home of the test"
     monkeypatch.setenv("HOME", str(place))
-    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    # Every variable that moves a settings file, so that the machine's own do not count.
+    for variable in ("XDG_CONFIG_HOME", "GROK_HOME", "CODEX_HOME"):
+        monkeypatch.delenv(variable, raising=False)
     return place
 
 
@@ -5027,22 +5029,21 @@ def test_connect_does_not_change_what_kind_of_app_a_name_is(
         fresh.add_app(name=JSON_HOST, **kind)
         fresh.set_collection(name="papers")
         before = (files_in(tiles_home), in_force(fresh), record_and_files(fresh))
-        seen = count_looks(monkeypatch)
-        for expect in ("empty", "present", "no_file"):
-            assert fresh.connect_write(host=JSON_HOST, expect=expect) == {
-                "connected": False,
-                "state": "other_kind",
-            }
-        assert seen == []  # found before any file is looked at
-        look = fresh.connect_look(host=JSON_HOST)
+        # The counting is undone by itself and alone: undoing the test's own patches would
+        # bring back whatever the machine sets (XDG_CONFIG_HOME on some), and the settings
+        # file would be looked for outside the home of the test.
+        with pytest.MonkeyPatch.context() as counting:
+            seen = count_looks(counting)
+            for expect in ("empty", "present", "no_file"):
+                assert fresh.connect_write(host=JSON_HOST, expect=expect) == {
+                    "connected": False,
+                    "state": "other_kind",
+                }
+            assert seen == []  # found before any file is looked at
+            look = fresh.connect_look(host=JSON_HOST)
         assert (look["app"]["differs"], look["app"]["registered"]) == (True, True)
         assert look["answered_change"] is False
         assert (files_in(tiles_home), in_force(fresh), record_and_files(fresh)) == before
-        monkeypatch.undo()
-        monkeypatch.setenv("HOME", str(tiles_home))
-        monkeypatch.setattr(hostwrite, "_may_not_last", lambda path: False)
-        monkeypatch.setattr(service_module, "start_problem", lambda: None)
-        monkeypatch.setattr(hostconfig, "sdk_status", lambda: dict(SDK_READY))
         fresh.remove_app(name=JSON_HOST)
         fresh.remove_collection(name="papers")
     assert place.read_bytes() == b"{}\n"
