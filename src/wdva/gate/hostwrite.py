@@ -14,14 +14,21 @@ The rules it keeps:
   read a moment before. A file that cannot be parsed, is a link or a special
   file, is larger than :data:`MAX_BYTES`, has more than one name or belongs to
   another account is never written. A folder on the way that is a link is not
-  gone through. A folder that is not there is not made.
+  gone through. A folder that is not there is not made. (One second name is
+  no reason to call a file unread: the temporary name under which an earlier
+  call of this module made it, where that call was cut before it could take
+  the name away. Such a file is looked at like any other, and is written
+  once that name is gone.)
 * **Only the entry.** The settings file is edited as text. The entry named
   after the product is put in, pointed at this vault, or taken out; every
   other byte of a JSON file and every other line of a TOML file stays. The
   new text is then parsed again, and with the entry left aside it must hold
-  what the old text held: every key, value and type, in the same order. Text
-  that cannot be edited by these rules raises :class:`ByHand`, and nothing is
-  written.
+  what the old text held: every key, value and type, in the same order. (One
+  thing of the order is left aside, where the entry is taken out of a TOML
+  file: the place of the table of servers among the tables of the top. The
+  reader of TOML puts that table where it first meets one of its tables,
+  which may have been the entry.) Text that cannot be edited by these rules
+  raises :class:`ByHand`, and nothing is written.
 * **Only what was seen.** The caller says which state the owner was shown
   (``expect``). Another state stops the call, and so does a file that is
   another one, or was changed, by the time it would be replaced. A file that
@@ -41,10 +48,14 @@ The rules it keeps:
   nothing was changed. If the change fails after it, ``record`` is called
   again to say so.
 * **Read back.** After the change the file is read again through the same
-  reader, and must hold what was meant.
+  reader, and must hold what was meant. Where the system does not let it be
+  read then, the name is looked at instead: if it still leads to the file
+  this call put there, the change was made, and the answer says that it was
+  not read back.
 * **A command that lasts.** :func:`write_problem` refuses, without looking at
   the settings file, a command whose Python or vault lies in a folder for
-  temporary files, in a place anybody may write or one of another account;
+  temporary files, in a place anybody may write or one of another account,
+  as its path is written and where that path really leads;
   for Grok Build a command that holds ``${``, which Grok Build would replace;
   and the file of the ChatGPT desktop app while ``CODEX_HOME`` is set.
 
@@ -120,11 +131,13 @@ PROBLEMS = ("expands", "unstable", "moved")
 REFUSALS = ("recent", "by_hand", "no_copy", "changed", "failed")
 """What a write can find, besides the words of :data:`wdva.gate.hostcheck.STATES`.
 
-``recent``: the file was changed a moment ago. ``by_hand``: the text cannot be
-edited by the rules of this module. ``no_copy``: the copy has no place, or
-could not be written. ``changed``: the file is not in the state the owner was
-shown, or is another file by now. ``failed``: the file could not be replaced,
-or did not hold what was meant afterwards.
+``recent``: the file was changed a moment ago, or still has the temporary name
+of a call that was cut less than :data:`LEFTOVER_SECONDS` ago beside its own.
+``by_hand``: the text cannot be edited by the rules of this module.
+``no_copy``: the copy has no place, or could not be written. ``changed``: the
+file is not in the state the owner was shown, or is another file by now.
+``failed``: the file could not be replaced, or did not hold what was meant
+afterwards.
 """
 
 Section = Callable[[], AbstractContextManager[Callable[[str], None]]]
@@ -187,13 +200,18 @@ def _equal(left: Any, right: Any) -> bool:
     return True
 
 
-def _rest(data: Any, servers_key: str, *, entry: str, drop_empty: bool) -> Any:
+def _rest(
+    data: Any, servers_key: str, *, entry: str, drop_empty: bool, servers_last: bool = False
+) -> Any:
     """A parsed settings file without what this module may change, for a comparison.
 
     ``entry`` says what is taken out of the entry of the product: ``"whole"``
     the entry, ``"command"`` its ``command`` and ``args``. With ``drop_empty``
     a table of servers that holds nothing after that is left out as well.
-    Nothing of ``data`` is changed.
+    With ``servers_last`` the table of servers is made the last key of the
+    top, so that its place among the other keys does not count in the
+    comparison; the order of every other key still does, and so does the
+    order of the servers. Nothing of ``data`` is changed.
     """
     if not isinstance(data, dict):
         raise ByHand
@@ -217,6 +235,8 @@ def _rest(data: Any, servers_key: str, *, entry: str, drop_empty: bool) -> Any:
     if drop_empty and not servers:
         del rest[servers_key]
     else:
+        if servers_last:
+            del rest[servers_key]
         rest[servers_key] = servers
     return rest
 
@@ -705,8 +725,11 @@ def toml_with_entry(text: str, command: Sequence[str]) -> str:
     plain lines under a header of its own (an inline table, dotted keys, the
     header twice or inside a text of several lines), an entry without
     ``command``, a value that runs over several lines, and a result that does
-    not hold what the text held before. On a Python without ``tomllib``
-    every text raises it.
+    not hold what the text held before. A text without the entry in which a
+    line reads like the entry's header (it stands inside a text of several
+    lines) raises it too: with the entry added the header would stand there
+    twice, and :func:`toml_without_entry` could not take the entry out again.
+    On a Python without ``tomllib`` every text raises it.
     """
     command = _command(command)
     before = _toml_loads(text)
@@ -718,6 +741,8 @@ def toml_with_entry(text: str, command: Sequence[str]) -> str:
     block = _toml_block(command)
     had_entry = _SLUG in servers
     if not had_entry:
+        if any(_OUR_HEADER.fullmatch(content) for content, _ in old):
+            raise ByHand  # nothing is put in that could not be taken out again
         new = list(old)
         added = list(block)
         if new and new[-1][1] == "":
@@ -780,6 +805,13 @@ def toml_without_entry(text: str) -> str:
     Raises :class:`ByHand` where :func:`toml_with_entry` does, for a text
     without the entry, and for an entry of which a part stands somewhere else
     in the file.
+
+    Where the table of servers stands among the tables of the top is not
+    compared here. ``tomllib`` puts that table where it first meets one of
+    its tables. Where that was the entry, and another table stands between
+    it and the next server, the table of servers comes later in the parsed
+    file once the entry is gone, although no line moved and every key and
+    value is what it was.
     """
     before = _toml_loads(text)
     servers = before.get(_TOML_SERVERS, {})
@@ -809,8 +841,8 @@ def toml_without_entry(text: str) -> str:
     after = _toml_loads(text_now)
     _check_no_entry(after, _TOML_SERVERS)
     if not _equal(
-        _rest(before, _TOML_SERVERS, entry="whole", drop_empty=True),
-        _rest(after, _TOML_SERVERS, entry="whole", drop_empty=True),
+        _rest(before, _TOML_SERVERS, entry="whole", drop_empty=True, servers_last=True),
+        _rest(after, _TOML_SERVERS, entry="whole", drop_empty=True, servers_last=True),
     ):
         raise ByHand
     _check_lines(old, _lines(text_now), gone, [])
@@ -847,7 +879,9 @@ def _may_not_last(path: str) -> bool:
     files, and one with a part that belongs to an account other than this one
     or root, or that everybody may write. A part that a group may write is
     not refused. For a part that is a link, the link and the folder it leads
-    to are looked at; what the last part leads to is not. A part that cannot
+    to are looked at; what the last part leads to is not, and neither are the
+    folders above the one a link leads to. :func:`write_problem` therefore
+    asks a second time, for where the path really lies. A part that cannot
     be looked at counts as one that may not last.
     """
     if not os.path.isabs(path):
@@ -886,6 +920,22 @@ def _may_not_last(path: str) -> bool:
         os.close(root)
 
 
+def _where_it_lies(path: str, *, last_part_too: bool) -> str | None:
+    """Where a path really lies, with every link on its way followed.
+
+    A last part that is a link is followed only with ``last_part_too``: the
+    Python of a virtual environment is a link, and what it leads to is not
+    judged. ``None`` where the system would not say.
+    """
+    try:
+        if last_part_too:
+            return os.path.realpath(path)
+        whole = Path(path)
+        return str(Path(os.path.realpath(whole.parent)) / whole.name)
+    except OSError:
+        return None
+
+
 def write_problem(host: str, command: Sequence[str]) -> str | None:
     """What keeps the entry for ``host`` from being written, found without the file.
 
@@ -898,6 +948,13 @@ def write_problem(host: str, command: Sequence[str]) -> str | None:
     command names (its first word), or the vault (the word after
     ``--store``), lies where it may not last.
 
+    Each of the two paths is judged twice: as it is written, and where it
+    really lies, with every link on its way followed (for the vault its last
+    part too, for the Python not: what a Python that is a link leads to is
+    not looked at). A link into a folder for temporary files, or past a
+    folder that everybody may write, is found that way. A path of which the
+    system would not say where it lies counts as one that may not last.
+
     No settings file is looked at. The folders on the way to the Python and
     to the vault are.
     """
@@ -908,11 +965,15 @@ def write_problem(host: str, command: Sequence[str]) -> str | None:
         return "expands"
     if not parts:
         return "unstable"
-    places = [parts[0]]
+    places = [(parts[0], False)]
     if "--store" in parts[:-1]:
-        places.append(parts[parts.index("--store") + 1])
-    if any(_may_not_last(place) for place in places):
-        return "unstable"
+        places.append((parts[parts.index("--store") + 1], True))
+    for place, last_part_too in places:
+        if _may_not_last(place):
+            return "unstable"
+        real = _where_it_lies(place, last_part_too=last_part_too)
+        if real is None or (real != place and _may_not_last(real)):
+            return "unstable"
     return None
 
 
@@ -925,21 +986,23 @@ def _leftover_pattern(name: str) -> re.Pattern[str]:
     return re.compile(rf"\.{re.escape(name)}\.[0-9a-f]{{24}}\.tmp")
 
 
-def _remove_leftovers(folder: int, name: str) -> None:
+def _remove_leftovers(folder: int, name: str) -> bool:
     """Remove temporary files that an earlier call for this settings file left behind.
 
     Only a regular file of this account whose name is of this module's
     pattern and that was last changed more than :data:`LEFTOVER_SECONDS` ago.
     Where such a name is a second name of the settings file itself, the
-    settings file has one name again afterwards.
+    settings file has one name again afterwards. Returns whether a file was
+    removed.
     """
     pattern = _leftover_pattern(name)
     try:
         names = os.listdir(folder)
         owner = os.getuid()
     except OSError:
-        return
+        return False
     now = time.time()
+    removed = False
     for found in names:
         if pattern.fullmatch(found) is None:
             continue
@@ -951,8 +1014,43 @@ def _remove_leftovers(folder: int, name: str) -> None:
                 and now - status.st_mtime > LEFTOVER_SECONDS
             ):
                 os.unlink(found, dir_fd=folder)
+                removed = True
         except OSError:
             continue
+    return removed
+
+
+def _other_name_is_a_leftover(folder: int, name: str, status: os.stat_result) -> bool:
+    """Whether the one other name of a settings file is a temporary name of this module.
+
+    ``status`` is what the system said of the settings file ``name``. True
+    only for a file with exactly two names whose other name lies in the same
+    folder and is of this module's pattern for this settings file (a regular
+    file, the same device and inode). That is what a call leaves that linked
+    a new settings file into place and was cut before it removed the
+    temporary name. A second name anywhere else, or of any other form, is
+    somebody's own.
+    """
+    if status.st_nlink != 2:
+        return False
+    pattern = _leftover_pattern(name)
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return False
+    for found in names:
+        if pattern.fullmatch(found) is None:
+            continue
+        try:
+            other = os.lstat(found, dir_fd=folder)
+        except OSError:
+            continue
+        if stat.S_ISREG(other.st_mode) and (other.st_dev, other.st_ino) == (
+            status.st_dev,
+            status.st_ino,
+        ):
+            return True
+    return False
 
 
 def _lstat(folder: int, name: str) -> os.stat_result | None:
@@ -1048,7 +1146,9 @@ class _Change:
     that a change is about to be made; ``copy`` is the name of the copy this
     call made, if it made one; ``state`` is what the file was read back as;
     ``changed_since`` says that the file was read back in other bytes than
-    were written.
+    were written; ``not_read_back`` says that the system did not let the file
+    be read back, and that its name still led to the file this call put
+    there (``state`` is empty then).
     """
 
     def __init__(self, folder: int, name: str, found: hostcheck.Look) -> None:
@@ -1060,6 +1160,7 @@ class _Change:
         self.recorded = False
         self.state = ""
         self.changed_since = False
+        self.not_read_back = False
         self._first: tuple[int, int] | None = None  # a first copy this call made
 
     def discard(self) -> None:
@@ -1111,6 +1212,26 @@ class _Change:
         self.temporary.remove(temporary)
         self.copy = place
 
+    def _still_in_place(self, placed: os.stat_result) -> bool:
+        """Whether the name of the settings file leads to the file this call put there.
+
+        ``placed`` is what the system said of the temporary file once it was
+        written. The same device and inode, the same size and the same time
+        of its content: it is that file, and nobody wrote into it since. A
+        name that cannot be looked at says nothing, and counts as another
+        file.
+        """
+        try:
+            now = _lstat(self.folder, self.name)
+        except OSError:
+            return False
+        return (
+            now is not None
+            and stat.S_ISREG(now.st_mode)
+            and (now.st_dev, now.st_ino, now.st_size, now.st_mtime_ns)
+            == (placed.st_dev, placed.st_ino, placed.st_size, placed.st_mtime_ns)
+        )
+
     def run(
         self,
         new: bytes,
@@ -1132,7 +1253,7 @@ class _Change:
         try:
             mode = 0o600 if old is None else stat.S_IMODE(old.st_mode) & 0o777
             group = None if old is None else old.st_gid
-            content, _ = _make_temporary(folder, name, new, mode, group)
+            content, placed = _make_temporary(folder, name, new, mode, group)
             self.temporary.append(content)
         except (OSError, NotImplementedError):
             return "failed"
@@ -1187,6 +1308,12 @@ class _Change:
             os.fsync(folder)  # so that the new names are on the disk
         # Read back, through the reader every look goes through.
         again = read_back()
+        if again.raw is None and self._still_in_place(placed):
+            # The system did not let the file be read, and the name leads to the file that
+            # was written: the change was made. Saying that it failed would be untrue, and
+            # would be recorded.
+            self.not_read_back = True
+            return None
         if again.state not in wanted:
             with section() as record:
                 record(after_failure)
@@ -1212,6 +1339,7 @@ def _looked(
     client: str,
     store: str | os.PathLike[str] | None,
     folder: int,
+    name: str,
     platform: str | None,
 ) -> tuple[hostcheck.Look, str]:
     """A look through the open folder, and its state as a write takes it.
@@ -1220,21 +1348,69 @@ def _looked(
     account, is ``not_read`` for a write: replacing it would leave the other
     name with the old content, or put a file of this account in the place of
     somebody else's.
+
+    One second name does not make a file ``not_read``: a temporary name of
+    this module for the settings file ``name``, in the same folder
+    (:func:`_other_name_is_a_leftover`). The state the reader found stands
+    then, so that the owner is shown what the file holds and the press that
+    follows can remove that name. Such a file is still not replaced while
+    the name is there (:func:`_recent`).
     """
     found = hostcheck.look(host, client=client, store=store, folder_fd=folder, platform=platform)
     status = found.status
-    if status is not None and (status.st_nlink > 1 or status.st_uid != os.getuid()):
+    if status is not None and (
+        status.st_uid != os.getuid()
+        or (status.st_nlink > 1 and not _other_name_is_a_leftover(folder, name, status))
+    ):
         return found, "not_read"
     return found, found.state
+
+
+def _looked_and_cleared(
+    host: str,
+    *,
+    client: str,
+    store: str | os.PathLike[str] | None,
+    folder: int,
+    name: str,
+    platform: str | None,
+    expect: str,
+    clear: Sequence[str],
+) -> tuple[hostcheck.Look, str]:
+    """The look of a call that may change the file, and the leftovers of earlier calls removed.
+
+    The leftovers are removed only once the file was found in the state the
+    owner was shown, ``expect``, and only where that state is one of
+    ``clear``: a call that is refused because the state is another one has
+    touched nothing in the folder. Where a leftover went, the file is looked
+    at again: the leftover may have been a second name of the file itself,
+    and what the system says of the file is then no longer what it said.
+    """
+    found, state = _looked(
+        host, client=client, store=store, folder=folder, name=name, platform=platform
+    )
+    if state == expect and state in clear and _remove_leftovers(folder, name):
+        found, state = _looked(
+            host, client=client, store=store, folder=folder, name=name, platform=platform
+        )
+    return found, state
 
 
 def _shown(path: Path | None) -> str | None:
     return None if path is None else hostconfig.shown_path(path)
 
 
-def _real(folder: Path) -> str:
-    """Where the path of a folder leads, as an owner reads it."""
-    return hostconfig.shown_path(os.path.realpath(folder))
+def _real(folder: Path) -> str | None:
+    """Where the path of a folder leads, as an owner reads it; ``None`` where that cannot be told.
+
+    Asked for a folder on whose way a link was found. Where that link is gone
+    or is no link any more by the time it is read, the system refuses, and
+    the answer has no place to show.
+    """
+    try:
+        return hostconfig.shown_path(os.path.realpath(folder))
+    except OSError:
+        return None
 
 
 def _made_at(status: os.stat_result) -> str | None:
@@ -1256,9 +1432,34 @@ def _new_content(found: hostcheck.Look, make: Callable[[str], str]) -> bytes | N
 
 
 def _recent(found: hostcheck.Look) -> bool:
-    """Whether the file that was read was changed a moment ago."""
+    """Whether the file that was read was changed a moment ago, and is not to be replaced yet.
+
+    Also true for a file with a second name. Up to here that can only be the
+    temporary name of an earlier call that was cut (:func:`_looked`), and the
+    leftovers that are old enough were removed before: the name is younger
+    than :data:`LEFTOVER_SECONDS`, or the system would not let it go. No
+    file is replaced while it has two names.
+    """
     status = found.status
-    return status is not None and 0 <= time.time() - status.st_mtime < QUIET_SECONDS
+    if status is None:
+        return False
+    return status.st_nlink > 1 or 0 <= time.time() - status.st_mtime < QUIET_SECONDS
+
+
+def _state_written(new: bytes, language: str) -> str:
+    """The state of a settings file that holds ``new``, a text of this module with the entry.
+
+    ``present`` where the entry holds its command and nothing else,
+    ``present_more`` where it holds more: what a reader would say of it. It
+    is told from the text for a file that was written and could not be read
+    back.
+    """
+    text = new.decode("utf-8")
+    if language == "json":
+        entry = _json_loads(text)[_JSON_SERVERS][_SLUG]
+    else:
+        entry = _toml_loads(text)[_TOML_SERVERS][_SLUG]
+    return "present" if len(entry) == 2 else "present_more"
 
 
 def look(
@@ -1275,16 +1476,21 @@ def look(
     :data:`wdva.gate.hostcheck.STATES`); ``problem`` (:func:`write_problem`);
     ``format`` (``"JSON"`` or ``"TOML"``); ``path`` and ``folder`` as an owner
     reads them; ``real_folder`` (for ``linked``: where the folder really
-    lies); ``variable`` (the environment variable that decided the place, or
-    ``None``); ``entry`` (the name of the entry); ``command`` (the command
-    the entry holds or would hold); ``section`` (for JSON without the entry);
-    ``switched_off``; ``other_name``; and ``copies``, the kept copies that
-    lie beside the file, each with ``path`` and ``made_at``.
+    lies, or ``None`` where the link was exchanged at that moment and the
+    system would not say); ``variable`` (the environment variable that
+    decided the place, or ``None``); ``entry`` (the name of the entry);
+    ``command`` (the command the entry holds or would hold); ``section`` (for
+    JSON without the entry); ``switched_off``; ``other_name``; and
+    ``copies``, the kept copies that lie beside the file, each with ``path``
+    and ``made_at``.
 
     The file is read, and the two places of its copies are looked at and not
-    read. Nothing of what the file holds is in the answer. Raises
-    :class:`ValueError` for an application that is not in :data:`WRITABLE`
-    and where :func:`~wdva.gate.hostconfig.render` does.
+    read. For a file with two names the names in its folder are listed, to
+    see whether the other one is a temporary name an earlier call left
+    (:func:`_looked`). Nothing is removed. Nothing of what the file holds is
+    in the answer. Raises :class:`ValueError` for an application that is not
+    in :data:`WRITABLE` and where :func:`~wdva.gate.hostconfig.render` does.
+    Raises for nothing about the file or its folder.
     """
     _writable(host)
     tile = next(tile for tile in hostconfig.TILES if tile.host == host)
@@ -1324,7 +1530,9 @@ def look(
             answer["real_folder"] = _real(path.parent)
         return answer
     try:
-        found, state = _looked(host, client=client, store=store, folder=folder, platform=platform)
+        found, state = _looked(
+            host, client=client, store=store, folder=folder, name=path.name, platform=platform
+        )
         answer.update(
             state=state,
             section=found.section if state == found.state else None,
@@ -1373,10 +1581,17 @@ def connect(
     (the copy this call made, or ``None``), ``replaced`` (an entry of that
     name was there and pointed elsewhere) and, where the file was written
     again by somebody else right afterwards and still holds the entry,
-    ``changed_since``. With ``connected`` false, ``state`` says why: a word of
+    ``changed_since``. Where the system did not let the file be read back,
+    and its name still leads to the file this call put there, the answer has
+    ``not_read_back`` instead, and ``state`` is told from the text that was
+    written. With ``connected`` false, ``state`` says why: a word of
     :data:`PROBLEMS`, of :data:`REFUSALS`, or what the reader found; for
     ``linked`` the answer has ``real_folder``, for ``present_as``
     ``other_name``.
+
+    A temporary file that an earlier call left in the folder is removed once
+    the file was found in the state ``expect``, and not before: a call that
+    answers ``changed`` for another state has touched nothing.
 
     Raises :class:`ValueError` for an application that is not in
     :data:`WRITABLE`, for an ``expect`` that is no state a look can find, and
@@ -1406,8 +1621,16 @@ def connect(
         return stop(folder, real_folder=_real(path.parent)) if folder == "linked" else stop(folder)
     change: _Change | None = None
     try:
-        _remove_leftovers(folder, path.name)
-        found, state = _looked(host, client=client, store=store, folder=folder, platform=platform)
+        found, state = _looked_and_cleared(
+            host,
+            client=client,
+            store=store,
+            folder=folder,
+            name=path.name,
+            platform=platform,
+            expect=expect,
+            clear=_OURS + _CAN_BE_WRITTEN,
+        )
         if state in ("unreadable", "not_read", "unsupported", "no_access"):
             return stop(state)
         if state != expect:
@@ -1446,13 +1669,15 @@ def connect(
             return stop(word)
         answer: dict[str, Any] = {
             "connected": True,
-            "state": change.state,
+            "state": _state_written(new, language) if change.not_read_back else change.state,
             "path": shown,
             "copy": None if change.copy is None else _shown(path.parent / change.copy),
             "replaced": state in ("differs", "present_as"),
         }
         if change.changed_since:
             answer["changed_since"] = True
+        if change.not_read_back:
+            answer["not_read_back"] = True
         return answer
     finally:
         if change is not None:
@@ -1488,7 +1713,12 @@ def disconnect(
     ``no_copy``, ``failed``); or ``"changed"``: the file is not in the state
     the owner was shown, or was another one before the record was written.
     Only then was ``record`` not called. ``copy`` is the copy this call made,
-    or ``None``.
+    or ``None``. With ``removed`` the answer can have ``changed_since`` or
+    ``not_read_back``, as that of :func:`connect`.
+
+    A temporary file that an earlier call left in the folder is removed where
+    ``expect`` is ``present`` or ``present_more`` and the file was found in
+    that state, and in no other case.
 
     Raises as :func:`connect` does.
     """
@@ -1515,9 +1745,16 @@ def disconnect(
         return left(folder) if folder == expect else answer("changed")
     change: _Change | None = None
     try:
-        if expect in _OURS:
-            _remove_leftovers(folder, path.name)
-        found, state = _looked(host, client=client, store=store, folder=folder, platform=platform)
+        found, state = _looked_and_cleared(
+            host,
+            client=client,
+            store=store,
+            folder=folder,
+            name=path.name,
+            platform=platform,
+            expect=expect,
+            clear=_OURS,
+        )
         if state != expect:
             return answer("changed")
         if state not in _OURS:  # no entry, or none that is this vault's: the file is left
@@ -1543,6 +1780,8 @@ def disconnect(
             )
             if change.changed_since:
                 done["changed_since"] = True
+            if change.not_read_back:
+                done["not_read_back"] = True
             return done
         if change.recorded:
             return answer("failed")

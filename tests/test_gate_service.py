@@ -5698,6 +5698,172 @@ def test_the_look_needs_no_app_no_owner_mode_and_does_not_wait(
     assert record_and_files(fresh) == head
 
 
+def test_a_link_exchanged_while_the_look_asks_where_it_leads_is_answered(
+    fresh: GateService, tiles_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A folder on the way was found to be a link, and is none any more by the time the look
+    # asks where it leads: the system refuses. That is no failure of the vault's files (503):
+    # the answer is "linked", without a place.
+    place = folder_of(JSON_HOST)
+    kept = tiles_home / "kept in a repository"
+    place.parent.rename(kept)
+    place.parent.symlink_to(kept)
+    real_realpath = os.path.realpath
+
+    def refusing(path: Any, **kwargs: Any) -> str:
+        if os.fspath(path) == str(place.parent):
+            raise OSError(errno.EINVAL, os.strerror(errno.EINVAL))
+        return real_realpath(path, **kwargs)
+
+    head = record_and_files(fresh)
+    with monkeypatch.context() as patch:
+        patch.setattr(os.path, "realpath", refusing)
+        look = fresh.connect_look(host=JSON_HOST)
+        assert (look["state"], look["real_folder"], look["problem"]) == ("linked", None, None)
+        assert fresh.connect_write(host=JSON_HOST, expect="no_file") == {
+            "connected": False,
+            "state": "linked",
+            "path": shown(place),
+            "real_folder": None,
+        }
+    assert record_and_files(fresh) == head
+    assert fresh.connect_look(host=JSON_HOST)["real_folder"] == shown(kept)
+
+
+def test_a_file_that_could_not_be_read_back_is_not_recorded_as_a_failure(
+    fresh: GateService, tiles_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The file was replaced, and the system then does not let it be read: no descriptor is
+    # left. The entry is in the file. The answer says so, the app stays in the vault, and the
+    # record has the one entry of a connect, not a second one that says it did not happen.
+    original = b'{\n  "theme": "dark"\n}\n'
+    place = holding(folder_of(JSON_HOST), original)
+    real_open, real_replace = os.open, os.replace
+    placed: list[int] = []
+
+    def replace(src: Any, dst: Any, **kwargs: Any) -> None:
+        real_replace(src, dst, **kwargs)
+        if os.fspath(dst) == place.name:
+            placed.append(1)
+
+    def no_descriptor(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+        if placed and os.fspath(path) == place.name:
+            raise OSError(errno.EMFILE, os.strerror(errno.EMFILE))
+        return real_open(path, flags, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", replace)
+        patch.setattr(os, "open", no_descriptor)
+        answer = fresh.connect_write(host=JSON_HOST, expect="other")
+    assert placed == [1]
+    assert answer == {
+        "connected": True,
+        "state": "present",
+        "path": shown(place),
+        "copy": shown(place) + hostwrite.FIRST_COPY,
+        "replaced": False,
+        "not_read_back": True,
+        "groups": 1,
+        "app": answer["app"],
+    }
+    assert answer["app"]["registered"] is True
+    assert json.loads(place.read_bytes())["mcpServers"] == {SLUG: the_entry(fresh)}
+    assert JSON_HOST in registered(fresh)
+    assert [by for by, _ in policy_records(fresh)][-1:] == [f"connect:{JSON_HOST}"]
+    assert "connect-failed" not in " ".join(by for by, _ in policy_records(fresh))
+    assert fresh.activity(limit=1)["items"][0]["summary"].startswith(
+        f"you connected Claude Desktop: {PRODUCT} was about to write its entry"
+    )
+    look = fresh.connect_look(host=JSON_HOST)
+    assert (look["state"], look["app"]["registered"]) == ("present", True)
+    # The same for a removal: the entry is gone, and the answer says "removed".
+    settled(place)
+    placed.clear()
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", replace)
+        patch.setattr(os, "open", no_descriptor)
+        answer = fresh.connect_remove(host=JSON_HOST, expect="present")
+    assert answer == {
+        "file": "removed",
+        "app_removed": True,
+        "path": shown(place),
+        "copy": shown(place) + hostwrite.LAST_COPY,
+        "not_read_back": True,
+    }
+    assert [by for by, _ in policy_records(fresh)][-1:] == [f"disconnect:{JSON_HOST}"]
+    assert json.loads(place.read_bytes()) == {"theme": "dark", "mcpServers": {}}
+    assert fresh.verify()["verified"] is True
+
+
+def test_a_press_that_is_refused_removes_no_file_an_earlier_call_left(
+    fresh: GateService, tiles_home: Path, gate_clock: FakeClock
+) -> None:
+    # A temporary file of the writer's own pattern lies beside the settings file, left by a
+    # call that was cut long ago. A press that is answered "nothing was changed" has not
+    # removed it; the press that goes on to change the file has.
+    place = holding(folder_of(JSON_HOST), "{}\n")
+    stray = place.with_name(f".{place.name}.0123456789abcdef01234567.tmp")
+    stray.write_text("left by a call that was cut\n", encoding="utf-8")
+    os.utime(stray, (1, 1))
+    head, settings, before = record_and_files(fresh), in_force(fresh), files_in(tiles_home)
+    for expect in ("no_file", "other", "differs", "present_as", "present", "present_more"):
+        with refused(409, "changed"):
+            fresh.connect_write(host=JSON_HOST, expect=expect)
+        with refused(409, "changed"):
+            fresh.connect_remove(host=JSON_HOST, expect=expect)
+    assert fresh.connect_remove(host=JSON_HOST, expect="empty")["file"] == "no_entry"
+    assert fresh.connect_look(host=JSON_HOST)["state"] == "empty"
+    assert (record_and_files(fresh), in_force(fresh)) == (head, settings)
+    assert files_in(tiles_home) == before
+    expire_owner_mode(gate_clock)
+    with refused(403, "reauth_required"):
+        fresh.connect_write(host=JSON_HOST, expect="empty")
+    assert files_in(tiles_home) == before
+    fresh.reauth(passphrase=gs.PASSPHRASE)
+    assert fresh.connect_write(host=JSON_HOST, expect="empty")["connected"] is True
+    assert not stray.exists()
+    assert sorted(item.name for item in place.parent.iterdir()) == [
+        place.name,
+        place.name + hostwrite.FIRST_COPY,
+    ]
+
+
+def test_a_new_file_that_kept_its_temporary_name_is_shown_and_cleared(
+    fresh: GateService, tiles_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A connect makes a new settings file, and the one call that takes its temporary name
+    # away fails: the file has two names. The look says what it holds (an earlier version said
+    # "not read" from then on, and no press could repair that); "Disconnect" removes the second
+    # name and then the entry.
+    place = folder_of(JSON_HOST)
+    real_unlink = os.unlink
+
+    def no_unlink(path: Any, **kwargs: Any) -> None:
+        if os.fspath(path).startswith(f".{place.name}."):
+            raise OSError(errno.EIO, os.strerror(errno.EIO))
+        real_unlink(path, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "unlink", no_unlink)
+        answer = fresh.connect_write(host=JSON_HOST, expect="no_file")
+    assert (answer["connected"], answer["state"]) == (True, "present")
+    assert (place.stat().st_nlink, len(list(place.parent.iterdir()))) == (2, 2)
+    hour_ago = time.time() - 3600
+    os.utime(place, (hour_ago, hour_ago))
+    before = files_in(tiles_home)
+    look = fresh.connect_look(host=JSON_HOST)
+    assert (look["state"], look["app"]["registered"]) == ("present", True)
+    assert files_in(tiles_home) == before  # a look removes nothing
+    answer = fresh.connect_remove(host=JSON_HOST, expect="present")
+    assert (answer["file"], answer["app_removed"]) == ("removed", True)
+    assert sorted(item.name for item in place.parent.iterdir()) == [
+        place.name,
+        place.name + hostwrite.LAST_COPY,
+    ]
+    assert place.stat().st_nlink == 1
+    assert fresh.connect_look(host=JSON_HOST)["state"] == "empty"
+
+
 def test_the_look_says_what_the_vault_knows_of_the_app(
     unlocked: GateService, tiles_home: Path, gate_clock: FakeClock
 ) -> None:

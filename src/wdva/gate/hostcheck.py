@@ -23,7 +23,10 @@ What the look is allowed to do:
   is larger than :data:`MAX_BYTES` is never opened.
 * A file that passed is opened without following a link and without waiting,
   and what was opened is looked at again before a byte is read, so that a file
-  that was exchanged in between is not read either. No read can block.
+  that was exchanged in between is not read either. No read can block. It is
+  looked at once more after the last byte: a file whose size or times of
+  change are then others than before the first byte was written while it was
+  read, and counts as not read.
 * What is found is one word from :data:`STATES`, and for a JSON file without
   the gate's entry one word from :data:`SECTIONS`. An answer to the owner's
   page holds those and nothing else of the file: no key, no value, no message
@@ -139,10 +142,13 @@ class Look:
     ``path`` is the settings file (``None`` when ``unsupported``) and
     ``language`` its format. ``command`` is the command the entry must hold.
     ``raw`` is the bytes that were read and ``status`` what the system said
-    about the file once they were read; both are ``None`` when nothing was
-    read. ``switched_off``: the entry holds ``enabled`` with the value false.
+    about the file once they were read, which is what it said before the
+    first of them was read: its size and its two times of change were the
+    same at both moments. Both are ``None`` when nothing was read.
+    ``switched_off``: the entry holds ``enabled`` with the value false.
     ``other_name``: for ``present_as``, the name the entry calls under.
-    ``real_folder``: for ``linked``, where the path of the folder leads.
+    ``real_folder``: for ``linked``, where the path of the folder leads, or
+    ``None`` where the system would not say.
 
     ``raw`` is whatever the file held, the keys of other tools included. It
     is left out of the text Python prints for a ``Look``, and it belongs in
@@ -266,13 +272,34 @@ def _exchanged(part: str, descriptor: int) -> FolderProblem:
     return Linked() if stat.S_ISLNK(now.st_mode) else NoFolder()
 
 
+def _where_it_leads(folder: Path) -> Path | None:
+    """Where the path of a folder leads, or ``None`` where the system would not say.
+
+    Asked for a folder on whose way a link was found. A link that is gone, or
+    is no link any more, by the time it is read makes the system refuse; that
+    is no reason for a look to raise.
+    """
+    try:
+        return Path(os.path.realpath(folder))
+    except OSError:
+        return None
+
+
 def _read(name: str, folder: int) -> tuple[bytes, os.stat_result]:
     """The bytes of the regular file ``name`` in the open folder, and its status after the read.
 
     :data:`MAX_BYTES` at most. Raises :class:`_NotRead` for anything that is
     not such a file, also when it became something else after it was looked
-    at or changed its size while it was read, and :class:`OSError` when the
-    system refuses.
+    at or was written while it was read, and :class:`OSError` when the system
+    refuses.
+
+    Written while it was read: its size or one of its two times of change is
+    another after the last byte than before the first. Without that
+    comparison a program that rewrote the file in place between two reads, or
+    between the last read and the status handed back, would go unseen: the
+    bytes would be a mix of two versions, or the status that of a version
+    that was not read, and a writer that later compares with this status
+    would take the file for the one it read.
     """
     flags = os.O_RDONLY
     for flag in ("O_NOFOLLOW", "O_NONBLOCK", "O_NOCTTY", "O_CLOEXEC"):
@@ -299,6 +326,12 @@ def _read(name: str, folder: int) -> tuple[bytes, os.stat_result]:
             raise _NotRead
         after = os.fstat(descriptor)
         if after.st_size != size:  # it was cut or grew while it was read
+            raise _NotRead
+        if (after.st_size, after.st_mtime_ns, after.st_ctime_ns) != (
+            status.st_size,
+            status.st_mtime_ns,
+            status.st_ctime_ns,
+        ):  # it was written while it was read
             raise _NotRead
         return b"".join(parts), after
     finally:
@@ -440,7 +473,7 @@ def look(
         try:
             folder = open_folder(path, base)
         except FolderProblem as problem:
-            real = Path(os.path.realpath(path.parent)) if problem.state == "linked" else None
+            real = _where_it_leads(path.parent) if problem.state == "linked" else None
             return Look(
                 problem.state, path=path, language=language, command=command, real_folder=real
             )

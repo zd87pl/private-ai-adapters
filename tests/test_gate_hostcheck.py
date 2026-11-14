@@ -704,29 +704,157 @@ def test_a_file_that_changes_its_size_while_it_is_read_is_not_read(
     found = seen("claude-desktop")
     assert cut == [1]
     assert (found.state, found.raw, found.status) == ("not_read", None, None)
-    # Written in place with the same number of bytes while it is read: the status that is
-    # handed back is the one from after the read, so the time of that write is in it.
-    content = json.dumps({"mcpServers": {SLUG: entry()}})
-    place.write_text(content, encoding="utf-8")
-    long_ago = os.lstat(place).st_mtime_ns - 60 * 10**9
-    os.utime(place, ns=(long_ago, long_ago))
-    again: list[int] = []
+    monkeypatch.setattr(hostcheck.os, "read", real_read)
 
-    def saving(descriptor: int, count: int) -> bytes:
+
+def test_a_file_that_is_written_while_it_is_read_is_not_read(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Written in place, with as many bytes as it had: the size says nothing.
+
+    What the system said of the file before the first byte was read is compared with what
+    it says after the last. Without that, the bytes handed back could be a mix of two
+    versions, or the status that of a version that was not read; and the writer, which
+    later compares with that status, would take the file for the one it read.
+    """
+    place = home / ".config" / "Claude" / "claude_desktop_config.json"
+    place.parent.mkdir(parents=True)
+    old = json.dumps({"apiKey": "OLD-KEY-0001", "mcpServers": {SLUG: entry()}})
+    new = old.replace("OLD-KEY-0001", "NEW-KEY-0002")
+    real_read, real_fstat = os.read, os.fstat
+
+    def long_ago() -> int:
+        then = os.lstat(place).st_mtime_ns - 600 * 10**9
+        os.utime(place, ns=(then, then))
+        return then
+
+    def in_place(content: str, *, time_back: bool) -> None:
+        """What another program does: write into the file, and perhaps set its time back."""
+        before = os.lstat(place)
+        with open(place, "r+b") as handle:
+            handle.write(content.encode("utf-8"))
+        if time_back:  # as a tool that restores or synchronises a file does
+            os.utime(place, ns=(before.st_atime_ns, before.st_mtime_ns))
+            assert os.lstat(place).st_mtime_ns == before.st_mtime_ns
+        assert os.lstat(place).st_size == before.st_size
+
+    def looked_at_while(moment: str, before: str, after: str, *, time_back: bool) -> hostcheck.Look:
+        """A look during which another program writes ``after`` over ``before``."""
+        place.write_text(before, encoding="utf-8")
+        long_ago()
+        reads: list[int] = []
+
+        def reading(descriptor: int, count: int) -> bytes:
+            reads.append(count)
+            if moment == "before the second read" and len(reads) == 2:
+                in_place(after, time_back=time_back)
+            data = real_read(descriptor, count)
+            if moment == "after the last read" and not data:
+                in_place(after, time_back=time_back)
+            return data
+
+        with monkeypatch.context() as patch:
+            patch.setattr(hostcheck.os, "read", reading)
+            found = seen("claude-desktop")
+        assert len(reads) >= 2
+        assert place.read_text(encoding="utf-8") == after
+        return found
+
+    pad = "x" * (hostcheck._READ_AT_ONCE + 5000)
+    big_old = json.dumps({"first": "OLD-A", "pad": pad, "second": "OLD-B", "mcpServers": {}})
+    big_new = big_old.replace("OLD-A", "NEW-A").replace("OLD-B", "NEW-B")
+    for time_back in (False, True):
+        # Between the last read and the look at the open file that follows it.
+        found = looked_at_while("after the last read", old, new, time_back=time_back)
+        assert (found.state, found.raw, found.status) == ("not_read", None, None), time_back
+        # Between two reads of a file that is read in pieces: half of each version.
+        found = looked_at_while("before the second read", big_old, big_new, time_back=time_back)
+        assert (found.state, found.raw, found.status) == ("not_read", None, None), time_back
+        # The look after that reads what is there now.
+        found = seen("claude-desktop")
+        assert (found.state, found.raw) == ("other", big_new.encode("utf-8"))
+
+    # A file that nobody writes is read, and the status handed back is what the system says
+    # of it before and after: one more look at the open file, and the same answer.
+    place.write_text(old, encoding="utf-8")
+    then = long_ago()
+    looks: list[os.stat_result] = []
+
+    def looking(descriptor: int) -> os.stat_result:
+        status = real_fstat(descriptor)
+        if stat.S_ISREG(status.st_mode):  # (the folders on the way are looked at as well)
+            looks.append(status)
+        return status
+
+    with monkeypatch.context() as patch:
+        patch.setattr(hostcheck.os, "fstat", looking)
+        found = seen("claude-desktop")
+    assert (found.state, found.raw) == ("present", old.encode("utf-8"))
+    assert len(looks) == 2
+    assert found.status is looks[1]
+    for one in looks:
+        assert (one.st_size, one.st_mtime_ns) == (len(old), then)
+    assert looks[0].st_ctime_ns == looks[1].st_ctime_ns == os.lstat(place).st_ctime_ns
+    # Another mode while it is read is a change, too: the file is not the one that was opened.
+    changed: list[int] = []
+
+    def chmod_then(descriptor: int, count: int) -> bytes:
         data = real_read(descriptor, count)
-        if not data and not again:
-            again.append(1)
-            place.write_text(content, encoding="utf-8")
+        if not data and not changed:
+            changed.append(1)
+            place.chmod(0o640)
         return data
 
-    monkeypatch.setattr(hostcheck.os, "read", saving)
-    found = seen("claude-desktop")
-    assert again == [1]
-    assert found.state == "present"
-    status = found.status
-    assert status is not None
-    assert status.st_mtime_ns == os.lstat(place).st_mtime_ns
-    assert status.st_mtime_ns > long_ago
+    with monkeypatch.context() as patch:
+        patch.setattr(hostcheck.os, "read", chmod_then)
+        assert seen("claude-desktop").state == "not_read"
+    assert seen("claude-desktop").state == "present"
+
+
+def test_a_link_that_is_exchanged_while_the_look_asks_where_it_leads(
+    home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The look never raises for anything about the file or its folder.
+
+    A folder on the way was found to be a link. By the time the look asks where it leads,
+    the link is gone and a folder stands there: the system refuses to read a link that is
+    none. The word is still ``linked``; there is only no place to name.
+    """
+    place = home / ".config" / "Claude" / "claude_desktop_config.json"
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (home / ".config").mkdir()
+    place.parent.symlink_to(elsewhere)
+    real_readlink = os.readlink
+    exchanged: list[int] = []
+
+    def exchanging(path: Any, *args: Any, **kwargs: Any) -> str:
+        if not exchanged and os.fspath(path) == str(place.parent):
+            exchanged.append(1)
+            os.unlink(path)  # another program: the link is gone,
+            os.mkdir(path)  # and a folder is there now
+        answer: str = real_readlink(path, *args, **kwargs)
+        return answer
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "readlink", exchanging)
+        found = seen("claude-desktop")
+    assert exchanged == [1]
+    assert (found.state, found.raw, found.status) == ("linked", None, None)
+    # (Python up to 3.12 raises here; a later one answers the path itself.)
+    assert found.real_folder in (None, place.parent)
+    # Whatever the Python: where the system refuses, the answer has no place.
+    place.parent.rmdir()
+    place.parent.symlink_to(elsewhere)
+
+    def refusing(path: Any, **kwargs: Any) -> str:
+        raise OSError(22, "Invalid argument")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os.path, "realpath", refusing)
+        found = seen("claude-desktop")
+    assert (found.state, found.real_folder, found.raw) == ("linked", None, None)
+    assert seen("claude-desktop").real_folder == elsewhere
 
 
 def test_the_module_reads_and_never_writes() -> None:

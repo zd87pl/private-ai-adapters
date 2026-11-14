@@ -2813,9 +2813,13 @@ class GateService:
         Returns ``{"connected": True, "state", "path", "copy", "replaced",
         "groups", "app"}``, or ``{"connected": False, "state": word, ...}`` with
         the vault and the file as they were (``"kept": True`` where the app
-        stayed registered although the file does not hold the entry). A file
-        that is not in the state ``expect``, or is another one by the time it
-        would be replaced, is answered 409 ``changed``.
+        stayed registered although the file does not hold the entry). Where
+        the writer says so, a connected answer also has ``changed_since`` (the
+        file was written again right afterwards and holds the entry) or
+        ``not_read_back`` (the system did not let the file be read back, and
+        its name leads to the file that was put there). A file that is not in
+        the state ``expect``, or is another one by the time it would be
+        replaced, is answered 409 ``changed``.
         """
         if expect not in _CONNECT_EXPECT:
             raise _invalid("Say which state of the settings file you were shown.")

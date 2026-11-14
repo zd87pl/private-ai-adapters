@@ -2296,6 +2296,28 @@ def test_the_result_says_that_nothing_was_tried() -> None:
     assert all("--green" not in rule for rule in rules)
 
 
+def test_an_answer_that_was_not_read_back_is_not_shown_as_read_back() -> None:
+    connect = without_comments(scripts()["connect.js"])
+    body = function_body(connect, "async function connect(ctx, sheet, view) {")
+    # The sheet "Connected" says "Written and read back". Where the answer says that the file
+    # could not be read back, that sheet is not shown: the one of a connected app is, which
+    # says that the entry is in the file. It is drawn from what the answer says of the file
+    # and of the app, so no file is looked at for it.
+    unread = (
+        "if (answer.connected === true && answer.not_read_back === true) "
+        "settle(ctx, view, Object.assign({}, look, { state: answer.state, app: answer.app }));"
+    )
+    read_back = 'else if (answer.connected === true) view.state = "connected";'
+    assert unread in body
+    assert body.index(unread) < body.index(read_back)
+    assert connect.count('view.state = "connected"') == 1
+    assert connect.count("not_read_back") == 1
+    assert "lookAt(" not in body
+    # What that sheet says is no claim about a read: "The entry ... is in ...".
+    english = table("text-en.js")
+    assert english["connect.on.status.file"] == ["The entry \u201c{entry}\u201d is in {path}."]
+
+
 # -- the demo's card ----------------------------------------------------------------
 
 

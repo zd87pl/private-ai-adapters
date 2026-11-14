@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import errno
 import json
 import math
 import os
@@ -974,6 +975,16 @@ NOT_PLAIN_LINES = {
         'note = """\n[mcp_servers.' + SLUG + ']\n"""\n',
         "differs",
     ),
+    "the header inside a text of several lines, and no entry": (
+        # With the three lines added, the header would stand in the text twice, and a
+        # removal could not take out what the connect had put in.
+        'note = """\nHow I set up my servers:\n[mcp_servers.' + SLUG + ']\n"""\n',
+        "other",
+    ),
+    "the header inside a text, written with blanks and quotes, and no entry": (
+        "[notes]\ntext = '''\n\t[ mcp_servers . \"" + SLUG + "\" ]  # mine\n'''\n",
+        "other",
+    ),
     "the header once, inside a text, and the entry elsewhere": (
         'note = """\n[mcp_servers.' + SLUG + ']\ncommand = "x"\n"""\n'
         "[mcp_servers]\n" + SLUG + '.command = "x"\n',
@@ -1114,6 +1125,138 @@ def test_a_toml_entry_is_taken_out_and_comments_and_blank_lines_stay() -> None:
     assert without("a = 1\r\n\r\n" + block.replace("\n", "\r\n") + "\r\n[b]\r\n") == (
         "a = 1\r\n\r\n[b]\r\n"
     )
+
+
+@needs_toml
+def test_a_toml_entry_is_taken_out_wherever_the_table_of_servers_was_first_met(
+    home: Path,
+) -> None:
+    """The reader of TOML puts ``mcp_servers`` where it first meets one of its tables.
+
+    Where that was the entry, and another table stands between it and the next server, the
+    table of servers comes later in the parsed file once the entry is gone. No line moved,
+    and every key and value is what it was: the entry is taken out.
+    """
+    without = hostwrite.toml_without_entry
+    block = "\n".join(toml_lines(TOML_HOST)) + "\n"
+    rest = "[b]\nx = 1\n[mcp_servers.other]\ncommand = 'o'\n"
+    assert list(toml(block + rest)) == ["mcp_servers", "b"]
+    assert list(toml(rest)) == ["b", "mcp_servers"]
+    assert without(block + rest) == rest
+    # The same tables in other orders.
+    assert without(block + "[b]\nx = 1\n") == "[b]\nx = 1\n"
+    assert without(block + "[mcp_servers.other]\ncommand = 'o'\n[b]\nx = 1\n") == (
+        "[mcp_servers.other]\ncommand = 'o'\n[b]\nx = 1\n"
+    )
+    assert without("[mcp_servers.other]\ncommand = 'o'\n[b]\nx = 1\n" + block) == (
+        "[mcp_servers.other]\ncommand = 'o'\n[b]\nx = 1\n"
+    )
+    assert without("[b]\nx = 1\n" + block + "[c]\ny = 2\n[mcp_servers.other]\ncommand = 'o'\n") == (
+        "[b]\nx = 1\n[c]\ny = 2\n[mcp_servers.other]\ncommand = 'o'\n"
+    )
+    # How a file gets there by itself: a connect adds the entry at the end of a file without
+    # servers; later a program adds a table at the end, and later somebody a second server.
+    place = put(folder_of(TOML_HOST), 'model = "o9"\n')
+    assert connect(TOML_HOST, "other")["connected"] is True
+    later = (
+        '\n[projects."/home/me/work"]\ntrust_level = "trusted"\n\n'
+        '[mcp_servers.github]\ncommand = "gh-mcp"\nargs = []\n'
+    )
+    connected = place.read_text(encoding="utf-8") + later
+    put(place, connected)
+    assert state_of(TOML_HOST) == "present"
+    told = Told()
+    assert disconnect(TOML_HOST, "present", told) == {
+        "file": "removed",
+        "path": hostconfig.shown_path(place),
+        "copy": hostconfig.shown_path(place) + hostwrite.LAST_COPY,
+    }
+    assert told.actions == ["disconnect"]
+    assert place.read_text(encoding="utf-8") == 'model = "o9"\n' + later
+    assert Path(str(place) + hostwrite.LAST_COPY).read_text(encoding="utf-8") == connected
+    assert state_of(TOML_HOST) == "other"
+
+    # What is left aside is the place of that one table, and nothing else. A file with the
+    # same layout in which something else differs once the lines are gone is left: here a
+    # text of several lines inside the entry holds lines that read like headers, and what is
+    # left of it are two tables the file did not have.
+    hidden = (
+        block
+        + "note = '''\n[b]\nx = 1\n[zz] # '''\n"
+        + "[c]\ny = 1\n[mcp_servers.other]\ncommand = 'o'\n"
+    )
+    assert list(toml(hidden)) == ["mcp_servers", "c"]
+    with pytest.raises(hostwrite.ByHand):
+        without(hidden)
+    for item in place.parent.iterdir():
+        item.unlink()
+    put(place, hidden)
+    before = tree(home)
+    assert state_of(TOML_HOST) == "present_more"
+    told = Told()
+    assert disconnect(TOML_HOST, "present_more", told)["file"] == "by_hand"
+    assert (told.actions, tree(home)) == (["disconnect-kept"], before)
+
+    # The comparison itself. Without the word for it the place of the table of servers
+    # counts, as it does for JSON and for an entry that is put in; with it, the order of
+    # every other key of the top still counts, and so does the order of the servers.
+    def rest_of(data: dict[str, Any], **more: Any) -> Any:
+        return hostwrite._rest(data, "mcp_servers", entry="whole", drop_empty=True, **more)
+
+    first = {"mcp_servers": {SLUG: {}, "a": {"k": 1}, "z": {}}, "b": 1, "c": 2}
+    moved = {"b": 1, "mcp_servers": {"a": {"k": 1}, "z": {}}, "c": 2}
+    assert list(rest_of(first)) == ["mcp_servers", "b", "c"]
+    assert list(rest_of(first, servers_last=True)) == ["b", "c", "mcp_servers"]
+    assert list(first) == ["mcp_servers", "b", "c"]  # (what was handed in is not changed)
+    assert not hostwrite._equal(rest_of(first), rest_of(moved))
+    assert hostwrite._equal(rest_of(first, servers_last=True), rest_of(moved, servers_last=True))
+    for differs in (
+        {"c": 2, "mcp_servers": {"a": {"k": 1}, "z": {}}, "b": 1},  # two other keys changed places
+        {"b": 1, "mcp_servers": {"z": {}, "a": {"k": 1}}, "c": 2},  # two servers changed places
+        {"b": 1, "mcp_servers": {"a": {"k": 1.0}, "z": {}}, "c": 2},  # a type
+        {"b": 1, "mcp_servers": {"a": {"k": 1}, "z": {}}, "c": 2, "d": 3},  # a key more
+        {"b": 1, "mcp_servers": {"a": {"k": 1}}, "c": 2},  # a server less
+    ):
+        assert not hostwrite._equal(
+            rest_of(first, servers_last=True), rest_of(differs, servers_last=True)
+        ), differs
+    # A table of servers that is empty without the entry is dropped on both sides, as before.
+    assert rest_of({"mcp_servers": {SLUG: {}}, "b": 1}, servers_last=True) == {"b": 1}
+    # JSON is spliced as text, and where `mcpServers` stands is compared there as ever.
+    assert list(
+        hostwrite._rest(
+            {"mcpServers": {SLUG: {}}, "b": 1}, "mcpServers", entry="whole", drop_empty=False
+        )
+    ) == ["mcpServers", "b"]
+
+
+@needs_toml
+def test_no_entry_is_put_into_toml_that_could_not_be_taken_out_again(home: Path) -> None:
+    command = command_of(TOML_HOST)
+    block = "\n".join(toml_lines(TOML_HOST)) + "\n"
+    # A line that reads like the entry's header, inside a text of several lines: with the
+    # three lines added the header would stand in the text twice, which is what a removal
+    # refuses. So the three lines are not added.
+    for text in (
+        'notes = """\n[mcp_servers.' + SLUG + ']\n"""\n',
+        "notes = '''\n  [ mcp_servers.'" + SLUG + "' ]\t# as I had it\n'''\n[b]\nx = 1\n",
+        '[b]\nlong = """\ncommand = "x"\n[mcp_servers."' + SLUG + '"]\n"""',
+    ):
+        assert SLUG not in toml(text).get("mcp_servers", {})
+        with pytest.raises(hostwrite.ByHand):
+            hostwrite.toml_with_entry(text, command)
+    # What only looks a little like it is no reason: a comment, the header of another
+    # server, the header as a part of a longer line, a table below the entry's name.
+    for text in (
+        "# [mcp_servers." + SLUG + "]\n",
+        'notes = """\n[mcp_servers.' + SLUG + '-old]\n"""\n',
+        'notes = """\nsee [mcp_servers.' + SLUG + '] below\n"""\n',
+        'notes = """\n[mcp_servers.' + SLUG + '.env]\n"""\n',
+        'notes = "[mcp_servers.' + SLUG + ']"\n',
+    ):
+        new = hostwrite.toml_with_entry(text, command)
+        assert new == text + "\n" + block
+        assert hostwrite.toml_without_entry(new) == text + "\n"
 
 
 def test_two_values_are_equal_only_with_their_types_and_their_order() -> None:
@@ -1481,6 +1624,9 @@ def test_no_state_but_the_seven_is_written(
 ) -> None:
     host, word = arrange(case, home, monkeypatch)
     place = place_of(host)
+    # A temporary file that an earlier call left behind lies there, too: a call that changes
+    # nothing removes nothing.
+    aged(put(place.with_name(f".{place.name}.{'a' * 24}.tmp"), "left by a call that was cut"), 600)
     before = tree(home)
     assert quickly(lambda: state_of(host)) == word
     for expect in hostcheck.STATES:
@@ -1898,27 +2044,105 @@ def test_a_file_changed_a_moment_ago_is_not_written(host: str, home: Path) -> No
     ahead = time.time() + 3600
     os.utime(place, (ahead, ahead))
     assert connect(host, "other")["connected"] is True
-    # A file that is written in place while it is read, with the same number of bytes: what
-    # the writer goes by is the time after the read, so it is "a moment ago".
-    for item in place.parent.iterdir():
-        item.unlink()
-    put(place, other(host))
+
+
+@pytest.mark.parametrize("host", HOSTS)
+def test_a_file_written_while_it_is_read_is_not_written(
+    host: str, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Another program writes into the file, in place and with as many bytes as it had,
+    while the writer reads it. The reader sees that (the system's own time of the last
+    change is another after the read than before), and nothing is written: neither a mix of
+    two versions, nor the old bytes over what the other program wrote."""
+    place = folder_of(host)
+    shown = hostconfig.shown_path(place)
+    old = other(host)
+    new = old.replace("tool", "loot")
+    assert (len(new), new != old) == (len(old), True)
     real_read = os.read
-    saved: list[int] = []
 
-    def reading(descriptor: int, count: int) -> bytes:
-        data = real_read(descriptor, count)
-        if not data and not saved:
-            saved.append(1)
-            place.write_text(other(host), encoding="utf-8")
-        return data
+    def press(
+        moment: str, before: str, after: str, time_back: bool, call: Callable[[Told], Any]
+    ) -> tuple[Any, Told]:
+        """A press during whose first read of the file another program writes into it."""
+        for item in place.parent.iterdir():
+            item.unlink()
+        put(place, before)
+        reads: list[int] = []
+        wrote: list[str] = []
 
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(os, "read", reading)
+        def write() -> None:
+            wrote.append(moment)
+            if time_back:  # as a tool that restores or synchronises a file does
+                restored(place, after)
+            else:
+                place.write_text(after, encoding="utf-8")
+
+        def reading(descriptor: int, count: int) -> bytes:
+            reads.append(count)
+            if moment == "before the second read" and len(reads) == 2:
+                write()
+            data = real_read(descriptor, count)
+            if moment == "after the last read" and not data and not wrote:
+                write()
+            return data
+
         told = Told()
-        assert connect(host, "other", told) == recent
-    assert (saved, told.entered) == ([1], 0)
-    assert names(place.parent) == [place.name]
+        with monkeypatch.context() as patch:
+            patch.setattr(os, "read", reading)
+            answer = call(told)
+        assert wrote == [moment]
+        # The file is what the other program made of it, and nothing lies beside it.
+        assert names(place.parent) == [place.name]
+        assert place.read_text(encoding="utf-8") == after
+        return answer, told
+
+    if host == JSON_HOST:
+        pad = json.dumps("x" * (hostcheck._READ_AT_ONCE + 5000))
+        big_old = OTHER_JSON.replace('"dark"', pad)
+    else:
+        big_old = OTHER_TOML + "# " + "x" * (hostcheck._READ_AT_ONCE + 5000) + "\n"
+    big_new = big_old.replace("tool", "loot")
+    assert len(big_old.encode()) > hostcheck._READ_AT_ONCE
+    for time_back in (False, True):
+        for moment, before, after in (
+            ("after the last read", old, new),
+            ("before the second read", big_old, big_new),
+        ):
+            answer, told = press(
+                moment, before, after, time_back, lambda told: connect(host, "other", told)
+            )
+            assert answer == {"connected": False, "state": "not_read", "path": shown}, (
+                moment,
+                time_back,
+            )
+            assert (told.entered, told.actions) == (0, [])
+            # The next press reads the file as it is now; with its time set back it is written.
+            if time_back:
+                answer = connect(host, "other")
+                assert (answer["connected"], answer["state"]) == (True, "present")
+                make = hostwrite.json_with_entry if host == JSON_HOST else hostwrite.toml_with_entry
+                assert place.read_text(encoding="utf-8") == make(after, command_of(host))
+                copy = Path(str(place) + hostwrite.FIRST_COPY)
+                assert copy.read_text(encoding="utf-8") == after
+            else:
+                assert connect(host, "other")["state"] == "recent"
+    # "Disconnect": the file is not in the state the owner was shown, and nothing is recorded.
+    ours_old = with_ours(host)
+    ours_new = ours_old.replace("tool", "loot")
+    answer, told = press(
+        "after the last read",
+        ours_old,
+        ours_new,
+        True,
+        lambda told: disconnect(host, "present", told),
+    )
+    assert answer == {"file": "changed", "path": shown, "copy": None}
+    assert (told.entered, told.actions) == (0, [])
+    # A look at that moment says the same word, and changes nothing.
+    answer, _ = press("after the last read", old, new, True, lambda told: looked(host))
+    assert answer["state"] == "not_read"
+    assert state_of(host) == "other"
 
 
 def test_a_linked_folder_is_not_written_through(
@@ -2011,6 +2235,64 @@ def test_a_linked_folder_is_not_written_through(
             host
         )
         folder.unlink()
+
+
+def test_a_linked_folder_that_is_exchanged_at_that_moment_is_a_word_and_no_error(
+    home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A folder on the way was found to be a link, and is no link any more by the time the
+    look asks where it leads: the system refuses to read it. The look says ``linked`` all
+    the same, and has no place to name."""
+    host = JSON_HOST
+    place = place_of(host)
+    shown = hostconfig.shown_path(place)
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    place.parent.parent.mkdir(parents=True)
+    real_readlink, real_realpath = os.readlink, os.path.realpath
+    exchanged: list[int] = []
+
+    def exchanging(path: Any, *args: Any, **kwargs: Any) -> str:
+        if not exchanged and os.fspath(path) == str(place.parent):
+            exchanged.append(1)
+            os.unlink(path)  # another program: the link is gone,
+            os.mkdir(path)  # and a folder is there now
+        answer: str = real_readlink(path, *args, **kwargs)
+        return answer
+
+    def refusing(path: Any, **kwargs: Any) -> str:
+        if os.fspath(path) == str(place.parent):
+            raise OSError(errno.EINVAL, os.strerror(errno.EINVAL))
+        return real_realpath(path, **kwargs)
+
+    # For real: the link is exchanged for a folder while the look reads it.
+    place.parent.symlink_to(outside)
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "readlink", exchanging)
+        seen = looked(host)
+    assert exchanged == [1]
+    assert seen["state"] == "linked"
+    # (Python up to 3.12 raises there; a later one answers the path itself.)
+    assert seen["real_folder"] in (None, hostconfig.shown_path(place.parent))
+    place.parent.rmdir()
+    # Whatever the Python: where the system refuses, the answers have no place to name.
+    place.parent.symlink_to(outside)
+    before = tree(tmp_path)
+    with monkeypatch.context() as patch:
+        patch.setattr(os.path, "realpath", refusing)
+        seen = looked(host)
+        assert (seen["state"], seen["real_folder"], seen["problem"]) == ("linked", None, None)
+        told = Told()
+        assert connect(host, "linked", told) == {
+            "connected": False,
+            "state": "linked",
+            "path": shown,
+            "real_folder": None,
+        }
+        assert told.entered == 0
+        assert disconnect(host, "linked", told)["file"] == "linked"
+    assert tree(tmp_path) == before
+    assert looked(host)["real_folder"] == str(outside)
 
 
 @pytest.mark.parametrize("host", HOSTS)
@@ -2452,44 +2734,235 @@ def test_leftovers_of_a_cut_call_are_removed(host: str, home: Path) -> None:
     assert not young.exists()
     assert a_link.is_symlink()  # (it now leads nowhere, and is still not ours to remove)
 
-    # A new settings file that was linked into place, and the call was cut before the
-    # temporary name was removed: the file has two names. The next write removes the second
-    # one, and goes through.
+    # A call that is refused because the file is not in the state the owner was shown has
+    # removed nothing: the folder holds what it held.
     for item in list(folder.iterdir()):
         if item.is_dir() and not item.is_symlink():
             item.rmdir()
         else:
             item.unlink()
     put(place, other(host))
-    second = folder / f".{place.name}.{'9' * 24}.tmp"
-    os.link(place, second)
-    aged(place, 10)
-    assert place.stat().st_nlink == 2
-    # While the leftover is young, a call may still be at work: the file is not written.
-    assert state_of(host) == "not_read"
-    assert connect(host, "other")["state"] == "not_read"
-    assert connect(host, "not_read")["state"] == "not_read"
-    assert second.exists()
-    aged(place, 120)
-    assert connect(host, "not_read")["state"] == "changed"  # the owner was shown another state
-    assert not second.exists()
-    assert place.stat().st_nlink == 1
-    answer = connect(host, "other")
-    assert (answer["connected"], answer["state"]) == (True, "present")
-    assert place.stat().st_nlink == 1
-    assert no_temporary_file(folder)
-    # A "Disconnect" that changes the file clears up in the same way; one that leaves the
-    # file alone leaves everything else alone, too.
-    second = folder / f".{place.name}.{'8' * 24}.tmp"
-    os.link(place, second)
-    aged(place, 120)
+    old = left("a" * 24, 3600)
     before = tree(home)
-    assert disconnect(host, "not_read")["file"] == "not_read"
-    assert tree(home) == before
-    assert disconnect(host, "present")["file"] == "removed"
-    assert not second.exists()
-    assert place.stat().st_nlink == 1
+    for expect in hostcheck.STATES:
+        if expect != "other":
+            assert connect(host, expect)["state"] == "changed", expect
+            assert disconnect(host, expect)["file"] == "changed", expect
+    # Nor has a "Disconnect" that leaves the file alone, or a look.
+    told = Told()
+    assert disconnect(host, "other", told)["file"] == "no_entry"
+    assert told.actions == ["disconnect-kept"]
     assert state_of(host) == "other"
+    assert tree(home) == before
+    assert old.exists()
+
+
+@pytest.mark.parametrize("host", HOSTS)
+def test_a_new_file_that_kept_its_temporary_name_is_looked_at_and_cleared(
+    host: str, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A new settings file is linked into place, and the call is cut before it can remove
+    the temporary name: the file has two names. It is still the file the product made, and
+    the look says what it holds; the press that follows removes the second name."""
+    place = folder_of(host)
+    folder = place.parent
+    shown = hostconfig.shown_path(place)
+
+    def cut(content: str, seconds: float, middle: str = "9" * 24) -> Path:
+        """The folder as such a call leaves it, ``seconds`` ago."""
+        for item in list(folder.iterdir()):
+            item.unlink()
+        put(place, content)
+        second = folder / f".{place.name}.{middle}.tmp"
+        os.link(place, second)
+        aged(place, seconds)
+        assert (place.stat().st_nlink, second.stat().st_ino) == (2, place.stat().st_ino)
+        return second
+
+    # For real: the one call that removes the temporary name fails.
+    real_unlink = os.unlink
+
+    def no_unlink(path: Any, **kwargs: Any) -> None:
+        if os.fspath(path).endswith(".tmp"):
+            raise OSError(errno.EIO, os.strerror(errno.EIO))
+        real_unlink(path, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "unlink", no_unlink)
+        answer = connect(host, "no_file")
+    assert (answer["connected"], answer["state"]) == (True, "present")
+    assert place.stat().st_nlink == 2
+    (second,) = [item for item in folder.iterdir() if item != place]
+    assert hostwrite._leftover_pattern(place.name).fullmatch(second.name)
+    written = place.read_text(encoding="utf-8")
+    # The look says what the file holds, at once and an hour later, and removes nothing.
+    before = tree(home)
+    assert state_of(host) == "present"
+    aged(place, 3600)
+    before = tree(home)
+    assert state_of(host) == "present"
+    assert looked(host)["copies"] == []
+    assert tree(home) == before
+    # A press whose state is not the file's is refused, and leaves the name alone.
+    assert connect(host, "not_read")["state"] == "changed"
+    assert disconnect(host, "not_read")["file"] == "changed"
+    assert connect(host, "other")["state"] == "changed"
+    assert tree(home) == before
+    # "Connect" in the state that was shown: nothing is to be written, the second name goes.
+    told = Told()
+    assert connect(host, "present", told) == {
+        "connected": True,
+        "state": "present",
+        "path": shown,
+        "copy": None,
+        "replaced": False,
+    }
+    assert told.actions == ["connect-kept"]
+    assert (names(folder), place.stat().st_nlink) == ([place.name], 1)
+    assert place.read_text(encoding="utf-8") == written
+
+    # "Disconnect" clears up in the same way, and then takes the entry out.
+    second = cut(with_ours(host), 3600)
+    told = Told()
+    answer = disconnect(host, "present", told)
+    assert (answer["file"], told.actions) == ("removed", ["disconnect"])
+    assert names(folder) == [place.name, place.name + hostwrite.LAST_COPY]
+    assert (place.stat().st_nlink, state_of(host)) == (1, "other")
+    # A file that was edited in place since, and holds no entry or another one: written, once
+    # the second name is gone.
+    for content, state in ((other(host), "other"), (elsewhere(host), "differs")):
+        second = cut(content, 3600)
+        assert state_of(host) == state
+        told = Told()
+        answer = connect(host, state, told)
+        assert (answer["connected"], answer["state"], told.actions) == (
+            True,
+            "present",
+            ["connect"],
+        )
+        assert not second.exists()
+        assert place.stat().st_nlink == 1
+        assert no_temporary_file(folder)
+
+    # While the leftover is young the call that made it may still be at work. The look says
+    # what the file holds; no file is replaced while it has two names.
+    second = cut(other(host), 10)
+    before = tree(home)
+    assert state_of(host) == "other"
+    told = Told()
+    assert connect(host, "other", told) == {"connected": False, "state": "recent", "path": shown}
+    assert (told.entered, tree(home)) == (0, before)
+    second = cut(with_ours(host), 10)
+    before = tree(home)
+    told = Told()
+    assert disconnect(host, "present", told) == {"file": "recent", "path": shown, "copy": None}
+    assert (told.actions, tree(home)) == (["disconnect-kept"], before)
+    # (Where nothing is to be written, nothing waits.)
+    told = Told()
+    assert connect(host, "present", told)["connected"] is True
+    assert (told.actions, tree(home)) == (["connect-kept"], before)
+    # A minute later the same press goes through.
+    aged(place, 61)
+    assert disconnect(host, "present")["file"] == "removed"
+    assert (second.exists(), place.stat().st_nlink) == (False, 1)
+
+    # A name the system does not let go: the file keeps two names, and is not replaced.
+    second = cut(other(host), 3600)
+    before = tree(home)
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "unlink", no_unlink)
+        told = Told()
+        assert connect(host, "other", told)["state"] == "recent"
+    assert (told.entered, tree(home)) == (0, before)
+
+
+@pytest.mark.parametrize("host", HOSTS)
+def test_a_second_name_that_is_not_a_leftover_makes_a_file_not_read(
+    host: str, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one second name that is let through is a temporary name of the writer, for this
+    settings file, in the same folder, and the only other name. Every other file with two
+    names is left as before: replacing it would leave the other name with the old content."""
+    place = folder_of(host)
+    folder = place.parent
+    shown = hostconfig.shown_path(place)
+    hexes = "9" * 24
+
+    def never(what: str) -> None:
+        aged(place, 3600)
+        before = tree(home)
+        assert state_of(host) == "not_read", what
+        for expect in ("other", "present", "not_read"):
+            told = Told()
+            assert connect(host, expect, told) == {
+                "connected": False,
+                "state": "not_read",
+                "path": shown,
+            }, what
+            assert told.entered == 0
+        told = Told()
+        assert disconnect(host, "other", told)["file"] == "changed", what
+        assert told.entered == 0
+        assert tree(home) == before, what
+        for item in list(folder.iterdir()):
+            item.unlink()
+
+    # A second name in another folder.
+    put(place, other(host))
+    os.link(place, home / f".{place.name}.{hexes}.tmp")
+    never("a name of the pattern, in another folder")
+    (home / f".{place.name}.{hexes}.tmp").unlink()
+    # A second name in the same folder that is not of the pattern.
+    for name in (
+        f"{place.name}.bak",
+        f".{place.name}.{hexes}.tmp.bak",
+        f".{place.name}.{'9' * 23}.tmp",
+        f".{place.name}.{'G' * 24}.tmp",
+        f"{place.name}.{hexes}.tmp",
+        f".another file.json.{hexes}.tmp",
+        place.name + hostwrite.FIRST_COPY,
+    ):
+        put(place, other(host))
+        os.link(place, folder / name)
+        never(name)
+    # A second name elsewhere, and a file of the pattern in the folder that is another file.
+    put(place, other(host))
+    os.link(place, home / "a second name")
+    aged(put(folder / f".{place.name}.{hexes}.tmp", other(host)), 30)
+    never("another file under a name of the pattern")
+    (home / "a second name").unlink()
+    # ... or a link to the settings file under such a name.
+    put(place, other(host))
+    os.link(place, home / "a second name")
+    (folder / f".{place.name}.{hexes}.tmp").symlink_to(place)
+    never("a symbolic link under a name of the pattern")
+    (home / "a second name").unlink()
+    # Three names, two of them of the pattern.
+    put(place, other(host))
+    os.link(place, folder / f".{place.name}.{hexes}.tmp")
+    os.link(place, folder / f".{place.name}.{'8' * 24}.tmp")
+    never("three names")
+    # A file of another account, with a second name of the pattern.
+    put(place, other(host))
+    os.link(place, folder / f".{place.name}.{hexes}.tmp")
+    mine = os.getuid()
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "getuid", lambda: mine + 1)
+        never("a file of another account")
+    # Where the names of the folder cannot be listed, nothing is known about the other name.
+    put(place, other(host))
+    os.link(place, folder / f".{place.name}.{hexes}.tmp")
+
+    real_listdir = os.listdir
+
+    def no_listing(path: Any) -> list[str]:
+        if isinstance(path, int):  # the folder that is held open
+            raise OSError(errno.EIO, os.strerror(errno.EIO))
+        return real_listdir(path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "listdir", no_listing)
+        never("a folder that cannot be listed")
 
 
 # -- what can be said without the file --------------------------------------------------------
@@ -2719,6 +3192,67 @@ def test_a_command_that_may_not_last_is_not_written(
     (real / "vault").mkdir()
     assert problem(store=lasting / "a link" / "vault") is None
 
+    # A link that leads past the rule: into a folder for temporary files, or around a folder
+    # that everybody may write. As it is written such a path passes; each path is therefore
+    # judged a second time, where it really lies.
+    in_tmp = tmp_path / "kept under tmp"
+    (in_tmp / "bin").mkdir(parents=True)
+    (in_tmp / "bin" / "python").symlink_to(sys.executable)
+    (in_tmp / "vault").mkdir()
+    (lasting / "into tmp").symlink_to(in_tmp)
+    assert not hostwrite._may_not_last(str(lasting / "into tmp" / "bin" / "python"))
+    assert problem(lasting / "into tmp" / "bin" / "python") == "unstable"
+    assert problem(store=lasting / "into tmp" / "vault") == "unstable"
+    # ... also where the link is the last part of the vault's path.
+    (lasting / "vault, linked").symlink_to(in_tmp / "vault")
+    assert not hostwrite._may_not_last(str(lasting / "vault, linked"))
+    assert problem(store=lasting / "vault, linked") == "unstable"
+    assert write(lasting / "vault, linked") == {
+        "connected": False,
+        "state": "unstable",
+        "path": hostconfig.shown_path(place),
+    }
+    (lasting / "vault, linked well").symlink_to(vault)
+    assert problem(store=lasting / "vault, linked well") is None
+    # The last part of the Python's path is not followed: the Python of a virtual environment
+    # is a link, and what it leads to is not judged.
+    (python.parent / "python, linked").symlink_to(in_tmp / "bin" / "python")
+    assert problem(python.parent / "python, linked") is None
+    # A link around a folder that everybody may write, or that belongs to another account.
+    shared = lasting / "shared"
+    (shared / "mine" / "bin").mkdir(parents=True)
+    (shared / "mine" / "bin" / "python").symlink_to(sys.executable)
+    (shared / "mine" / "vault").mkdir()
+    for folder in (shared, shared / "mine", shared / "mine" / "bin", shared / "mine" / "vault"):
+        folder.chmod(0o755)
+    (lasting / "tools").symlink_to(shared / "mine")
+    around = lasting / "tools" / "bin" / "python"
+    assert problem(around) is None
+    assert problem(store=lasting / "tools" / "vault") is None
+    shared.chmod(0o777)
+    assert not hostwrite._may_not_last(str(around))  # (as written, the folder is not on the way)
+    assert problem(around) == "unstable"
+    assert problem(store=lasting / "tools" / "vault") == "unstable"
+    shared.chmod(0o755)
+    if os.getuid() == 0:
+        os.chown(shared, 4242, -1)
+        assert problem(around) == "unstable"
+        os.chown(shared, 0, -1)
+    assert problem(around) is None
+    # Where the system does not say where a path lies, it may not last.
+    real_realpath = os.path.realpath
+    for unknown in (python.parent, vault):
+
+        def refusing(path: Any, unknown: Path = unknown, **kwargs: Any) -> str:
+            if os.fspath(path) == str(unknown):
+                raise OSError(errno.ELOOP, os.strerror(errno.ELOOP))
+            return real_realpath(path, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(os.path, "realpath", refusing)
+            assert problem() == "unstable", unknown
+    assert problem() is None
+
     # Under the folder for temporary files, where pytest's own folders lie.
     elsewhere_python = tmp_path / "venv" / "bin" / "python"
     elsewhere_python.parent.mkdir(parents=True)
@@ -2911,6 +3445,194 @@ def test_the_result_is_read_back(host: str, home: Path, monkeypatch: pytest.Monk
             connect(host, "other", told)
     assert told.actions == ["connect"]
     assert no_temporary_file(place.parent)
+
+
+@pytest.mark.parametrize("host", HOSTS)
+def test_a_read_back_that_cannot_read_is_not_told_as_a_failure(
+    host: str, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The file was replaced, and the system then does not let it be read.
+
+    Saying "failed" would be untrue, and a second entry of the record would say that the
+    file was not changed as announced. The name is looked at instead: where it leads to the
+    file this call put there, the change was made, and the answer says that it was not read
+    back. Anything else is a failure, as before.
+    """
+    place = folder_of(host)
+    shown = hostconfig.shown_path(place)
+    first = shown + hostwrite.FIRST_COPY
+    last = shown + hostwrite.LAST_COPY
+    real_open, real_read, real_lstat = os.open, os.read, os.lstat
+    real_replace, real_link = os.replace, os.link
+    placed: list[str] = []  # filled once the settings file was put in place
+    after: list[Callable[[], None]] = []  # what another program does right after that
+
+    def replace(src: Any, dst: Any, **kwargs: Any) -> None:
+        real_replace(src, dst, **kwargs)
+        if os.fspath(dst) == place.name:
+            placed.append("replace")
+            for act in after:
+                act()
+
+    def link(src: Any, dst: Any, **kwargs: Any) -> None:
+        real_link(src, dst, **kwargs)
+        if os.fspath(dst) == place.name:
+            placed.append("link")
+            for act in after:
+                act()
+
+    def opening(error: OSError) -> Callable[..., int]:
+        def open_(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+            if placed and os.fspath(path) == place.name:
+                raise error
+            return real_open(path, flags, *args, **kwargs)
+
+        return open_
+
+    def no_reading(descriptor: int, count: int) -> bytes:
+        if placed:
+            raise OSError(errno.EIO, os.strerror(errno.EIO))
+        return real_read(descriptor, count)
+
+    def press(
+        patches: dict[str, Any],
+        call: Callable[[Told], dict[str, Any]],
+        then: Callable[[], None] | None = None,
+    ) -> tuple[dict[str, Any], Told]:
+        placed.clear()
+        after[:] = [] if then is None else [then]
+        told = Told()
+        with monkeypatch.context() as patch:
+            patch.setattr(os, "replace", replace)
+            patch.setattr(os, "link", link)
+            for name, function in patches.items():
+                patch.setattr(os, name, function)
+            answer = call(told)
+        return answer, told
+
+    def clear() -> None:
+        for item in place.parent.iterdir():
+            item.unlink()
+
+    no_descriptor = {"open": opening(OSError(errno.EMFILE, os.strerror(errno.EMFILE)))}
+    ways: list[dict[str, Any]] = [
+        no_descriptor,
+        {"open": opening(PermissionError(errno.EACCES, os.strerror(errno.EACCES)))},
+        {"read": no_reading},
+    ]
+    # "Connect": the entry is in the file, the answer says so, and the record has one entry.
+    for way in ways:
+        clear()
+        put(place, other(host))
+        answer, told = press(way, lambda told: connect(host, "other", told))
+        assert answer == {
+            "connected": True,
+            "state": "present",
+            "path": shown,
+            "copy": first,
+            "replaced": False,
+            "not_read_back": True,
+        }, way
+        assert (placed, told.actions, told.entered) == (["replace"], ["connect"], 1)
+        assert place.read_text(encoding="utf-8") == with_ours(host)
+        assert names(place.parent) == [place.name, place.name + hostwrite.FIRST_COPY]
+        assert state_of(host) == "present"
+    # An entry that pointed elsewhere and holds more: the state is told from the text written.
+    clear()
+    put(place, ENTRY_ELSEWHERE_JSON if host == JSON_HOST else ENTRY_ELSEWHERE_TOML)
+    answer, told = press(no_descriptor, lambda told: connect(host, "differs", told))
+    assert answer == {
+        "connected": True,
+        "state": "present_more",
+        "path": shown,
+        "copy": last,
+        "replaced": True,
+        "not_read_back": True,
+    }
+    assert told.actions == ["connect"]
+    assert state_of(host) == "present_more"
+    # A file that was not there.
+    clear()
+    answer, told = press(no_descriptor, lambda told: connect(host, "no_file", told))
+    assert answer == {
+        "connected": True,
+        "state": "present",
+        "path": shown,
+        "copy": None,
+        "replaced": False,
+        "not_read_back": True,
+    }
+    assert (placed, told.actions) == (["link"], ["connect"])
+    assert names(place.parent) == [place.name]
+    assert (state_of(host), place.stat().st_nlink) == ("present", 1)
+    # "Disconnect": the entry is gone, and the answer says "removed".
+    for way in ways:
+        clear()
+        put(place, with_ours(host))
+        answer, told = press(way, lambda told: disconnect(host, "present", told))
+        assert answer == {"file": "removed", "path": shown, "copy": last, "not_read_back": True}
+        assert told.actions == ["disconnect"]
+        assert place.read_text(encoding="utf-8") in (other(host), other(host) + "\n")
+        assert state_of(host) == "other"
+    # A write that was read back says nothing of the kind.
+    clear()
+    put(place, other(host))
+    answer, told = press({}, lambda told: connect(host, "other", told))
+    assert (answer["connected"], "not_read_back" in answer) == (True, False)
+
+    # What is still a failure: the file cannot be read back, and its name does not lead to
+    # the file this call put there, or nothing can be said about it.
+    def failed(then: Callable[[], None] | None, patches: dict[str, Any] = no_descriptor) -> None:
+        clear()
+        put(place, other(host))
+        answer, told = press(patches, lambda told: connect(host, "other", told), then)
+        assert answer == {"connected": False, "state": "failed", "path": shown}
+        assert told.actions == ["connect", "connect-failed"]
+        assert told.entered == 2
+        assert no_temporary_file(place.parent)
+
+    # Another program put a file of its own there.
+    failed(lambda: exchange(place, other(host, ", saved by another program")))
+    assert place.read_text(encoding="utf-8") == other(host, ", saved by another program")
+    # It removed the file.
+    failed(place.unlink)
+    assert not place.exists()
+    # It wrote into the file that was put there: more bytes, or as many at another time.
+    failed(lambda: place.write_text(with_ours(host) + "\n", encoding="utf-8"))
+
+    def same_size_later() -> None:
+        place.write_text(with_ours(host).replace("tool", "loot"), encoding="utf-8")
+        ahead = time.time() + 2
+        os.utime(place, (ahead, ahead))
+
+    failed(same_size_later)
+    # A link took its place.
+    kept = put(home / "kept elsewhere", with_ours(host))
+
+    def linked() -> None:
+        place.unlink()
+        place.symlink_to(kept)
+
+    failed(linked)
+    assert place.is_symlink()
+    # The system says nothing about the name either.
+
+    def no_look(path: Any, **kwargs: Any) -> os.stat_result:
+        if placed and os.fspath(path) == place.name:
+            raise OSError(errno.EIO, os.strerror(errno.EIO))
+        return real_lstat(path, **kwargs)
+
+    failed(None, {**no_descriptor, "lstat": no_look})
+    # "Disconnect" in the same way.
+    clear()
+    put(place, with_ours(host))
+    answer, told = press(
+        no_descriptor,
+        lambda told: disconnect(host, "present", told),
+        lambda: exchange(place, with_ours(host)),
+    )
+    assert answer == {"file": "failed", "path": shown, "copy": None}
+    assert told.actions == ["disconnect", "disconnect-failed"]
 
 
 @pytest.mark.parametrize("host", HOSTS)

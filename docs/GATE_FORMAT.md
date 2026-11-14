@@ -1255,12 +1255,18 @@ and a body with a field `path` 400.
    is exchanged while a look or a write runs changes nothing. What is not a regular file (a
    symbolic link, a directory, a named pipe, a device) or is larger than 1 MiB is never opened.
 3. A file that passed is opened for reading only, without following a link and without waiting.
-   What was opened is looked at once more before a byte is read, and a file that has grown past
-   1 MiB by the time it is read, or changed its size while it was read, counts as not read. No
-   read can block. Where the system refuses to look at a folder or to open the file, the state
-   is `no_access`.
+   What was opened is looked at once more before a byte is read, and again after the last byte.
+   A file that has grown past 1 MiB by the time it is read counts as not read, and so does one
+   that was written while it was read: its size, or one of its two times of change, is another
+   after the last byte than before the first. (A program that rewrites the file in place with
+   as many bytes as it had, and sets its time back, changes the time of the last change of any
+   kind, which is the system's own. Two changes within one tick of the file system's clock
+   cannot be told apart this way; a file that was changed a moment ago is not written, R18.)
+   No read can block. Where the system refuses to look at a folder or to open the file, the
+   state is `no_access`.
 4. Beside the file, the two places of its [copies](#the-copies) are looked at (`lstat`); what
-   lies there is not read.
+   lies there is not read. For a file with two names the names in its folder are listed, to
+   see whether the other one is a temporary name the writer left (`not_read`, below).
 5. The file is read when one of the three routes is called, and at no other time: not for a
    configuration, not for the list of clients and its `tiles`, not on a timer. The page calls
    them on a press only.
@@ -1276,7 +1282,7 @@ registered client. (The look that came before it, and is gone, answered only for
 | `problem` | What keeps the entry from being written, found without the file: `expands`, `unstable`, `moved`, or `null` ([the rules](#the-rules-of-the-write), R14, R17, R1) |
 | `format` | `"JSON"` or `"TOML"` |
 | `path`, `folder` | The file and its folder, written with `~` where they lie in the home directory |
-| `real_folder` | For `linked`: where the folder really lies. Else `null` |
+| `real_folder` | For `linked`: where the folder really lies; `null` where the link was exchanged while the look asked where it leads, and the system would not say. Else `null` |
 | `variable` | The variable that decided the place (`XDG_CONFIG_HOME`, `GROK_HOME`), or `null` |
 | `entry` | The name of the entry: `locktender` |
 | `command` | The command the entry holds or would hold, as a list of texts: the Python that runs the app by its full path, fixed words, the client's name, the place of the store |
@@ -1301,7 +1307,7 @@ registered client. (The look that came before it, and is gone, answered only for
 | `linked` | A folder on the way is a symbolic link. Nothing behind it was read |
 | `no_access` | The system refused to look at a folder or to open the file |
 | `unreadable` | The file is not what it should be: not UTF-8, not valid JSON or TOML, a JSON key written twice, `NaN` or `Infinity`, a byte-order mark, something other than an object at the top, or `mcpServers` (`mcp_servers`) that is not an object (a table) |
-| `not_read` | Not a regular file, or larger than 1 MiB: it was not opened. For these three routes also a file with more than one name, and one that belongs to another account |
+| `not_read` | Not a regular file, or larger than 1 MiB: it was not opened; or it was written while it was read. For these three routes also a file with more than one name, and one that belongs to another account. One second name does not count: a temporary name of the writer for this file (R7), in the same folder. That is what a connect leaves that made the file and was cut before it could take the name away; the file is then looked at like any other, and the writer removes the name before it changes the file |
 | `unsupported` | The file is TOML and the app runs on a Python older than 3.11, which has no reader for it; or the home directory cannot be told |
 
 **Nothing from the file is in an answer.** A settings file of this kind can hold the keys and
@@ -1318,23 +1324,23 @@ no place and nothing of the file ([below](#what-the-record-holds-of-it)).
 | # | Rule | What it means |
 | --- | --- | --- |
 | R1 | The place is fixed | It is the place of the table above. A request chooses among three ids; the body holds `expect` and nothing else. Three variables of the app's own environment take part (`HOME`; `XDG_CONFIG_HOME` and `GROK_HOME` when they hold an absolute path); a fourth, `CODEX_HOME`, refuses the write for `chatgpt-desktop` when it is set (`moved`) |
-| R2 | Only the entry is added or changed | Parsed, the new file without the entry equals the old file without it: every key, value and type, and the order of the keys. In the entry, `command` and `args` are the app's; every other member and every table below it is what it was. In the text everything outside the edit is unchanged: byte for byte in JSON, line for line in TOML |
+| R2 | Only the entry is added or changed | Parsed, the new file without the entry equals the old file without it: every key, value and type, and the order of the keys. (One thing of the order is left aside when the entry is taken out of a TOML file: where the table `mcp_servers` stands among the top-level tables. Python's reader puts it where it first meets one of its tables, which may have been the entry.) In the entry, `command` and `args` are the app's; every other member and every table below it is what it was. In the text everything outside the edit is unchanged: byte for byte in JSON, line for line in TOML |
 | R3 | A file that cannot be parsed is never written | The state is `unreadable` |
-| R4 | A link or a special file is never written, and nothing is written through a link | A symbolic link, a directory, a named pipe, a file with more than one name and a file of another account are `not_read`; a folder on the way that is a link is `linked`. Every call of a write names its file through the one folder that was opened |
+| R4 | A link or a special file is never written, and nothing is written through a link | A symbolic link, a directory, a named pipe, a file with more than one name and a file of another account are `not_read`; a folder on the way that is a link is `linked`. Every call of a write names its file through the one folder that was opened. A file whose one other name is a temporary name the writer left is not `not_read` (the states, above); it is not replaced while it has two names (R18) |
 | R5 | A file larger than 1 MiB is never written | It is `not_read`; a new text that would be larger is `by_hand` |
 | R6 | A copy of the file as it was is kept before every change | See [the copies](#the-copies) |
 | R7 | One step | The new bytes go to a temporary file in the same folder (`.<file name>.<24 hexadecimal digits>.tmp`), are flushed to disk, and take the file's place by one `replace`. A file that was not there is put there by `link`, which fails when something lies there. At no moment does the file hold half of the new text |
-| R8 | The result is read back | After the replace the file is read through the same reader and must hold the entry |
+| R8 | The result is read back | After the replace the file is read through the same reader and must hold the entry. Where the system does not let it be read then, its name is looked at: if that still leads to the file that was put there (device, inode, size and time of the content), the change was made, and the answer says `not_read_back` |
 | R9 | A folder that is not there is not made | The state is `no_folder`; the module has no call that makes a folder |
 | R10 | A request that changes the file needs owner mode | For a connect always; for a removal when `expect` is `present` or `present_more`. It is checked before any file is looked at |
 | R11 | The change is in the record, without a new kind of entry | One `policy` entry with `by` set, written before the file is replaced ([below](#what-the-record-holds-of-it)) |
 | R12 | A removal takes out that one entry | Only an entry whose `command` and `args` are this store's, in the state the owner was shown. In JSON an `mcpServers` that becomes empty stays as `{}`; in TOML a header `[mcp_servers]` that was written out stays, and so does every comment. An entry that points elsewhere is left |
-| R13 | Nothing is written into a file the owner did not see | The state found at the write must be the one in `expect`. Device, inode, size and the two times of change of the file must be those of the file that was read, at two moments: before the record is written, and directly before the replace. A file that is gone counts as changed. Else 409 `changed` |
+| R13 | Nothing is written into a file the owner did not see | The state found at the write must be the one in `expect`. Device, inode, size and the two times of change of the file must be those of the file that was read, at two moments: before the record is written, and directly before the replace. A file that is gone counts as changed. Else 409 `changed`. What "the file that was read" was is settled by the reader: size and times were the same before its first byte and after its last |
 | R14 | Grok Build is given no command it would rewrite | For `grok-build`, a command or argument that holds `${` is `expands`: by xAI's documentation such text is replaced by the value of a variable |
 | R15 | A demo writes nothing and looks at nothing | All three routes answer 409 `demo` before any file is looked at |
 | R16 | The writer starts no program | Whether the AI application runs is not looked up. (The app starts its own Python once at each connect, to see that the command it is about to write starts.) |
-| R17 | A command that may not last is not written | The entry makes another program start this Python at each of its starts. The write is refused (`unstable`) when the path of the Python or of the store, as written, has a part that belongs to an account other than the owner's or root, or that everybody may write, or when it lies under a folder for temporary files (`tempfile.gettempdir()`, `/tmp`, `/var/tmp`, `/dev/shm`, and where these really lie). A part that a group may write is not refused, and the file behind a Python that is a link is not looked at |
-| R18 | A file that is being saved is not written | A file whose time of change is less than five seconds old is `recent` |
+| R17 | A command that may not last is not written | The entry makes another program start this Python at each of its starts. The write is refused (`unstable`) when the path of the Python or of the store has a part that belongs to an account other than the owner's or root, or that everybody may write, or when it lies under a folder for temporary files (`tempfile.gettempdir()`, `/tmp`, `/var/tmp`, `/dev/shm`, and where these really lie). Each path is judged twice: as it is written, and where it really lies, with every symbolic link on its way followed, so that a link into such a place, or around a folder that everybody may write, does not lead past the rule. For the store a last part that is a link is followed too. A part that a group may write is not refused, and the file behind a Python that is a link is not looked at. A path of which the system does not say where it lies is refused |
+| R18 | A file that is being saved is not written | A file whose time of change is less than five seconds old is `recent`. So is a file that still has a temporary name of the writer beside its own: that name is removed once it is 60 seconds old (step 4 of the writer), and no file is replaced while it has two names |
 
 #### A connect
 
@@ -1368,16 +1374,19 @@ until the owner chooses: the look says so ahead, in `answered_change`.
 **The writer**, step by step. A step that stops removes every temporary file of the call.
 
 1. The folder is opened. `no_folder`, `linked`, `no_access` and `unsupported` stop.
-2. A temporary file that an earlier call left in the folder is removed: a regular file of the
+2. The file is read. `unreadable`, `not_read` and `no_access` stop.
+3. A state that is not `expect` stops with `changed`. Nothing in the folder was touched up to
+   here.
+4. A temporary file that an earlier call left in the folder is removed: a regular file of the
    owner whose name is of the pattern of R7 for this settings file and that is more than 60
-   seconds old.
-3. The file is read. `unreadable`, `not_read` and `no_access` stop.
-4. A state that is not `expect` stops with `changed`. The state `present_as`, when the store has
-   a client of that other name, stops with `present_as`: the file connects the program to this
-   store already, under a name the store answers.
+   seconds old. Where one was removed, the file is read again, as in steps 2 and 3: the
+   temporary file may have been a second name of the settings file itself. The state
+   `present_as`, when the store has a client of that other name, stops with `present_as`: the
+   file connects the program to this store already, under a name the store answers.
 5. For `present` and `present_more` nothing is written: one entry is recorded
    (`connect-kept:<host>`), with the new policy, and the answer is `connected`.
-6. A file that was changed less than five seconds ago stops with `recent`.
+6. A file that was changed less than five seconds ago, or that still has two names, stops with
+   `recent` (R18).
 7. The new text is made ([JSON](#the-two-edits), [TOML](#the-two-edits)). A text the rules
    cannot make, and one that would be larger than 1 MiB, stop with `by_hand`.
 8. Two temporary files are written and flushed: the new content, with the lowest nine
@@ -1392,7 +1401,9 @@ until the owner chooses: the look says so ahead, in `answered_change`.
    made is removed again.
 10. The folder is flushed, and the file is read back. It must hold the entry (`present` or
     `present_more`). If it does not, a second entry is recorded as in step 9 and the answer is
-    `failed`.
+    `failed`. A file that the system does not let be read at this moment is no failure while
+    its name leads to the file that was put there (R8): the answer is `connected` with
+    `not_read_back`, and nothing more is recorded.
 
 The store's lock, the one that locking takes, is held in step 9 only: for two looks at the
 file's status, the record, and putting the copy and the file in place. It is not held while a
@@ -1410,16 +1421,23 @@ policy in force is still the one the new policy was built from (else 409 `change
 | Owner mode ran out, the store locked or its policy changed while the file was prepared | 403 `reauth_required`, 409 `locked`, 409 `changed` | unchanged | unchanged |
 | The record cannot be written | 503 `unavailable` | unchanged | unchanged |
 | After the record: the copy cannot be put in place, or the replace fails | 200 `{"connected": false, "state": "no_copy"}` or `"failed"` | the policy is put back; two entries | unchanged |
-| After the replace: the file read back holds no entry of this store | 200 `{"connected": false, "state": "failed"}` | the policy is put back; two entries. Where the policy was changed in between it is left, and the answer has `"kept": true` while the client is still registered | as the next look finds it |
+| After the replace: the file read back holds no entry of this store; or it could not be read back and its name no longer leads to the file that was put there, or cannot be looked at | 200 `{"connected": false, "state": "failed"}` | the policy is put back; two entries. Where the policy was changed in between it is left, and the answer has `"kept": true` while the client is still registered | as the next look finds it |
 | The file read back holds the entry, in other bytes than were written | 200 `{"connected": true, "changed_since": true, …}` | changed; one entry | holds the entry |
+| The file could not be read back, and its name leads to the file that was put there | 200 `{"connected": true, "not_read_back": true, …}` | changed; one entry | holds the entry |
 | Everything went through | 200 `{"connected": true, "state", "path", "copy", "replaced", "groups", "app"}` | changed; one entry | holds the entry |
 
-`state` in the last two rows is `present` or `present_more`. `replaced` is true when an entry of
+`state` in the last three rows is `present` or `present_more`; where the file was not read
+back, it is told from the text that was written. `replaced` is true when an entry of
 that name was there and pointed elsewhere. `copy` is the place of the copy this call made, or
 `null` when the file was new or nothing was written. `app` is the member of that name of the
 look, as it is after the call. "Unchanged" for the file means that the folder holds exactly the
-files it held before the call, and no temporary file; where a latest copy was put in place
-before a failure, it stays, and then holds the file as it is.
+files it held before the call, and no temporary file of this call; where a latest copy was put
+in place before a failure, it stays, and then holds the file as it is. One kind of file is not
+counted: a temporary file that an earlier call left behind (step 4). A call that is answered
+`changed` because the state is not the one in `expect`, or that stops at the reader, has not
+removed it; a call that found the file in the state `expect` has, whatever it answers then.
+The page shows an answer with `not_read_back` as the sheet of a connected client, which says
+that the entry is in the file, and not as the sheet that says "Written and read back".
 
 Between the second comparison and the replace another program can still change the file; the
 time is that of one system call, and what it wrote in that time is lost.
@@ -1448,7 +1466,10 @@ out of the store when it was registered (`app_removed`), and one entry is record
 was left. When there is neither an entry in the file nor a registered client, nothing is
 recorded. A removal that fails after its record is answered `"file": "failed"`, with a second
 entry (`disconnect-failed:<host>`); the client stays removed. Both copies stay: the app never
-deletes one.
+deletes one. With `"file": "removed"` the answer can have `changed_since` or `not_read_back`,
+as the answer of a connect has them. A temporary file that an earlier call left is removed
+when `expect` is `present` or `present_more` and the file was found in that state, and in no
+other case.
 
 #### The two edits
 
@@ -1485,7 +1506,16 @@ of these tables that is neither blank nor only a comment; where two blank lines 
 to each other at the place of the header, one of them goes. `by_hand`, with the file untouched,
 is the answer for everything these rules cannot edit: `mcp_servers` or the entry written as an
 inline table, the entry written with dotted keys, the header twice or inside a multi-line
-string, an entry without `command`, a `command` or `args` that runs over several lines.
+string, an entry without `command`, a `command` or `args` that runs over several lines. A file
+without the entry in which a line of a multi-line string reads like the header is `by_hand`
+for a connect too: with the three lines appended the header would stand there twice, and a
+removal could not take out what the connect had put in.
+
+For a removal the two parsed files are compared without regard to where `mcp_servers` stands
+among the top-level tables (R2). An entry that is the first server of the file, with another
+table between it and the next server, is taken out like any other: no line moves, and every
+key and value is what it was, but `tomllib` meets the table of servers later once the entry
+is gone.
 
 A connect and then a removal can leave a TOML file with one blank line more at its end than it
 had: the blank line that was put before the three lines. A JSON file that had an `mcpServers`

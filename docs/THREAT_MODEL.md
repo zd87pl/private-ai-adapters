@@ -613,7 +613,11 @@ route.
   following a link and without waiting. A symbolic link, a directory, a named
   pipe and a larger file were each answered `not_read`, in a millisecond or
   two, in a run of the look that came before these routes, which read through
-  the same reader. A folder is not gone through either when it is a symbolic
+  the same reader. A file that another program writes while it is read is
+  not read either: what the system says of it is compared before the first
+  byte and after the last, so that the bytes that are kept, and later
+  written back with the entry, are not a mix of two versions of the file. A
+  folder is not gone through either when it is a symbolic
   link: each folder below the home folder (or below the folder a variable
   names) is looked at and opened without following a link, and the file is
   reached through the folder that was opened. An earlier version followed
@@ -644,12 +648,17 @@ route.
   code that looks, or makes the file where its folder is there and the file
   is not: never one that cannot be parsed, that is a link or a special file,
   is larger than 1 MiB, has a second name or belongs to another account, and
-  never through a folder that is a link. It does not create a folder: an AI
+  never through a folder that is a link. (A second name that is Locktender's
+  own, the temporary name of a write that was cut off after it had made the
+  file, is removed first.) It does not create a folder: an AI
   app that was never opened has none, and stays without. It adds Locktender's own entry, or changes the command of an
   entry of that name, or takes the entry out, by editing the text: every
   other byte of a JSON file and every other line of a TOML file stays, and
   the result, parsed again, must hold what the file held before, key for key
-  and in the same order. A request names the state of the file that the
+  and in the same order (but for the place of the table of servers among the
+  tables of a TOML file from which the entry is taken out: Python's reader
+  puts it where it first meets one of its tables, which may have been the
+  entry). A request names the state of the file that the
   owner was shown, and in any other state nothing is written; nor when the
   file is another one, or was changed, between the look and the replace, or
   was changed less than five seconds before. Before each change the bytes
@@ -659,7 +668,10 @@ route.
   changed is written before the replace, as a release is recorded before its
   text is handed over, and if the change then does not happen a second entry
   says so and the vault's settings are put back. Afterwards the file is read
-  back and must hold the entry. An entry of Locktender's name that points
+  back and must hold the entry. Where the system does not let it be read at
+  that moment, and its name still leads to the file that was just put there,
+  the change is not called a failure: the answer says that the file was
+  written and not read back. An entry of Locktender's name that points
   somewhere else is never removed: the owner was not shown what it holds.
   The write needs owner mode, always; taking the entry out needs it too.
 - **Only on a press.** The file is read when one of these routes is called,
@@ -718,7 +730,9 @@ answered 401 without the session. What is new:
    owner's rights, the Python that ran Locktender at the request. The write
    refuses a Python or a vault that lies under a folder for temporary files,
    in a folder that everybody may write, or in one that belongs to another
-   account. It does not refuse a folder that a group may write, and it does
+   account. It judges each of the two paths as it is written and where it
+   really lies, so a symbolic link on the way does not lead past the rule.
+   It does not refuse a folder that a group may write, and it does
    not follow a Python that is a link to the file behind it. If that Python
    is later replaced, the AI app starts the replacement.
 6. The place of the file follows `HOME`, `XDG_CONFIG_HOME` and `GROK_HOME` as

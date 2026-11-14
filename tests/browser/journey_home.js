@@ -900,6 +900,28 @@ async function runB(browser) {
     });
   });
 
+  await step('B: an answer that says the file was written and could not be read back: the sheet says that the entry is in the file, not "Written and read back", and no look is sent', async () => {
+    // No walk-through can make the system refuse a read at that one moment. The word the app answers with then is put into its answer on the way to the page; everything else of the answer is the app's.
+    const address = '**/api/connect/claude-desktop';
+    await page.route(address, async (route) => {
+      const response = await route.fetch();
+      const answer = await response.json();
+      await route.fulfill({ response, json: Object.assign(answer, { not_read_back: true }) });
+    });
+    await pressTile(walk, 'claude', 'offer');
+    const mark = walk.sent.length;
+    await page.locator('dialog[open] #connect-go').click();
+    await sheetShows(walk, 'on');
+    await page.unroute(address);
+    const sent = walk.changesSince(mark).filter((entry) => entry !== 'POST /api/interface');
+    check(JSON.stringify(sent) === JSON.stringify(['POST /api/connect/claude-desktop']), `"Connect" sent ${sent.join(', ')}`);
+    await saysText(walk, 'dialog[open] #connect-on-file', 'connect.on.status.file', { path: tile.path });
+    check((await walk.count('dialog[open] #connect-result')) === 0, 'the sheet says "Written and read back" of a file that was not read back');
+    await says(page.locator('dialog[open] h2').first(), tile.label, 'the sheet is not the one of a connected app');
+    check(entryIn(walk, file).servers.includes(walk.entry), 'the entry is not in the file');
+    await closeWith(walk, 'connect-done');
+  });
+
   await step('B: an entry that points elsewhere and holds "enabled": the offer says so; after "Connect" the other member is still there, and the sheet says the entry is switched off', async () => {
     const other = { mcpServers: { [walk.entry]: { command: '/usr/bin/other', args: ['serve'], enabled: false } }, theme: 'dark' };
     put(`${JSON.stringify(other, null, 2)}\n`);

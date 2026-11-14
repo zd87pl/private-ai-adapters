@@ -293,7 +293,10 @@ async function connect(ctx, sheet, view) {
   try {
     const answer = await api.connectWrite(host, look.state);
     view.answer = answer;
-    if (answer.connected === true) view.state = "connected";
+    // Written, but the system did not let the file be read back: the sheet that says "read back" is not shown.
+    // The sheet of a connected app is, from what the answer says of the file and of the app; no file is looked at for it.
+    if (answer.connected === true && answer.not_read_back === true) settle(ctx, view, Object.assign({}, look, { state: answer.state, app: answer.app }));
+    else if (answer.connected === true) view.state = "connected";
     else if (answer.state === "expands") view.state = "expands";
     else if (answer.state === "present_as") {
       view.state = "as";
