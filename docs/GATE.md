@@ -319,7 +319,9 @@ here on the address of the page names the step, so reloading the tab shows the s
 
 Along with the vault, Locktender writes two words into a small file in the vault's folder that is
 not sealed: which view you use, which is Basic for a new vault, and that setting up is not
-finished. [Basic and Pro](#basic-and-pro) says what the file is for.
+finished. The file can hold a third word, a language for the page (`en` or `pl`). The page has no
+switch for it yet, so the file of a vault you create here holds the two.
+[Basic and Pro](#basic-and-pro) says what the file is for.
 
 ### Step 2: App
 
@@ -579,8 +581,8 @@ sealed, it is no setting of the vault, and changing it leaves no entry in the re
   and Basic shows it no card "Finish setting up".
 - The demo opens in Basic.
 - `wdva gate app --view basic` and `wdva gate app --view pro` set the view at the start.
-- A file that is missing, or that holds anything but those two words, counts as no file. It never
-  keeps a vault from unlocking.
+- A file that is missing, or that holds anything but those two words, with a language (`en` or
+  `pl`) beside them or without one, counts as no file. It never keeps a vault from unlocking.
 
 **A visit to Pro.** Where Basic shows a thing it does not change, it has a link into Pro: "Change
 in Pro", "Open in Pro", "Add an app (in Pro)", "Words to replace". Following one while your view
@@ -1295,11 +1297,13 @@ replacement.
 
 - **The vault folder.** Every file in it is sealed, except three in its subfolder `run`: a lock
   file, while the vault is unlocked the socket, and the small file `interface.json`. That file
-  holds two words about the page and nothing from the vault: which view you use (`basic` or
-  `pro`) and whether setting up is finished (`open` or `done`); see
-  [Basic and Pro](#basic-and-pro). Without the passphrase the folder shows that it is a vault,
-  how many files it holds, their sizes and the times they were written, and those two words. It
-  shows no title, no file name, no text, no search, no app name and no setting of the vault.
+  holds two or three words about the page and nothing from the vault: which view you use (`basic`
+  or `pro`), whether setting up is finished (`open` or `done`), and a language for the page (`en`
+  or `pl`) once one is kept there; see [Basic and Pro](#basic-and-pro). Without the passphrase
+  the folder shows that it is a vault, how many files it holds, their sizes and the times they
+  were written, and those words. It shows no title, no file name, no text, no search, no app
+  name and no setting of the vault. The language, if one is kept, is also told to whatever
+  program on this computer asks the address of the page, before it has paired.
   Locktender refuses to create a vault inside a folder named Dropbox, OneDrive, Google Drive,
   iCloud Drive, Mobile Documents or CloudStorage, because the sealed files and their sizes would
   be copied to a provider. It knows these names and no others.

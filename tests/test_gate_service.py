@@ -166,7 +166,7 @@ def test_state_locked_and_unlocked(vault: GateService, gate_clock: FakeClock) ->
     for key in UNLOCKED_ONLY:
         assert locked[key] is None, key
     # A vault from before the two views: Pro, set up, and nothing kept about it.
-    assert locked["interface"] == {"view": "pro", "setup": "done", "stored": False}
+    assert locked["interface"] == gs.interface("pro", "done", stored=False)
     assert locked["launch"] == {"command": None, "port_fixed": False}
 
     start = gate_clock.now
@@ -383,7 +383,8 @@ LOCKED_CALLS: dict[str, Callable[[GateService], Any]] = {
 
 def test_the_locked_calls_cover_the_service() -> None:
     # Which view the owner uses is not sealed and can be kept while the vault is locked.
-    always = {"state", "create_store", "unlock", "lock", "set_interface"}
+    # The language is asked before a page is even paired, and is answered whatever happens.
+    always = {"state", "create_store", "unlock", "lock", "set_interface", "language"}
     # Asking the played app again exists in a demo only: a real vault has no such address,
     # locked or not (test_demo_again_is_not_there_outside_a_demo).
     demo_only = {"demo_again"}
@@ -2208,8 +2209,9 @@ def test_connect_says_when_the_command_cannot_start(
 
 # -- which view the owner uses: a small file beside the vault, not sealed --------------------
 
-NO_FILE = {"view": "pro", "setup": "done", "stored": False}
+NO_FILE = gs.interface("pro", "done", stored=False)
 GOOD_FILE = b'{"view": "basic", "setup": "open"}'
+GOOD_FILE_PL = b'{"view": "basic", "setup": "open", "language": "pl"}'
 
 
 def interface_file(store: Path) -> Path:
@@ -2233,12 +2235,14 @@ def test_creating_a_vault_writes_the_interface_file(
     assert service.state()["interface"] is None  # no vault yet
     state = service.create_store(passphrase=gs.PASSPHRASE)
     path = interface_file(short_store_dir)
+    # Without a language it is the file of every version so far: two keys, 35 bytes.
     assert path.read_bytes() == GOOD_FILE + b"\n"
+    assert len(path.read_bytes()) == 35
     assert json.loads(path.read_bytes()) == {"view": "basic", "setup": "open"}
     assert stat.S_ISREG(path.lstat().st_mode)
     assert stat.S_IMODE(path.lstat().st_mode) == 0o600
     assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
-    assert state["interface"] == {"view": "basic", "setup": "open", "stored": True}
+    assert state["interface"] == gs.interface("basic", "open")
     # Nothing was left beside it: the lock, the socket of the unlocked vault, and the file.
     assert sorted(item.name for item in path.parent.iterdir()) == [
         "gate.sock",
@@ -2260,12 +2264,28 @@ def test_creating_a_vault_writes_the_interface_file(
     try:
         assert not other.exists(), "a start wrote something where no vault is"
         created = started_in_pro.create_store(passphrase=gs.PASSPHRASE)
-        assert created["interface"] == {"view": "pro", "setup": "open", "stored": True}
+        assert created["interface"] == gs.interface("pro", "open")
         assert json.loads(interface_file(other).read_bytes()) == {"view": "pro", "setup": "open"}
     finally:
         started_in_pro.close()
     with pytest.raises(ValueError, match="view"):
         GateService(other, view="expert")
+
+    # A vault created with a language keeps it as the third word, and nothing else is other.
+    polish = short_store_dir.parent / "polish"
+    with_language = GateService(polish, clock=gate_clock, scrypt_n=gs.FAST_SCRYPT)
+    try:
+        created = with_language.create_store(passphrase=gs.PASSPHRASE, language="pl")
+        assert created["interface"] == gs.interface("basic", "open", "pl")
+        assert interface_file(polish).read_bytes() == GOOD_FILE_PL + b"\n"
+        assert stat.S_IMODE(interface_file(polish).lstat().st_mode) == 0o600
+        assert sorted(item.name for item in interface_file(polish).parent.iterdir()) == [
+            "gate.sock",
+            "interface.json",
+            "lock",
+        ]
+    finally:
+        with_language.close()
 
 
 def test_a_vault_without_the_file_is_pro_done_and_not_stored(
@@ -2279,14 +2299,16 @@ def test_a_vault_without_the_file_is_pro_done_and_not_stored(
     every_answer(vault)
     vault.connect_check(name="claude-desktop")
     vault.reauth(passphrase=gs.PASSPHRASE)
+    assert vault.language() is None
     vault.lock()
     vault.state()
+    assert vault.language() is None
     vault.unlock(passphrase=gs.PASSPHRASE)
     assert vault.state()["interface"] == NO_FILE
     assert sorted(item.name for item in path.parent.iterdir()) == ["gate.sock", "lock"]
     # Until the owner presses the switch. Then the vault counts as set up, which it is.
     state = vault.set_interface(view="basic")
-    assert state["interface"] == {"view": "basic", "setup": "done", "stored": True}
+    assert state["interface"] == gs.interface("basic", "done")
     assert json.loads(path.read_bytes()) == {"view": "basic", "setup": "done"}
 
 
@@ -2299,7 +2321,13 @@ BROKEN_FILES: dict[str, bytes] = {
     "an empty file": b"",
     "a list": b'["basic", "open"]',
     "a text": b'"basic"',
-    "a third key": b'{"view": "basic", "setup": "open", "note": "mine"}',
+    "a third key that is not the language": b'{"view": "basic", "setup": "open", "note": "mine"}',
+    "a language that does not exist": b'{"view": "basic", "setup": "open", "language": "de"}',
+    "a language that is not text": b'{"view": "basic", "setup": "open", "language": null}',
+    "a language in other letters": b'{"view": "basic", "setup": "open", "language": "PL"}',
+    "the language twice": GOOD_FILE_PL[:-1] + b', "language": "pl"}',
+    "a fourth key": GOOD_FILE_PL[:-1] + b', "note": "mine"}',
+    "the language without a view": b'{"setup": "open", "language": "pl"}',
     "one key only": b'{"view": "basic"}',
     "another view": b'{"view": "expert", "setup": "open"}',
     "another word for setup": b'{"view": "basic", "setup": "later"}',
@@ -2334,13 +2362,16 @@ def test_a_broken_interface_file_counts_as_none(
     in_place = path.lstat()
 
     answers: list[Any] = []
+    words: list[Any] = []
 
     def start_and_unlock() -> None:
         service = GateService(short_store_dir, clock=gate_clock, scrypt_n=gs.FAST_SCRYPT)
         try:
             answers.append(service.state()["interface"])
+            words.append(service.language())
             state = service.unlock(passphrase=gs.PASSPHRASE)  # never a reason not to unlock
             answers.append((state["locked"], state["interface"]))
+            words.append(service.language())
             answers.append(service.lock()["interface"])
         finally:
             service.close()
@@ -2352,6 +2383,7 @@ def test_a_broken_interface_file_counts_as_none(
     thread.join(timeout=60)
     assert not thread.is_alive(), "the service waited for whatever lies in the file's place"
     assert answers == [NO_FILE, (False, NO_FILE), NO_FILE]
+    assert words == [None, None], "a file that does not count gave the page a language"
     # What lay there was looked at and left as it was.
     after = path.lstat()
     assert (after.st_mode, after.st_size, after.st_mtime_ns) == (
@@ -2377,10 +2409,12 @@ def test_a_broken_interface_file_counts_as_none(
             assert service.unlock(passphrase=gs.PASSPHRASE)["locked"] is False
             return
         state = service.set_interface(view="basic")
-        assert state["interface"] == {"view": "basic", "setup": "done", "stored": True}
+        assert state["interface"] == gs.interface("basic", "done")
         assert stat.S_ISREG(path.lstat().st_mode)
         assert stat.S_IMODE(path.lstat().st_mode) == 0o600
+        # Two keys: choosing a view takes no language from what lay there, and invents none.
         assert json.loads(path.read_bytes()) == {"view": "basic", "setup": "done"}
+        assert service.language() is None
         if what == "a link to a good file":
             # The link was replaced, not followed: nothing outside the vault's folder changed.
             assert elsewhere.read_bytes() == GOOD_FILE
@@ -2402,7 +2436,7 @@ def test_a_folder_that_holds_only_the_interface_file_is_still_empty_for_a_new_va
         service.set_interface(view="basic")
     state = service.create_store(passphrase=gs.PASSPHRASE)
     # The file was no reason to refuse the place, and the new vault starts as a new vault.
-    assert state["interface"] == {"view": "basic", "setup": "open", "stored": True}
+    assert state["interface"] == gs.interface("basic", "open")
     assert interface_file(short_store_dir).read_bytes() == GOOD_FILE + b"\n"
 
 
@@ -2412,7 +2446,7 @@ def test_a_file_of_exactly_one_kibibyte_still_counts(
     gs.make_store(short_store_dir, clock=gate_clock).close()
     interface_file(short_store_dir).write_bytes(_padded(1024))
     service = GateService(short_store_dir, clock=gate_clock, scrypt_n=gs.FAST_SCRYPT)
-    assert service.state()["interface"] == {"view": "basic", "setup": "open", "stored": True}
+    assert service.state()["interface"] == gs.interface("basic", "open")
 
 
 def test_the_interface_file_is_read_at_start_at_each_unlock_and_after_a_write(
@@ -2422,18 +2456,19 @@ def test_the_interface_file_is_read_at_start_at_each_unlock_and_after_a_write(
     path.write_bytes(GOOD_FILE)  # by hand, after the service started
     assert vault.state()["interface"] == NO_FILE
     unlocked = vault.unlock(passphrase=gs.PASSPHRASE)
-    assert unlocked["interface"] == {"view": "basic", "setup": "open", "stored": True}
+    assert unlocked["interface"] == gs.interface("basic", "open")
     path.write_bytes(b'{"view": "pro", "setup": "done"}')
     assert vault.state()["interface"]["view"] == "basic"  # no timer reads it, and no request
     assert vault.lock()["interface"]["view"] == "basic"
     # A start reads it.
     again = GateService(short_store_dir, clock=gate_clock, scrypt_n=gs.FAST_SCRYPT)
-    assert again.state()["interface"] == {"view": "pro", "setup": "done", "stored": True}
+    assert again.state()["interface"] == gs.interface("pro", "done")
     # The service's own write is read back: what the state says is what the file holds.
     path.write_bytes(b"something else")
     assert vault.set_interface(view="basic")["interface"] == {
         "view": "basic",
         "setup": "open",  # as this service knew it; only "done" is ever set, and nothing reopens
+        "language": None,
         "stored": True,
     }
     assert json.loads(path.read_bytes()) == {"view": "basic", "setup": "open"}
@@ -2453,14 +2488,14 @@ def test_a_start_with_a_view_stores_it_and_a_start_without_writes_nothing(
     assert start() == NO_FILE
     assert not path.exists()
     # An existing vault opens in the view that was named, and the choice is stored.
-    assert start(view="basic") == {"view": "basic", "setup": "done", "stored": True}
+    assert start(view="basic") == gs.interface("basic", "done")
     assert json.loads(path.read_bytes()) == {"view": "basic", "setup": "done"}
     written = path.stat().st_mtime_ns
-    assert start() == {"view": "basic", "setup": "done", "stored": True}
+    assert start() == gs.interface("basic", "done")
     assert path.stat().st_mtime_ns == written, "a start without a view wrote the file"
     # Whether setting up was finished stays as it was.
     path.write_bytes(GOOD_FILE)
-    assert start(view="pro") == {"view": "pro", "setup": "open", "stored": True}
+    assert start(view="pro") == gs.interface("pro", "open")
     assert json.loads(path.read_bytes()) == {"view": "pro", "setup": "open"}
 
 
@@ -2477,6 +2512,9 @@ def test_switching_the_view_leaves_the_record_alone(
         {"view": "pro"},
         {"setup": "done"},
         {"view": "basic", "setup": "done"},
+        {"language": "pl"},
+        {"language": "en"},
+        {"view": "basic", "language": "pl"},
     ):
         gate_clock.advance(seconds=1)
         state = unlocked.set_interface(**change)
@@ -2484,7 +2522,7 @@ def test_switching_the_view_leaves_the_record_alone(
         assert state["store"] == before["store"]  # the number of sealed files and their size
         assert state["cursor"] > cursor, "the page would not learn that the view changed"
         cursor = state["cursor"]
-    assert state["interface"] == {"view": "basic", "setup": "done", "stored": True}
+    assert state["interface"] == gs.interface("basic", "done", "pl")
     assert unlocked.activity(limit=200)["items"] == items  # no entry was added
     assert gs.snapshot(unlocked.path) == sealed  # and no sealed file was touched
     assert unlocked.settings() == settings  # it is no setting of the vault
@@ -2492,6 +2530,7 @@ def test_switching_the_view_leaves_the_record_alone(
     locked = unlocked.lock()
     head = record_and_files(unlocked)
     assert unlocked.set_interface(view="pro")["interface"]["view"] == "pro"
+    assert unlocked.set_interface(language="en")["interface"]["language"] == "en"
     assert record_and_files(unlocked) == head
     assert locked["locked"] is True
 
@@ -2501,8 +2540,10 @@ def test_the_interface_can_be_set_while_locked_and_only_to_known_values(
 ) -> None:
     state = vault.set_interface(view="basic")
     assert state["locked"] is True
-    assert state["interface"] == {"view": "basic", "setup": "done", "stored": True}
+    assert state["interface"] == gs.interface("basic", "done")
     assert vault.set_interface(view="pro")["interface"]["view"] == "pro"
+    state = vault.set_interface(language="pl")
+    assert (state["locked"], state["interface"]) == (True, gs.interface("pro", "done", "pl"))
     path = interface_file(short_store_dir)
     held = path.read_bytes()
     for bad in (
@@ -2517,36 +2558,44 @@ def test_the_interface_can_be_set_while_locked_and_only_to_known_values(
         {"view": "x", "setup": "done"},
         {},
         {"view": None, "setup": None},
+        {"language": "de"},
+        {"language": "PL"},
+        {"language": "pl "},
+        {"language": "en-GB"},
+        {"language": ""},  # nothing takes a language away again
+        {"view": "basic", "language": "x"},
+        {"language": "en", "setup": "open"},
+        {"language": "en", "view": "x"},
+        {"view": None, "setup": None, "language": None},
     ):
         with refused(400, "invalid") as caught:
             vault.set_interface(**bad)
         assert caught[0].message.endswith(".")
         assert path.read_bytes() == held
-    assert vault.state()["interface"] == {"view": "pro", "setup": "done", "stored": True}
+    with refused(400, "invalid") as caught:
+        vault.set_interface(language="de")
+    assert caught[0].message == 'The language is "en" or "pl".'
+    assert vault.state()["interface"] == gs.interface("pro", "done", "pl")
 
-    # Without a vault there is nothing to keep a view for, and nothing is made.
+    # Without a vault there is nothing to keep a view or a language for, and nothing is made.
     nowhere = short_store_dir.parent / "nowhere"
     empty = GateService(nowhere, clock=gate_clock, scrypt_n=gs.FAST_SCRYPT)
     with refused(404, "not_found"):
         empty.set_interface(view="basic")
+    with refused(404, "not_found"):
+        empty.set_interface(language="pl")
     with refused(400, "invalid"):
         empty.set_interface(view="x")
+    with refused(400, "invalid"):
+        empty.set_interface(language="x")
     assert not nowhere.exists()
     # In a new vault setting up is open, can be marked done, and then stays done.
     created = empty.create_store(passphrase=gs.PASSPHRASE)
     try:
         assert created["interface"]["setup"] == "open"
-        assert empty.set_interface(view="pro")["interface"] == {
-            "view": "pro",
-            "setup": "open",
-            "stored": True,
-        }
+        assert empty.set_interface(view="pro")["interface"] == gs.interface("pro", "open")
         assert empty.set_interface(setup="done")["interface"]["setup"] == "done"
-        assert empty.set_interface(view="basic")["interface"] == {
-            "view": "basic",
-            "setup": "done",
-            "stored": True,
-        }
+        assert empty.set_interface(view="basic")["interface"] == gs.interface("basic", "done")
         with refused(400, "invalid"):
             empty.set_interface(setup="open")
     finally:
@@ -2560,9 +2609,10 @@ def test_setting_the_interface_needs_no_owner_mode(
     with refused(403, "reauth_required"):
         unlocked.add_app(name="another-app", hosted=False)  # owner mode has run out
     state = unlocked.set_interface(view="basic")
-    assert state["interface"] == {"view": "basic", "setup": "done", "stored": True}
+    assert state["interface"] == gs.interface("basic", "done")
     assert unlocked.set_interface(setup="done")["interface"]["setup"] == "done"
     assert unlocked.set_interface(view="pro")["interface"]["view"] == "pro"
+    assert unlocked.set_interface(language="pl")["interface"]["language"] == "pl"
     # And it did not renew owner mode either.
     assert state["owner_mode_until"] == unlocked.state()["owner_mode_until"]
     with refused(403, "reauth_required"):
@@ -2586,6 +2636,137 @@ def test_a_file_that_cannot_be_written_is_said_in_a_sentence(
     assert after["record"] == before["record"]
     # No temporary file was left behind.
     assert sorted(item.name for item in (unlocked.path / "run").iterdir()) == ["gate.sock", "lock"]
+
+
+def test_the_language_is_the_third_word(
+    short_store_dir: Path, gate_clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert service_module.LANGUAGES == ("en", "pl")
+    path = interface_file(short_store_dir)
+
+    def start(place: Path = short_store_dir, **options: Any) -> GateService:
+        return GateService(place, clock=gate_clock, scrypt_n=gs.FAST_SCRYPT, **options)
+
+    # -- no vault: no language, whatever lies where the file would be
+    assert start().language() is None
+    path.parent.mkdir(parents=True)
+    for folder in (short_store_dir, path.parent):
+        folder.chmod(0o700)  # as the app makes them
+    path.write_bytes(GOOD_FILE_PL)
+    service = start()
+    assert (service.language(), service.state()["interface"]) == (None, None)
+    # A language that does not exist is refused before anything is created ...
+    for bad in ("de", "PL", "", "pl "):
+        with refused(400, "invalid") as caught:
+            service.create_store(passphrase=gs.PASSPHRASE, language=bad)
+        assert caught[0].message == 'The language is "en" or "pl".'
+    assert sorted(item.name for item in short_store_dir.rglob("*")) == ["interface.json", "run"]
+    assert path.read_bytes() == GOOD_FILE_PL
+    # ... and a vault created without one has none: it does not take up what lay there.
+    created = service.create_store(passphrase=gs.PASSPHRASE)
+    assert created["interface"] == gs.interface("basic", "open")
+    assert path.read_bytes() == GOOD_FILE + b"\n"
+    assert service.language() is None
+    service.close()
+
+    # -- the three forms of the file, read at a start, for a vault that is locked
+    forms: list[tuple[bytes, dict[str, Any]]] = [
+        # the three words, each with a value that exists: a file, in that language
+        (GOOD_FILE_PL, gs.interface("basic", "open", "pl")),
+        (GOOD_FILE_PL + b"\n", gs.interface("basic", "open", "pl")),
+        (b'{"language": "en", "setup": "done", "view": "pro"}', gs.interface("pro", "done", "en")),
+        # a file of the version before: a file as ever, and no language was chosen
+        (GOOD_FILE, gs.interface("basic", "open")),
+        (b'{"view": "pro", "setup": "done"}\n', gs.interface("pro", "done")),
+        # anything else: no file
+        (GOOD_FILE_PL[:-1] + b', "theme": "dark"}', NO_FILE),
+        (b'{"view": "basic", "setup": "open", "language": "de"}', NO_FILE),
+        (b'{"view": "basic", "setup": "open", "language": null}', NO_FILE),
+        (b'{"view": "basic", "setup": "open", "lang": "pl"}', NO_FILE),
+    ]
+    for content, expected in forms:
+        path.write_bytes(content)
+        written = path.stat().st_mtime_ns
+        service = start()
+        try:
+            assert service.state()["interface"] == expected, content
+            assert service.language() == expected["language"], content
+            # Unlocked, the state says the same; and reading it wrote nothing.
+            assert service.unlock(passphrase=gs.PASSPHRASE)["interface"] == expected, content
+            assert service.language() == expected["language"], content
+            assert (path.read_bytes(), path.stat().st_mtime_ns) == (content, written)
+        finally:
+            service.close()
+
+    # -- what the app writes: two keys while no language was chosen, three once one was
+    path.write_bytes(GOOD_FILE)
+    service = start()
+    assert service.set_interface(view="pro")["interface"] == gs.interface("pro", "open")
+    assert path.read_bytes() == b'{"view": "pro", "setup": "open"}\n'  # no language was invented
+    cursor = service.state()["cursor"]
+    state = service.set_interface(language="pl")
+    assert state["interface"] == gs.interface("pro", "open", "pl")
+    assert state["cursor"] > cursor, "the page would not learn that the language changed"
+    assert path.read_bytes() == b'{"view": "pro", "setup": "open", "language": "pl"}\n'
+    assert stat.S_IMODE(path.lstat().st_mode) == 0o600
+    assert sorted(item.name for item in path.parent.iterdir()) == ["interface.json", "lock"]
+    assert service.language() == "pl"
+    # Once chosen it stays, whatever else is kept; only another language replaces it.
+    assert service.set_interface(view="basic")["interface"] == gs.interface("basic", "open", "pl")
+    assert service.set_interface(setup="done")["interface"] == gs.interface("basic", "done", "pl")
+    assert json.loads(path.read_bytes()) == {"view": "basic", "setup": "done", "language": "pl"}
+    state = service.set_interface(language="en", view="pro")
+    assert state["interface"] == gs.interface("pro", "done", "en")
+    assert path.read_bytes() == b'{"view": "pro", "setup": "done", "language": "en"}\n'
+    assert service.language() == "en"
+    # A start that names a view keeps the language, and a start that names none writes nothing.
+    service.close()
+    written = path.stat().st_mtime_ns
+    assert start().language() == "en"
+    assert path.stat().st_mtime_ns == written
+    named = start(view="basic")
+    assert named.state()["interface"] == gs.interface("basic", "done", "en")
+    assert path.read_bytes() == b'{"view": "basic", "setup": "done", "language": "en"}\n'
+
+    # -- the word is the one last read: at a start, at an unlock, after the app's own write
+    path.write_bytes(GOOD_FILE_PL)  # by hand, while the app runs
+    assert named.language() == "en"
+    assert named.unlock(passphrase=gs.PASSPHRASE)["interface"]["language"] == "pl"
+    assert named.language() == "pl"
+    # Asking for it does nothing to the vault: a session whose time is over is not ended by
+    # the question, which a page asks before it is paired, and nothing is recorded for it.
+    gate_clock.advance(hours=200)
+    records = len(gs.record_files(short_store_dir))
+    assert named.language() == "pl"
+    assert (short_store_dir / "run" / "gate.sock").exists()
+    assert len(gs.record_files(short_store_dir)) == records
+    assert named.state()["locked"] is True  # the state is what notices, as before
+    assert len(gs.record_files(short_store_dir)) == records + 1
+    assert named.language() == "pl"
+    named.close()
+
+    # -- a vault created with a language starts with the three words
+    polish = short_store_dir.parent / "polish"
+    service = start(polish)
+    try:
+        created = service.create_store(passphrase=gs.PASSPHRASE, language="pl")
+        assert created["interface"] == gs.interface("basic", "open", "pl")
+        assert interface_file(polish).read_bytes() == GOOD_FILE_PL + b"\n"
+        assert service.language() == "pl"
+        assert service.lock()["interface"] == created["interface"]
+        assert service.language() == "pl"
+    finally:
+        service.close()
+
+    # -- it never fails: where the folder cannot be looked at, there is no language
+    def broken(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("the folder cannot be looked at")
+
+    fresh = start(polish)
+    monkeypatch.setattr(service_module, "store_info", broken)
+    with pytest.raises(RuntimeError):
+        fresh.state()
+    assert fresh.language() is None
 
 
 # -- the two fields of the settings ---------------------------------------------------------

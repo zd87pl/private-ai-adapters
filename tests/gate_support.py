@@ -294,6 +294,17 @@ def snapshot(path: str | os.PathLike[str]) -> dict[str, bytes]:
     return {str(item.relative_to(root)): item.read_bytes() for item in sealed_files(root)}
 
 
+def interface(
+    view: str, setup: str, language: str | None = None, *, stored: bool = True
+) -> dict[str, Any]:
+    """What the app's state says under ``interface``: three words, and whether a file holds them.
+
+    ``language`` is ``None`` where the owner chose none, which is also what a
+    file of two keys means.
+    """
+    return {"view": view, "setup": setup, "language": language, "stored": stored}
+
+
 def forms_of(marker: str) -> list[bytes]:
     """The byte strings under which ``marker`` would show in a file: plain, UTF-16, base64."""
     raw = marker.encode("utf-8")

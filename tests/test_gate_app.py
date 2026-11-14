@@ -379,7 +379,7 @@ def test_the_demo_store(demo_service: GateService, short_store_dir: Path) -> Non
     assert (state["demo"], state["locked"]) == (True, False)
     assert state["encryption"]["documents"] == 4
     # A demo starts in the everyday view, with nothing left to set up.
-    assert state["interface"] == {"view": "basic", "setup": "done", "stored": True}
+    assert state["interface"] == gs.interface("basic", "done")
     held = json.loads((short_store_dir / "run" / "interface.json").read_bytes())
     assert held == {"view": "basic", "setup": "done"}
     assert state["serving"] == {
@@ -908,7 +908,7 @@ def test_the_view_the_check_and_the_demo_address_over_http(
     assert not store.exists()
 
     state = browser.ok("POST", "/api/store/create", {"passphrase": gs.PASSPHRASE})
-    assert state["interface"] == {"view": "basic", "setup": "open", "stored": True}
+    assert state["interface"] == gs.interface("basic", "open")
     assert state["launch"] == {"command": None, "port_fixed": False}  # built by the command
     browser.ok(
         "POST", "/api/apps", {"name": "claude-desktop", "hosted": True, "destination": "Anthropic"}
@@ -920,10 +920,10 @@ def test_the_view_the_check_and_the_demo_address_over_http(
     state = browser.ok("POST", "/api/interface", {"view": "pro"})
     assert (state["locked"], state["interface"]) == (
         False,
-        {"view": "pro", "setup": "open", "stored": True},
+        gs.interface("pro", "open"),
     )
     state = browser.ok("POST", "/api/interface", {"setup": "done"})
-    assert state["interface"] == {"view": "pro", "setup": "done", "stored": True}
+    assert state["interface"] == gs.interface("pro", "done")
     for body in (
         {"view": "expert"},  # a wrong value
         {"view": ""},
@@ -1020,7 +1020,7 @@ def test_the_view_the_check_and_the_demo_address_over_http(
     state = browser.ok("POST", "/api/interface", {"view": "basic"})
     assert (state["locked"], state["interface"]) == (
         True,
-        {"view": "basic", "setup": "done", "stored": True},
+        gs.interface("basic", "done"),
     )
     assert browser.error("POST", "/api/interface", {"view": "expert"}) == (400, "invalid")
     assert browser.error("POST", check, {}) == (409, "locked")
@@ -1028,7 +1028,94 @@ def test_the_view_the_check_and_the_demo_address_over_http(
     assert record_and_files(browser) == head
     # And the view that was kept is the one the vault opens with.
     state = browser.ok("POST", "/api/unlock", {"passphrase": gs.PASSPHRASE})
-    assert state["interface"] == {"view": "basic", "setup": "done", "stored": True}
+    assert state["interface"] == gs.interface("basic", "done")
+    assert not [body for body in browser.bodies if gs.PASSPHRASE in body]
+
+
+def test_the_language_over_http(app: App) -> None:
+    browser, store = app.browser, app.store
+    file = store / "run" / "interface.json"
+
+    def before_pairing() -> Any:
+        """What a page that has not paired is told: the answer of the session's address."""
+        answer = Browser(app.server.port).ok("GET", "/api/session")
+        assert set(answer) == {"paired", "pairing", "demo", "version", "name", "language"}
+        assert answer["paired"] is False
+        return answer["language"]
+
+    # No vault, no language. And keeping one needs the session like every call.
+    assert before_pairing() is None
+    assert browser.error("POST", "/api/interface", {"language": "pl"}) == (401, "pairing_required")
+    browser.ok("POST", "/api/session/pair", {"code": app.server.pairing_code})
+    assert browser.error("POST", "/api/interface", {"language": "pl"}) == (404, "not_found")
+
+    # A vault can be created with a language: one chosen before there was a vault to keep
+    # it beside. A word that is no language is refused before anything is made.
+    for bad in ("de", "", "PL"):
+        body = {"passphrase": gs.PASSPHRASE, "language": bad}
+        assert browser.error("POST", "/api/store/create", body) == (400, "invalid"), bad
+    assert browser.error(
+        "POST", "/api/store/create", {"passphrase": gs.PASSPHRASE, "language": 7}
+    ) == (400, "invalid")
+    assert not store.exists(), "a refused language left something behind"
+    assert before_pairing() is None
+    state = browser.ok("POST", "/api/store/create", {"passphrase": gs.PASSPHRASE, "language": "pl"})
+    assert state["interface"] == gs.interface("basic", "open", "pl")
+    assert file.read_bytes() == b'{"view": "basic", "setup": "open", "language": "pl"}\n'
+    assert before_pairing() == "pl"
+    head = record_and_files(browser)
+    listed = browser.ok("GET", "/api/activity?limit=200")
+
+    # The switch: one word, kept at once, and nothing else changes with it.
+    state = browser.ok("POST", "/api/interface", {"language": "en"})
+    assert (state["locked"], state["interface"]) == (False, gs.interface("basic", "open", "en"))
+    assert before_pairing() == "en"
+    assert browser.ok("POST", "/api/interface", {"view": "pro"})["interface"] == gs.interface(
+        "pro", "open", "en"
+    )
+    for body in (
+        {"language": "de"},
+        {"language": ""},
+        {"language": "EN"},
+        {"language": 1},
+        {"language": ["pl"]},
+        {"language": "pl", "locale": "pl-PL"},  # a field that is not declared
+    ):
+        assert browser.error("POST", "/api/interface", body) == (400, "invalid"), body
+    assert json.loads(file.read_bytes()) == {"view": "pro", "setup": "open", "language": "en"}
+    assert browser.ok("GET", "/api/state")["interface"] == gs.interface("pro", "open", "en")
+    # None of it wrote into the record or sealed anything.
+    assert record_and_files(browser) == head
+    assert browser.ok("GET", "/api/activity?limit=200") == listed
+
+    # Locked, the language can be read and changed like the view: it is kept for the screens
+    # that come before the passphrase.
+    assert browser.ok("POST", "/api/lock", {})["interface"]["language"] == "en"
+    head = record_and_files(browser)
+    state = browser.ok("POST", "/api/interface", {"language": "pl"})
+    assert (state["locked"], state["interface"]) == (True, gs.interface("pro", "open", "pl"))
+    assert before_pairing() == "pl"
+    assert record_and_files(browser) == head
+
+    # The app started again on this vault: a page is told the language before it has paired.
+    again = GateService(store, scrypt_n=gs.FAST_SCRYPT)
+    server = AppServer(again, port=0, pairing=True, version=__version__)
+    server.start()
+    try:
+        fresh = Browser(server.port)
+        assert fresh.ok("GET", "/api/session") == {
+            "paired": False,
+            "pairing": "code",
+            "demo": False,
+            "version": __version__,
+            "name": PRODUCT,
+            "language": "pl",
+        }
+        assert fresh.error("GET", "/api/state") == (401, "pairing_required")
+    finally:
+        server.stop()
+        again.close()
+    # No answer of all this held the passphrase.
     assert not [body for body in browser.bodies if gs.PASSPHRASE in body]
 
 
@@ -1188,6 +1275,7 @@ def test_the_command_runs_the_demo_and_removes_its_store() -> None:
             "demo": True,
             "version": __version__,
             "name": PRODUCT,
+            "language": None,  # nobody chose one
         }
         assert len(browser.ok("GET", "/api/apps")["apps"]) == 3
         # The page is told the passphrase too, so "Lock now" is not the end of a demo.
@@ -1199,7 +1287,7 @@ def test_the_command_runs_the_demo_and_removes_its_store() -> None:
         browser.ok("POST", "/api/reauth", {"passphrase": demo.DEMO_PASSPHRASE})
         # The demo opens in the everyday view, set up, and says how to start for real: the
         # same installation, without the demo and without its temporary folder.
-        assert state["interface"] == {"view": "basic", "setup": "done", "stored": True}
+        assert state["interface"] == gs.interface("basic", "done")
         assert launch_words(state) == ["-m", "wdva", "gate", "app", "--no-browser"]
         assert state["launch"]["port_fixed"] is False
         own = state["launch"]["command"]
@@ -1254,7 +1342,7 @@ def test_the_command_prints_the_pairing_code_and_ctrl_c_locks_the_vault(
         assert before["launch"] == locked["launch"] == state["launch"]
         # A new vault starts in the everyday view, with setting up still to do.
         assert before["interface"] is None
-        assert state["interface"] == {"view": "basic", "setup": "open", "stored": True}
+        assert state["interface"] == gs.interface("basic", "open")
         # A real vault has no played app to tell anything.
         assert browser.error("POST", "/api/demo/again", {}) == (404, "not_found")
     except BaseException:
@@ -1502,7 +1590,9 @@ def test_the_view_flag_sets_the_view(short_store_dir: Path) -> None:
             last = first
             if create:
                 last = browser.ok("POST", "/api/store/create", {"passphrase": gs.PASSPHRASE})
-            assert first["interface"] == (None if create else {**at_start, "stored": True})
+            # The words of the file, and no language: no start chooses one.
+            kept = None if create else {"language": None, **at_start, "stored": True}
+            assert first["interface"] == kept
             # The command to start again never carries the view: the file does.
             assert "--view" not in first["launch"]["command"]
         except BaseException:
@@ -1513,18 +1603,18 @@ def test_the_view_flag_sets_the_view(short_store_dir: Path) -> None:
 
     # A new vault is created with the view that was named, and setting up is still to do.
     first, created = run("--view", "pro", create=True)
-    assert created["interface"] == {"view": "pro", "setup": "open", "stored": True}
+    assert created["interface"] == gs.interface("pro", "open")
     assert interface_of(short_store_dir) == {"view": "pro", "setup": "open"}
     file = short_store_dir / "run" / "interface.json"
     written = file.stat().st_mtime_ns
     # Without the flag nothing is written at start: the vault opens as it was left.
     first, _ = run()
-    assert first["interface"] == {"view": "pro", "setup": "open", "stored": True}
+    assert first["interface"] == gs.interface("pro", "open")
     assert file.stat().st_mtime_ns == written
     # An existing vault opens in the view that is named, the choice is stored, and whether
     # setting up was finished stays as it was.
     first, _ = run("--view", "basic")
-    assert first["interface"] == {"view": "basic", "setup": "open", "stored": True}
+    assert first["interface"] == gs.interface("basic", "open")
     assert interface_of(short_store_dir) == {"view": "basic", "setup": "open"}
     assert file.stat().st_mtime_ns != written
 
@@ -1542,7 +1632,7 @@ def test_a_start_without_the_view_flag_writes_nothing_for_a_vault_from_before(
         browser = Browser(int(opened.group(1)))
         browser.ok("POST", "/api/session/pair", {"code": paired.group(1)})
         state = browser.ok("POST", "/api/unlock", {"passphrase": gs.PASSPHRASE})
-        assert state["interface"] == {"view": "pro", "setup": "done", "stored": False}
+        assert state["interface"] == gs.interface("pro", "done", stored=False)
         assert interface_of(short_store_dir) is None
     except BaseException:
         process.kill()
@@ -1566,7 +1656,7 @@ def test_a_demo_that_stops_says_how_to_start_for_real(tmp_path: Path) -> None:
         state = browser.ok("GET", "/api/state")
         store = Path(state["store"]["path"])
         # The view that was named, and nothing to set up in a demo.
-        assert state["interface"] == {"view": "pro", "setup": "done", "stored": True}
+        assert state["interface"] == gs.interface("pro", "done")
         # The command is for a vault of one's own: the place the person named, the flags of
         # this run, and neither the demo nor the view nor the demo's temporary folder.
         flags = ["--store", str(own_place), "--lock-after", "2", "--no-browser"]

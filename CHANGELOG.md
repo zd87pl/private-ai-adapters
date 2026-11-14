@@ -76,7 +76,8 @@ changes only when the bytes on disk do.
   and at no other time, whatever your answer was.
 - **A small file beside the vault**, `run/interface.json` in the store
   directory. It holds two words, which view you use and whether setting up is
-  finished, and nothing from the vault. It is not sealed, it is no setting of
+  finished, can hold a third, a language for the page, and holds nothing from
+  the vault. It is not sealed, it is no setting of
   the vault, and writing it leaves no entry in the record. A file that is
   missing or holds anything else counts as no file: the vault then opens in
   Pro, and it unlocks all the same.

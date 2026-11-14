@@ -47,12 +47,19 @@ APP_JS = b"console.log('interface');"
 
 
 class FakeService:
-    """Has every method of the service, with the same parameters. Records what it was asked."""
+    """Has every method of the service, with the same parameters. Records what it was asked.
+
+    ``calls`` holds the calls that answer a route. The language is asked for
+    the session's answer, which needs no session: those questions are counted
+    apart, in ``language_asked``, and answered with ``kept_language``.
+    """
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.error: Exception | None = None
         self.answer: Any = None
+        self.kept_language: Any = None
+        self.language_asked = 0
 
     def _did(self, method: str, /, **arguments: Any) -> Any:
         self.calls.append((method, arguments))
@@ -63,8 +70,8 @@ class FakeService:
     def state(self) -> Any:
         return self._did("state")
 
-    def create_store(self, *, passphrase: str) -> Any:
-        return self._did("create_store", passphrase=passphrase)
+    def create_store(self, *, passphrase: str, language: str | None = None) -> Any:
+        return self._did("create_store", passphrase=passphrase, language=language)
 
     def unlock(self, *, passphrase: str, hours: float | None = None) -> Any:
         return self._did("unlock", passphrase=passphrase, hours=hours)
@@ -81,8 +88,16 @@ class FakeService:
     def verify(self) -> Any:
         return self._did("verify")
 
-    def set_interface(self, *, view: str | None = None, setup: str | None = None) -> Any:
-        return self._did("set_interface", view=view, setup=setup)
+    def set_interface(
+        self, *, view: str | None = None, setup: str | None = None, language: str | None = None
+    ) -> Any:
+        return self._did("set_interface", view=view, setup=setup, language=language)
+
+    def language(self) -> Any:
+        self.language_asked += 1
+        if isinstance(self.kept_language, Exception):
+            raise self.kept_language
+        return self.kept_language
 
     def activity(
         self,
@@ -182,6 +197,8 @@ class FakeService:
 
 
 SERVICE_METHODS = {name for name in vars(Service) if not name.startswith("_")}
+# The one method that answers no route of its own: the session's answer carries its word.
+NO_ROUTE = {"language"}
 MakeServer = Callable[..., AppServer]
 
 
@@ -424,8 +441,110 @@ def test_session_endpoint_answers_before_pairing(server: AppServer, service: Fak
         "demo": False,
         "version": VERSION,
         "name": PRODUCT,
+        "language": None,
     }
     assert_headers(answer)
+    assert service.calls == []
+
+
+def test_the_session_carries_the_language_and_nothing_else_new(
+    make_server: MakeServer, service: FakeService
+) -> None:
+    server = make_server()
+    members = {"paired", "pairing", "demo", "version", "name", "language"}
+    # Before pairing: the word the service keeps, so that the first screen can be in it.
+    for word in ("pl", "en", None):
+        service.kept_language = word
+        answer = Browser(server).call("GET", "/api/session")
+        assert answer.status == 200
+        assert set(answer.json()) == members
+        assert answer.json()["language"] == word
+        assert_headers(answer)
+    # After pairing the same members, and the word as it is then: it is asked at each request.
+    paired = Browser(server).pair()
+    service.kept_language = "pl"
+    assert paired.call("GET", "/api/session").json() == {
+        "paired": True,
+        "pairing": "code",
+        "demo": False,
+        "version": VERSION,
+        "name": PRODUCT,
+        "language": "pl",
+    }
+    # The answer to pairing itself did not change.
+    answer = Browser(server).call(
+        "POST", "/api/session/pair", json_body={"code": server.pairing_code}
+    )
+    assert set(answer.json()) == {"paired", "session"}
+    # One question to the service for each answer, and no call that answers a route.
+    assert service.language_asked == 4
+    assert service.calls == []
+
+    # A demo, which has no pairing, adds its session and nothing else.
+    demo = make_server(pairing=False, demo=True)
+    assert set(Browser(demo).call("GET", "/api/session").json()) == members | {"session"}
+    assert Browser(demo).call("GET", "/api/session").json()["language"] == "pl"
+
+
+@pytest.mark.parametrize(
+    "kept",
+    [
+        RuntimeError("the service is not well"),
+        ServiceError(503, "unavailable", "The vault cannot be read."),
+        OSError(5, "Input/output error"),
+        7,
+        ["pl"],
+        {"language": "pl"},
+        b"pl",
+        True,
+    ],
+)
+def test_a_service_that_gives_no_word_still_lets_a_page_pair(
+    kept: Any, server: AppServer, service: FakeService, capfd: pytest.CaptureFixture[str]
+) -> None:
+    # The screen that asks for the code depends on this answer: an error of the service, or
+    # a value that is no text, is the same as no language. Nothing of it reaches the answer.
+    service.kept_language = kept
+    browser = Browser(server)
+    answer = browser.call("GET", "/api/session")
+    assert answer.status == 200
+    assert answer.json() == {
+        "paired": False,
+        "pairing": "code",
+        "demo": False,
+        "version": VERSION,
+        "name": PRODUCT,
+        "language": None,
+    }
+    browser.pair()
+    assert browser.call("GET", "/api/session").json()["language"] is None
+    assert browser.call("GET", "/api/state").json() == {"did": "state"}
+    assert capfd.readouterr() == ("", "")  # and a caller that is not paired makes no line appear
+
+
+def test_the_language_is_told_to_no_request_that_is_refused(
+    server: AppServer, service: FakeService
+) -> None:
+    # The word goes to whoever can ask this address on this computer, paired or not, and to
+    # no page of another site: the checks every request has to pass come first.
+    service.kept_language = "pl"
+    requests = [
+        b"GET /api/session HTTP/1.1\r\nHost: evil.example\r\n\r\n",
+        head(server, "GET", "/api/session", "Origin: http://evil.example"),
+        head(server, "GET", "/api/session", "Sec-Fetch-Site: cross-site"),
+        head(server, "GET", "/api/session", "Sec-Fetch-Site: same-site"),
+    ]
+    for request in requests:
+        answer = raw(server, request)
+        assert (answer.status, answer.error()) == (403, "forbidden"), request
+        assert b'"pl"' not in answer.body
+    assert service.language_asked == 0
+    # Nor is there a route that would answer it by itself.
+    paired = Browser(server).pair()
+    for method, target in (("GET", "/api/language"), ("POST", "/api/session/language")):
+        answer = paired.call(method, target)
+        assert (answer.status, answer.error()) == (404, "not_found")
+    assert service.language_asked == 0
     assert service.calls == []
 
 
@@ -569,7 +688,14 @@ ENDPOINTS: list[tuple[str, str, Any, str, dict[str, Any]]] = [
         "/api/store/create",
         {"passphrase": "correct horse battery"},
         "create_store",
-        {"passphrase": "correct horse battery"},
+        {"passphrase": "correct horse battery", "language": None},
+    ),
+    (
+        "POST",
+        "/api/store/create",
+        {"passphrase": "correct horse battery", "language": "pl"},
+        "create_store",
+        {"passphrase": "correct horse battery", "language": "pl"},
     ),
     (
         "POST",
@@ -610,18 +736,52 @@ ENDPOINTS: list[tuple[str, str, Any, str, dict[str, Any]]] = [
         "/api/interface",
         {"view": "basic"},
         "set_interface",
-        {"view": "basic", "setup": None},
+        {"view": "basic", "setup": None, "language": None},
     ),
-    ("POST", "/api/interface", {"setup": "done"}, "set_interface", {"view": None, "setup": "done"}),
+    (
+        "POST",
+        "/api/interface",
+        {"setup": "done"},
+        "set_interface",
+        {"view": None, "setup": "done", "language": None},
+    ),
     (
         "POST",
         "/api/interface",
         {"view": "pro", "setup": "done"},
         "set_interface",
-        {"view": "pro", "setup": "done"},
+        {"view": "pro", "setup": "done", "language": None},
     ),
-    # A body without a field arrives at the service, which is the one to refuse it.
-    ("POST", "/api/interface", {}, "set_interface", {"view": None, "setup": None}),
+    (
+        "POST",
+        "/api/interface",
+        {"language": "pl"},
+        "set_interface",
+        {"view": None, "setup": None, "language": "pl"},
+    ),
+    (
+        "POST",
+        "/api/interface",
+        {"view": "basic", "setup": "done", "language": "en"},
+        "set_interface",
+        {"view": "basic", "setup": "done", "language": "en"},
+    ),
+    # A word the app does not keep arrives at the service, which is the one to refuse it.
+    (
+        "POST",
+        "/api/interface",
+        {"language": "de"},
+        "set_interface",
+        {"view": None, "setup": None, "language": "de"},
+    ),
+    # So does a body without a field.
+    (
+        "POST",
+        "/api/interface",
+        {},
+        "set_interface",
+        {"view": None, "setup": None, "language": None},
+    ),
     (
         "GET",
         "/api/activity?limit=50&before=1188&app=claude-desktop&kind=release",
@@ -794,7 +954,10 @@ def send(browser: Browser, method: str, target: str, body: Any, **options: Any) 
 def test_the_fake_service_has_exactly_the_methods_of_the_service() -> None:
     fake = {name for name in vars(FakeService) if not name.startswith("_")}
     assert fake == SERVICE_METHODS
-    assert {name for _, _, _, name, _ in ENDPOINTS} == SERVICE_METHODS
+    assert {name for _, _, _, name, _ in ENDPOINTS} == SERVICE_METHODS - NO_ROUTE
+    assert NO_ROUTE < SERVICE_METHODS
+    # And no route leads to it: the table of routes names it nowhere.
+    assert not NO_ROUTE & {route.call for route in httpd._ROUTES}
 
 
 @pytest.mark.parametrize(("method", "target", "body", "name", "arguments"), ENDPOINTS)
@@ -904,6 +1067,7 @@ def test_demo_mode_has_no_pairing(make_server: MakeServer, service: FakeService)
         "demo": True,
         "version": VERSION,
         "name": PRODUCT,
+        "language": None,
         "session": server._app.token,
     }
     assert browser.call("GET", "/api/session").json()["paired"] is True
@@ -1411,12 +1575,22 @@ def test_an_upload_needs_its_collection_and_name(
         ("/api/settings", {"approval": 5}),
         ("/api/replaced-strings", {"text": 4711}),
         ("/api/approvals/release", {"app": "lm-studio", "ref": "d-88b0e1aa9c11.1"}),
-        # The view and the word about setup are text, and the two are all there is.
+        # The view, the word about setup and the language are text, and the three are all
+        # there is.
         ("/api/interface", {"view": 1}),
         ("/api/interface", {"view": ["pro"]}),
         ("/api/interface", {"setup": True}),
+        ("/api/interface", {"language": 1}),
+        ("/api/interface", {"language": ["pl"]}),
+        ("/api/interface", {"language": {"code": "pl"}}),
+        ("/api/interface", {"language": "pl", "locale": "pl-PL"}),
         ("/api/interface", {"view": "pro", "stored": True}),
         ("/api/interface", {"view": "pro", "path": "/tmp/elsewhere.json"}),
+        # A new vault can be given a language, as text, and nothing else beside the passphrase.
+        ("/api/store/create", {"passphrase": "correct horse battery", "language": 7}),
+        ("/api/store/create", {"passphrase": "correct horse battery", "language": ["pl"]}),
+        ("/api/store/create", {"passphrase": "correct horse battery", "view": "pro"}),
+        ("/api/store/create", {"language": "pl"}),
         # The check takes the kind of application and nothing that could name a file.
         ("/api/apps/claude-desktop/connect/check", {"host": ["claude-desktop"]}),
         ("/api/apps/claude-desktop/connect/check", {"host": 7}),

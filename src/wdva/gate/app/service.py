@@ -31,12 +31,14 @@ app has beyond the store itself:
   is read from the record when it is asked for, and nowhere else is document
   text handed to the interface except the passage the owner is asked to
   approve.
-* **Which view the owner uses.** Two words about the interface, kept in a
+* **Which view the owner uses.** Three words about the interface, kept in a
   small file beside the vault that is not sealed (``run/interface.json``):
-  which of its two views the owner uses, and whether setting up was finished.
-  The service alone writes it. It is no setting of the vault and leaves no
-  entry in the record; a file that is missing or holds anything else counts
-  as no file, and never keeps a vault from unlocking.
+  which of its two views the owner uses, whether setting up was finished,
+  and the language of the page, once the owner chose one. The service alone
+  writes it. It is no setting of the vault and leaves no entry in the
+  record; a file that is missing or holds anything else counts as no file,
+  and never keeps a vault from unlocking. The language is the one thing the
+  service tells a page that is not paired yet (:meth:`GateService.language`).
 
 The methods take and return plain JSON values and raise
 :class:`~wdva.gate.app.api.ServiceError`. A passphrase is used and forgotten:
@@ -127,6 +129,7 @@ from wdva.gate.types import Backend, Caller, Reply
 
 __all__ = [
     "ACTIVITY_KINDS",
+    "LANGUAGES",
     "MAX_HOURS",
     "MIN_HOURS",
     "MIN_PASSPHRASE_CHARS",
@@ -160,9 +163,13 @@ without any document text. It is not a release and is counted apart from them.
 VIEWS = ("basic", "pro")
 """The two views of the interface: what is used every day, and every setting."""
 
+LANGUAGES = ("en", "pl")
+"""The languages the owner's page can be kept in. None is kept until the owner chose one."""
+
 _SETUP = ("open", "done")
 _INTERFACE_MAX_BYTES = 1024  # a larger file in the place of the interface file counts as none
-_NO_INTERFACE_FILE = {"view": "pro", "setup": "done", "stored": False}
+_NO_INTERFACE_FILE = {"view": "pro", "setup": "done", "language": None, "stored": False}
+_NOT_A_LANGUAGE = 'The language is "en" or "pl".'
 _DEFAULT_PAGE = 50
 _MAX_PAGE = 200
 _MAX_NAME_CHARS = 255
@@ -376,10 +383,12 @@ def _read_interface(path: Path) -> dict[str, Any]:
     """What the interface file at ``path`` says, or what holds for a vault without one.
 
     The file counts only when it is a regular file of at most a kibibyte that
-    holds exactly the two keys with values that exist. Anything else in its
-    place (a link, a folder, other JSON, something that is not JSON) is the
-    same as no file. Never raises, and never waits: what is not a regular file
-    is not opened.
+    holds exactly the keys ``view`` and ``setup``, with ``language`` or
+    without, each with a value that exists. Anything else in its place (a
+    link, a folder, other JSON, something that is not JSON) is the same as no
+    file. A file without ``language`` is one in which no language was chosen:
+    the word is then ``None``. Never raises, and never waits: what is not a
+    regular file is not opened.
     """
     try:
         if not stat.S_ISREG(os.lstat(path).st_mode):
@@ -402,24 +411,34 @@ def _read_interface(path: Path) -> dict[str, Any]:
         return dict(_NO_INTERFACE_FILE)
     if (
         not isinstance(held, dict)
-        or set(held) != {"view", "setup"}
+        or set(held) - {"language"} != {"view", "setup"}
         or held["view"] not in VIEWS
         or held["setup"] not in _SETUP
+        or ("language" in held and held["language"] not in LANGUAGES)
     ):
         return dict(_NO_INTERFACE_FILE)
-    return {"view": held["view"], "setup": held["setup"], "stored": True}
+    return {
+        "view": held["view"],
+        "setup": held["setup"],
+        "language": held.get("language"),
+        "stored": True,
+    }
 
 
-def _write_interface(path: Path, view: str, setup: str) -> None:
+def _write_interface(path: Path, view: str, setup: str, language: str | None) -> None:
     """Write the interface file: to a temporary file beside it, then one rename.
 
-    Raises :class:`OSError` when that cannot be done; the file that was there
-    is then still there. Only ever called for the ``run/`` folder of a vault
-    that exists.
+    Without a ``language`` the file holds two keys, as it did before there
+    was a third; with one it holds three. Raises :class:`OSError` when it
+    cannot be written; the file that was there is then still there. Only ever
+    called for the ``run/`` folder of a vault that exists.
     """
-    if view not in VIEWS or setup not in _SETUP:
-        raise ValueError("the interface file holds a view and whether setup is done")
-    content = json.dumps({"view": view, "setup": setup}).encode("ascii") + b"\n"
+    if view not in VIEWS or setup not in _SETUP or language not in (None, *LANGUAGES):
+        raise ValueError("the interface file holds a view, whether setup is done and a language")
+    held = {"view": view, "setup": setup}
+    if language is not None:
+        held["language"] = language
+    content = json.dumps(held).encode("ascii") + b"\n"
     path.parent.mkdir(mode=0o700, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(
         dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
@@ -1262,12 +1281,12 @@ class GateService:
 
     # -- which view the owner uses ----------------------------------------------------
 
-    def _keep_interface(self, view: str, setup: str) -> None:
+    def _keep_interface(self, view: str, setup: str, language: str | None) -> None:
         """Write the interface file and read it again. :class:`OSError` when it cannot be kept."""
         path = paths.interface_path(self._path)
         with self._interface_lock:
             try:
-                _write_interface(path, view, setup)
+                _write_interface(path, view, setup, language)
             finally:
                 self._interface = _read_interface(path)
         self._bump()
@@ -1277,7 +1296,8 @@ class GateService:
 
         Without a view named on the command line nothing is written for a real
         vault. Where it cannot be written the app starts all the same, with
-        what the file says.
+        what the file says. A language the file holds stays in it: no start
+        chooses one, and none takes one away.
         """
         if self._start_view is None and not self._demo:
             return
@@ -1286,33 +1306,61 @@ class GateService:
         view = self._start_view or ("basic" if self._demo else self._interface["view"])
         setup = "done" if self._demo else self._interface["setup"]
         with contextlib.suppress(OSError):
-            self._keep_interface(view, setup)
+            self._keep_interface(view, setup, self._interface["language"])
 
     @_translated
-    def set_interface(self, *, view: str | None = None, setup: str | None = None) -> JSONObject:
-        """Keep which view the owner uses, or that setting up is finished; return the state.
+    def set_interface(
+        self, *, view: str | None = None, setup: str | None = None, language: str | None = None
+    ) -> JSONObject:
+        """Keep the view the owner uses, that setting up is finished, or the language; the state.
 
         Works on a locked vault too, and needs no owner mode: it lets nothing
         leave and changes nothing that is sealed. ``setup`` can only be set to
-        ``"done"``. Nothing is written into the record.
+        ``"done"``. A word that is not given stays as it was last read, so
+        choosing a view never chooses a language, and a language that was
+        chosen is never taken away again. Nothing is written into the record.
         """
         if view is not None and view not in VIEWS:
             raise _invalid('The view is "basic" or "pro".')
         if setup is not None and setup != "done":
             raise _invalid('Setting up can only be marked "done".')
-        if view is None and setup is None:
-            raise _invalid("Say which view to keep, or that setting up is done.")
+        if language is not None and language not in LANGUAGES:
+            raise _invalid(_NOT_A_LANGUAGE)
+        if view is None and setup is None and language is None:
+            raise _invalid("Say which view or language to keep, or that setting up is done.")
         if not store_info(self._path).exists:
             raise _not_found("There is no vault here yet.")
         current = self._interface
         try:
-            self._keep_interface(view or current["view"], setup or current["setup"])
+            self._keep_interface(
+                view or current["view"],
+                setup or current["setup"],
+                language or current["language"],
+            )
         except OSError as exc:
             reason = exc.strerror or "the file could not be written"
             raise _unavailable(
                 f"The choice could not be kept: {reason[0].lower()}{reason[1:]}."
             ) from None
         return self.state()
+
+    def language(self) -> str | None:
+        """The language kept beside the vault: one of :data:`LANGUAGES`, or ``None``.
+
+        ``None`` while the owner has chosen none, and while there is no vault
+        here. It is the word the interface file held when it was last read. The
+        server passes it on before a page is paired, so that the first screen
+        can be in the kept language: this method therefore never fails, does
+        nothing to the vault and says nothing but that one word, which lies
+        beside the vault in a file that is neither sealed nor secret.
+        """
+        try:
+            if self._session is None and not self._store_info(None).exists:
+                return None
+            word = self._interface["language"]
+            return word if word in LANGUAGES else None
+        except Exception:  # whatever went wrong, the page starts in the browser's language
+            return None
 
     # -- state ------------------------------------------------------------------------
 
@@ -1362,7 +1410,8 @@ class GateService:
             "serving": None,
             "today": None,
             "warnings": None,
-            # Not sealed and not part of the vault: the view, and how to start the app again.
+            # Not sealed and not part of the vault: the view and the language, and how to
+            # start the app again.
             "interface": dict(self._interface) if info.exists else None,
             "launch": dict(self._launch),
         }
@@ -1549,10 +1598,17 @@ class GateService:
             ) from None
 
     @_translated
-    def create_store(self, *, passphrase: str) -> JSONObject:
-        """Create the store, unlock it and return the state."""
+    def create_store(self, *, passphrase: str, language: str | None = None) -> JSONObject:
+        """Create the store, unlock it and return the state.
+
+        ``language`` is the language the owner chose on the page before there
+        was a vault to keep it beside; it is checked before anything is made
+        and then kept in the interface file. Without it no language is kept.
+        """
         if not isinstance(passphrase, str) or len(passphrase) < MIN_PASSPHRASE_CHARS:
             raise _invalid(f"A passphrase needs at least {MIN_PASSPHRASE_CHARS} characters.")
+        if language is not None and language not in LANGUAGES:
+            raise _invalid(_NOT_A_LANGUAGE)
         exists = ServiceError(409, "conflict", "A vault exists already at this place.")
         if self._session is not None or store_info(self._path).exists:
             raise exists
@@ -1575,10 +1631,12 @@ class GateService:
                 ) from None
             except StoreLocationError as exc:
                 raise _invalid(_sentence(_vault_words(str(exc)))) from None
-            # A new vault starts in the everyday view, with setting up still to do. A
-            # vault whose file could not be written is shown like one from before.
+            # A new vault starts in the everyday view, with setting up still to do, and in
+            # the language the request named, if it named one: what a file left in this
+            # place says counts for nothing. A vault whose file could not be written is
+            # shown like one from before.
             with contextlib.suppress(OSError):
-                self._keep_interface(self._start_view or "basic", "open")
+                self._keep_interface(self._start_view or "basic", "open", language)
             self._begin(store, self._default_hours)
         finally:
             self._opening = False

@@ -376,7 +376,9 @@ attacked the changes yet. The two views of the page, its first run, and the
 file and the three routes that came with them were built after the reviews
 too, and no review has attacked them either:
 [a part of this section](#the-two-views-and-what-came-with-them) says what
-they add. Where a sentence says "in a run for this page", the figure comes
+they add. The third word of that file, a language for the page, and the
+answer that tells it to a page before pairing came later still, and no review
+has attacked them. Where a sentence says "in a run for this page", the figure comes
 from a run made on Linux with Python 3.11 while this page was held against the
 code. One machine, one run: an observation, not a proof.
 
@@ -387,7 +389,7 @@ code. One machine, one run: an observation, not a proof.
 | **Document text in the vault** | Sealed in the store directory. In the memory of Locktender while the vault is unlocked. | The lock. |
 | **The store key and the passphrase** | The key: sealed with the passphrase in `keyslot.wdva`, and in Locktender's memory while the vault is unlocked. The passphrase: typed into Locktender's page, sent to Locktender on the loopback address, never stored. | scrypt, and the key being in memory only. |
 | **The settings**: which apps exist, what each may read, the limits, the words to replace | In the record, sealed. Changed through Locktender's page. | Pairing code, session, owner mode. |
-| **Two words about the page**: which of its two views is in use, and whether setting up was finished | In `run/interface.json` in the store directory, in plain text. | File modes only. They are not sealed, and changing them never asks for the passphrase. They decide which page opens first and whether the page still offers to finish setting up, and nothing about what may leave. |
+| **Two or three words about the page**: which of its two views is in use, whether setting up was finished, and a language for the page once one is kept | In `run/interface.json` in the store directory, in plain text. | File modes only. They are not sealed, and changing them never asks for the passphrase. They decide which page opens first and whether the page still offers to finish setting up, and nothing about what may leave. The language is protected by less than the other two: the page's port tells it to whoever asks, before pairing. |
 | **What was released** | In the record, sealed, with its exact text. Outside the vault: in the AI app, in that AI app's own files and, for a hosted one, at its provider. | Inside the vault, the lock. Outside, nothing. |
 | **The files the documents came from** | Wherever the owner keeps them. Locktender seals a copy. Adding a document neither moves nor deletes the file. | Nothing Locktender does. A file that stays in a folder an AI app can read can be read there by that app, without Locktender ("Where the original lies" under [Known limits](#known-limits)). |
 | **The settings file of an AI app**, which may hold the entries of other tools, with their keys | In the owner's home folder. It belongs to the AI app. Locktender looks into it when the owner presses "Check the file", and never writes it. | The look answers with a word about the file and with nothing from it. |
@@ -481,11 +483,12 @@ limits, approval or owner mode reads it. Choosing a view never lets more
 leave, and never less.
 
 **The interface file is not sealed, and cheap to change.**
-`run/interface.json` holds two words: the view, and whether setting up was
-finished. It has to be readable before the passphrase is typed, so it is plain
-text. A program of the owner's account can write the file. Whoever holds the
-session can change it through the page's API, also while the vault is locked,
-and is never asked for the passphrase. What that gains:
+`run/interface.json` holds two or three words: the view, whether setting up
+was finished, and a language for the page once one is kept. It has to be
+readable before the passphrase is typed, so it is plain text. A program of the
+owner's account can write the file. Whoever holds the session can change it
+through the page's API, also while the vault is locked, and is never asked for
+the passphrase. What that gains:
 
 - The page opens in the other view: when it is next loaded with an address
   that names no page, and, where Basic is now kept, after the next unlock. A
@@ -496,13 +499,32 @@ and is never asked for the passphrase. What that gains:
   ("Last entry").
 - The card "Finish setting up" goes away. Through the file it can also be made
   to come back, which the API does not allow.
+- The language that is kept changes, or one is kept where none was. Through
+  the file it can also be taken away, which the API does not allow. The page
+  does not read the word yet, so today this changes what the app answers and
+  nothing the owner sees.
 - Nothing else. Nothing leaves, nothing sealed changes, and the record is not
   touched: in a run for this page the head of the record and the number of
-  sealed files were the same before and after a change. A file that is broken
+  sealed files were the same before and after a change of the view, and in a
+  later run before and after a change of the language. A file that is broken
   on purpose counts as no file, and the vault then opens in Pro. It never
   keeps a vault from unlocking: in a run for this page a vault was unlocked
-  with seven different things in the file's place, among them text that is not
-  JSON, a symbolic link and a directory.
+  with nine different things in the file's place, among them text that is not
+  JSON, a language that does not exist, a symbolic link and a directory.
+
+**The language is told before pairing.** `GET /api/session` answers a page
+that has shown no session, because the page needs it to pair. From the vault's
+folder it carries one thing: the language kept in the interface file, `en`,
+`pl` or none. The app reads the file when it starts, at each unlock and after
+its own writes, and answers from what it read; a request does not make it read
+the file again. So whoever can ask the port, also a program of another account
+that cannot list the vault's folder (position 2), learns which of two
+languages was chosen for the page, or that none is kept. A language is told
+only where a vault exists, so a word also says that one does. The answer
+`null` says neither: it is given where there is no vault and where no language
+was chosen. The answer holds nothing else from the folder: not the view, and
+nothing the folder's listing would show. Asking locks nothing, ends no session
+and writes no entry.
 
 **So Basic must not hide what the owner has to notice.** Since a program of
 the same account can put the owner into Basic, Basic may leave out settings,
@@ -679,7 +701,11 @@ another user: listing the store, listing `run/`, reading the key slot and
 connecting to the socket were each refused by the operating system, and the
 store had modes 0700 and 0600 whether it was made under umask 022 or 000. It can
 reach the port of the page, as every program on the computer can. There it gets
-the page's files and, without the session, nothing else. In a run for this page,
+the page's files and, without the session, what the address that pairing
+starts from tells every caller: the product's name and version, whether this
+is a demo and whether a code is asked for, and the language kept for the page
+([above](#the-two-views-and-what-came-with-them)). It gets nothing else. In a
+run for this page,
 31 paths of the API were asked with 11 kinds of missing or made-up session each
 (no header, an empty one, a made-up one, the right one changed in one character,
 cut short, doubled, in upper case, sent as a cookie, as a bearer token, in
@@ -755,8 +781,9 @@ API stays closed to it without the session.
 - It owns `run/`. It can remove the socket and listen there itself, see the
   queries of the AI apps that connect and answer them with text of its own. It
   can write `run/interface.json` and so choose which view the page opens in at
-  the next unlock, and whether the page still offers to finish setting up.
-  That changes what the owner sees first, not what may leave; what Basic must
+  the next unlock, whether the page still offers to finish setting up, and
+  which language is kept for the page. That changes what the owner sees
+  first, not what may leave; what Basic must
   show for that reason is said
   [above](#the-two-views-and-what-came-with-them).
 - It can change the settings file of an AI app, also after Locktender looked
@@ -1003,8 +1030,9 @@ A backup, a synchronised folder, a stolen disk.
 passphrase opens. The holder learns what
 [the directory shows](GATE_FORMAT.md#sealed-files): how many documents there are
 and how long each is, how many entries the record has, how long each is and when
-it was written, the scrypt parameters, and the two words that are kept in plain
-text: which view of the page was in use and whether setting up was finished.
+it was written, the scrypt parameters, and the two or three words that are kept
+in plain text: which view of the page was in use, whether setting up was
+finished, and the language kept for the page, if one was.
 No name, title, text, query or setting.
 
 **Does not hold.** The passphrase can be guessed offline, without limit, at the
@@ -1076,12 +1104,14 @@ vault cannot do, the computer has to: a screen lock and full-disk encryption.
   demo that was killed leaves its temporary vault behind. A later demo removes
   it at its start, once the leftover has lain unchanged for a minute and no
   running demo holds the lock on it.
-- **The view is not a setting of the vault.** Which of the two views opens,
-  and whether the page still offers to finish setting up, are two words in a
-  file that is not sealed. A program of the owner's account can write them,
-  and whoever holds the session can change them without the passphrase, also
-  while the vault is locked. No entry in the record says that they changed.
-  The view decides nothing about what may leave.
+- **The page's three words are no settings of the vault.** Which of the two
+  views opens, whether the page still offers to finish setting up, and which
+  language is kept for the page are words in a file that is not sealed. A
+  program of the owner's account can write them, and whoever holds the session
+  can change them without the passphrase, also while the vault is locked. No
+  entry in the record says that they changed. None of them decides anything
+  about what may leave. The language is also told to a caller that has not
+  paired.
 - **Basic does not show the head of the record,** on the page or on the
   locked screen, and has no "Verify now". It shows every release, and the
   calls that were stopped in the last 24 hours as far as the 120 newest
@@ -1175,9 +1205,10 @@ vault cannot do, the computer has to: a screen lock and full-disk encryption.
 - **The passphrase cannot be changed, and there is no recovery.** Other programs
   of the same account can capture it the next time it is typed.
 - **Sizes, counts and times are visible** to whoever can list the store
-  directory, and so are the two words that are not sealed: which view of the
-  page was in use and whether setting up was finished. The check for
-  synchronised folders knows six folder names and nothing else.
+  directory, and so are the words that are not sealed: which view of the
+  page was in use, whether setting up was finished, and the language kept for
+  the page. The check for synchronised folders knows six folder names and
+  nothing else.
 - **Timing was measured, not removed.** The refusal for a waiting passage no
   longer reads the document, and in a run for this page its time did not tell a
   passage of 800 characters from one of 18 (position 4). A review timed the

@@ -128,8 +128,8 @@ def socket_path(store: str | os.PathLike[str]) -> Path:
 def interface_path(store: str | os.PathLike[str]) -> Path:
     """``<store>/run/interface.json``: which view of the interface the owner uses.
 
-    Not sealed, and written by the app alone: it holds two words about the
-    interface and nothing from the vault.
+    Not sealed, and written by the app alone: it holds two or three words
+    about the interface and nothing from the vault.
     """
     return run_dir(store) / "interface.json"
 

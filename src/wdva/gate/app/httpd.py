@@ -20,7 +20,10 @@ one is checked on every request, before the request's body is read.
   pairing off until the app is restarted. Every API call except the two that
   do the pairing must carry the token in the header ``X-WDVA-Session``. Only
   the demo, whose documents are invented, runs without pairing: there the
-  session endpoint hands the token to whoever asks from the page.
+  session endpoint hands the token to whoever asks from the page. Of what
+  the service knows, a caller that has not paired is told one thing: the
+  language kept for the page, one of two words or none, so that the screen
+  which asks for the code can be in that language.
 * **No cookie.** The session is never put into a cookie. A browser sends the
   cookies of ``127.0.0.1`` to every port of that address, so a page served by
   another program on this computer would be sent the session, and could
@@ -53,7 +56,9 @@ one is checked on every request, before the request's body is read.
 
 Nothing about a request is logged. When the service fails unexpectedly, one
 line with the name of the exception class goes to standard error and the
-caller gets a plain error without detail.
+caller gets a plain error without detail. The question for the language is
+the exception, because it is asked for a request without a session: there a
+failure counts as no language, and no line is written.
 
 None of this is a wall against programs that run under the owner's account:
 one that can read the app's terminal can pair, and one that can read what the
@@ -225,13 +230,18 @@ _PASSPHRASE = _text("passphrase", required=True)
 
 _ROUTES: tuple[_Route, ...] = (
     _Route("GET", "state", "state"),
-    _Route("POST", "store/create", "create_store", fields=(_PASSPHRASE,)),
+    _Route("POST", "store/create", "create_store", fields=(_PASSPHRASE, _text("language"))),
     _Route("POST", "unlock", "unlock", fields=(_PASSPHRASE, _Field("hours", "number"))),
     _Route("POST", "lock", "lock"),
     _Route("POST", "reauth", "reauth", fields=(_PASSPHRASE,)),
     _Route("POST", "serving", "set_serving", fields=(_text("kinds"), _Field("paused", "texts"))),
     _Route("POST", "verify", "verify"),
-    _Route("POST", "interface", "set_interface", fields=(_text("view"), _text("setup"))),
+    _Route(
+        "POST",
+        "interface",
+        "set_interface",
+        fields=(_text("view"), _text("setup"), _text("language")),
+    ),
     _Route(
         "GET",
         "activity",
@@ -729,6 +739,9 @@ class _Handler(BaseHTTPRequestHandler):
                 "demo": app.demo,
                 "version": app.version,
                 "name": brand.PRODUCT,
+                # The one word of the service an unpaired page is told: it is kept beside
+                # the vault in a file that is not sealed, and it is no secret.
+                "language": self._language(),
             }
             if not app.pairing:
                 # Only the demo, whose documents are invented, runs without pairing.
@@ -739,6 +752,18 @@ class _Handler(BaseHTTPRequestHandler):
         if not paired:
             raise _Refused(401, "pairing_required", "this page is not paired with the app")
         return self._call(method, path, query)
+
+    def _language(self) -> str | None:
+        """The language the service keeps for the page; ``None`` when it keeps or says none.
+
+        The session's answer must not depend on the service being well: an
+        error of the service, or a value that is no text, counts as ``None``.
+        """
+        try:
+            word = self._app.service.language()
+        except Exception:
+            return None
+        return word if isinstance(word, str) else None
 
     def _static(self, method: str, path: str) -> _Response:
         entry = self._app.static.get(path) if method == "GET" else None
@@ -907,9 +932,10 @@ class AppServer:
     nothing else, so ``pairing=False`` without ``demo`` raises ``ValueError``.
 
     ``version`` and ``demo`` are what the session endpoint reports, next to the
-    product's name. The interface's files are read from ``static_dir``
-    (default: the directory shipped with this package) once, here; the name is
-    put into the page then.
+    product's name and the language kept for the page, which the service is
+    asked for at each such request. The interface's files are read from
+    ``static_dir`` (default: the directory shipped with this package) once,
+    here; the name is put into the page then.
     """
 
     def __init__(

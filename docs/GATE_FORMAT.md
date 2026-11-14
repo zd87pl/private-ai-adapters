@@ -48,7 +48,7 @@ directory of such files.
   run/                      0700   the only part that is not sealed
     lock                    0600   an empty file; a lock on it marks the store as open for writing
     gate.sock               0600   a Unix socket, there only while the store is unlocked
-    interface.json          0600   plain text: the view of the owner's page, whether setup is done
+    interface.json          0600   plain text: the page's view, whether setup is done, its language
 ```
 
 - **Where it is.** The directory given with `--store`, else the one named by the environment
@@ -79,9 +79,10 @@ directory of such files.
   run for this page; the page says "The path of the vault is too long for the local socket that
   apps connect to. Choose a shorter place for it.").
 - **`run/interface.json`.** The one file that the app writes in plain text and overwrites. It says
-  which view of the owner's page is in use and whether setting up is finished, and nothing about
-  the documents. [The interface file](#the-interface-file) describes it. A store made before the
-  two views existed has no such file, and needs none.
+  which view of the owner's page is in use, whether setting up is finished and, once one was
+  chosen, the language of the page, and nothing about the documents.
+  [The interface file](#the-interface-file) describes it. A store made before the two views
+  existed has no such file, and needs none.
 - **Files nobody listed.** The documents of a store are what the record says: `add` entries minus
   `remove` entries. A file in `docs/` or `originals/` that the record does not list is ignored by
   every reader.
@@ -117,8 +118,9 @@ size of every file, and so the number of documents and the length of each (a vau
 its payload plus a header and a tag); the number of entries in the record, the size of each and
 the time the file system gives it, which is roughly when and how much was released; the scrypt
 parameters of the key slot. In `run/` it shows the socket, which is there while the store is
-unlocked, and in plain text the two words of [the interface file](#the-interface-file): which
-view of the owner's page is in use and whether setting up was finished. It shows no collection
+unlocked, and in plain text the two or three words of
+[the interface file](#the-interface-file): which view of the owner's page is in use, whether
+setting up was finished, and the language of the page if one was chosen. It shows no collection
 name, title, file name, text, query, policy or client name. Document ids are random and say
 nothing.
 
@@ -436,9 +438,9 @@ Not in the policy, and the same for every store: 120 calls a minute for all clie
 8,000 characters as the longest result of any kind, 10 results per search, 160 characters per
 snippet. Also not in the policy, and not in the record: which clients the owner paused, and which
 kind is answered while clients of both kinds are registered. Those last for one unlocked session.
-An `unlock` entry lists the names answered at that moment. The view of the owner's page and
-whether setting up was finished are in neither of the two as well. They are kept, unsealed, in
-[the interface file](#the-interface-file), and outlast a session.
+An `unlock` entry lists the names answered at that moment. The view of the owner's page, whether
+setting up was finished and the language of the page are in neither of the two as well. They are
+kept, unsealed, in [the interface file](#the-interface-file), and outlast a session.
 
 ## Limits
 
@@ -799,77 +801,119 @@ Two things a refusal still tells a caller are listed in the threat model under
 
 ## The interface file
 
-`<store>/run/interface.json` holds two words about the owner's page and nothing from the store.
-It is the only file the app keeps in plain text and the only one it overwrites. It is not sealed
-because the page has to know which view to open before a passphrase is typed. This is the file of
-a new store: 35 bytes, the last of them a line feed.
+`<store>/run/interface.json` holds two or three words about the owner's page and nothing from the
+store. It is the only file the app keeps in plain text and the only one it overwrites. It is not
+sealed because the page has to know which view to open before a passphrase is typed. The third
+word, a language for the page, is kept beside the two for the screens that come before the
+passphrase and before pairing. This is the file of a new store for which no language was chosen,
+35 bytes, the last of them a line feed; and below it the file once a language was chosen, 53
+bytes.
 
 ```json
 {"view": "basic", "setup": "open"}
+```
+
+```json
+{"view": "basic", "setup": "open", "language": "pl"}
 ```
 
 | Key | Values | Meaning |
 | --- | --- | --- |
 | `view` | `"basic"` or `"pro"` | The view the owner's page opens in. The page describes Basic as "The everyday view: approvals, what left, documents and apps." and Pro as "Every page and every setting." |
 | `setup` | `"open"` or `"done"` | Whether the first run is still unfinished. While it is `open`, the Basic page names the next step under "Finish setting up". |
+| `language` | `"en"` or `"pl"`; absent until one was chosen | The language kept for the owner's page: English or Polish. A file without this key says that none was chosen. The key is never written with `null` or an empty text, and nothing sent to the app takes a language away once one is kept |
 
-- **Exactly this.** A JSON object with these two keys and no other, each with one of its two
-  values. The app writes it on one line, in ASCII.
+| The file holds | It counts as |
+| --- | --- |
+| Exactly `view`, `setup` and `language`, each with a value that exists | A file. The state and the session's answer carry that language |
+| Exactly `view` and `setup`: the file of every version before this one | A file, as before. No language was chosen: the state says `"language": null` |
+| Anything else | No file ("No file, or something else in its place", below) |
+
+- **Exactly this.** A JSON object with the keys `view` and `setup`, with `language` or without
+  it, and no other, each with one of its two values. The app writes it on one line, in ASCII,
+  in the order shown. It writes two keys while no language was chosen and three once one was:
+  choosing a view never adds a language.
 - **Mode.** 0600 in a directory of mode 0700, like every file of a store. A run on Linux showed
   these.
 - **Who writes it.** The service behind the owner's page, and nothing else in the package: not the
-  code that seals documents and writes the record, and not the program an AI app starts. The two
+  code that seals documents and writes the record, and not the program an AI app starts. The
   words are written to a temporary file in `run/` (`.interface.json.<random>.tmp`), flushed to
   disk, and that file is renamed over `interface.json`. A symbolic link in the file's place is
   replaced by the rename, not followed: in a run for this page the file the link pointed to
   stayed as it was.
 - **When it is written.** In four cases, and in no other:
   1. The store is created. `view` is the view named with `--view`, else `basic`; `setup` is
-     `open`.
-  2. The app is started with `--view` on a store that exists. `view` is as named and `setup` as
-     it was (`done` where there was no file). This happens at start, while the store is locked.
-  3. A demo starts. `view` is `basic`, or the view named with `--view`; `setup` is `done`.
-  4. The page asks for it with `POST /api/interface`, described below.
+     `open`; `language` is there when the request that created the store named one
+     (`POST /api/store/create` with `language`), and else not, whatever a file that lay in this
+     place held.
+  2. The app is started with `--view` on a store that exists. `view` is as named, and `setup` and
+     `language` as they were (`done` and no language where there was no file). This happens at
+     start, while the store is locked.
+  3. A demo starts. `view` is `basic`, or the view named with `--view`; `setup` is `done`; there
+     is no language, because a demo's store is new.
+  4. The page asks for it with `POST /api/interface`, described below, which takes the three
+     fields `view`, `setup` and `language`.
 
   Starting the app without `--view` writes nothing. Neither does unlocking, locking, or anything
-  an AI app does. When the file cannot be written in one of the first three cases, the app goes
-  on without saying so, with whatever the file's place then holds: a new store is then shown
-  like one that has no file. In the fourth case the route answers with an error.
+  an AI app does. The command line has no flag for the language. When the file cannot be written
+  in one of the first three cases, the app goes on without saying so, with whatever the file's
+  place then holds: a new store is then shown like one that has no file. In the fourth case the
+  route answers with an error.
 - **When it is read.** When the app starts, after each of its own writes, and at each unlock. What
   another program writes into the file while the app runs is taken up at the next unlock or
   start. Until then the app goes on with what it last read, and its own next write starts from
   that.
 - **No file, or something else in its place.** The app then takes the view to be `pro` and
-  setting up to be `done`, and reports `"stored": false` in the state. That is how every store
-  made before the two views existed opens, and nothing is written for such a store until its
-  owner chooses a view or starts the app with `--view`. Whatever lies in the file's place and is
-  not exactly the file described here counts as no file: something that is not a regular file (a
-  symbolic link, a directory), more than 1,024 bytes, text that is not JSON under the strict
-  rules given [above](#sealed-files), a third key, a missing key, a value that is not one of the
-  four. None of these is an error and none keeps a store from unlocking. In a run for this page
-  a demo's store was unlocked with each of these in the file's place: text that is not JSON, a
-  third key, a value that does not exist, 1,025 bytes, a key written twice, a symbolic link to a
-  valid file, a directory. Each time it unlocked and the state said `pro`, `done` and
-  `"stored": false`.
+  setting up to be `done`, takes no language to be chosen, and reports `"stored": false` in the
+  state. That is how every store made before the two views existed opens, and nothing is written
+  for such a store until its owner chooses a view or a language or starts the app with `--view`.
+  Whatever lies in the file's place and is not exactly the file described here counts as no
+  file: something that is not a regular file (a symbolic link, a directory), more than 1,024
+  bytes, text that is not JSON under the strict rules given [above](#sealed-files), a key that
+  is none of the three, a missing `view` or `setup`, a value that is not one of the four,
+  `language` with a value that is neither `en` nor `pl`. None of these is an error and none
+  keeps a store from unlocking. In a run for this page a demo's store was unlocked with each of
+  these in the file's place: text that is not JSON, a third key that is not `language`, a
+  language that does not exist, a fourth key, a view that does not exist, 1,025 bytes, a key
+  written twice, a symbolic link to a valid file, a directory. Each time it unlocked, the state
+  said `pro`, `done`, `"language": null` and `"stored": false`, and a page that had not paired
+  was told no language.
+- **A version from before the third word** knows two keys and counts a file with three as no
+  file: the store opens in Pro, with setting up done. Nothing of the store is lost by that. The
+  next choice of a view there writes a file of two keys: the language is gone from it, and
+  setting up counts as done. In a run for this page the code of the commit before this change
+  did both on a store whose file held `basic`, `open` and `pl`: it left the file as it was while
+  it only read, and wrote `{"view": "basic", "setup": "done"}` when a view was chosen.
 - **Readable while the store is locked.** That is its purpose. Whoever can read the directory can
-  read the two words, and the state of a locked store carries them.
+  read the words, and the state of a locked store carries them.
+- **The language is told before pairing.** `GET /api/session`, which answers a page that has
+  shown no session, carries the kept language ([below](#the-owners-page)). So this one word
+  reaches whoever can ask the app's port on this computer, also a program of another account
+  that cannot read the directory. It is one of two words or none; a word also says that a store
+  exists, because none is told where there is no store. The view and the word about setting up
+  are not in that answer.
 - **Not part of the store.** The file is in no policy and in no entry of the record, is not
   counted among the sealed files, and states no version. Writing it changes nothing that is
   sealed: in a run for this page the head of the record (`#27 1fc8a7c6`) and the number of sealed
   files (32) were the same before and after.
 
 **In the state.** `GET /api/state` has a field `interface`. It is `null` while no store exists,
-and else `{"view": …, "setup": …, "stored": true or false}`, for a locked store too. `stored`
-says whether the two words come from a file that counts.
+and else `{"view": …, "setup": …, "language": "en", "pl" or null, "stored": true or false}`, for
+a locked store too. `language` is `null` while none was chosen. `stored` says whether the words
+come from a file that counts.
 
-**`POST /api/interface`** keeps a view, or that setting up is finished. It belongs to
+**In the session's answer.** `GET /api/session` has a field `language`: the word of the file
+when a store exists and its file holds one, and else `null`. It is the word the app last read,
+like the state's.
+
+**`POST /api/interface`** keeps a view, a language, or that setting up is finished. It belongs to
 [the API of the owner's page](#the-owners-page) and has to pass every check described there.
 
 | | |
 | --- | --- |
-| Body | `{"view": "basic" or "pro"}`, `{"setup": "done"}`, or both. `setup` can only be set to `done`: nothing sent to this route opens it again. A word that is not sent stays as the app last read it |
+| Body | `{"view": "basic" or "pro"}`, `{"setup": "done"}`, `{"language": "en" or "pl"}`, or any of them together. `setup` can only be set to `done`: nothing sent to this route opens it again, and nothing sent to it takes a language away. A word that is not sent stays as the app last read it |
 | Answer | The state, as `GET /api/state` gives it |
-| Errors | 400 `invalid` for another value, for a body with neither field, and for a field the route does not know. 404 `not_found` while no store exists. 503 `unavailable` when the file cannot be written; with a directory in its place the message was "The choice could not be kept: is a directory." |
+| Errors | 400 `invalid` for another value (for a language: "The language is "en" or "pl"."), for a body with none of the three fields, and for a field the route does not know. 404 `not_found` while no store exists. 503 `unavailable` when the file cannot be written; with a directory in its place the message was "The choice could not be kept: is a directory." |
 | While locked | Works |
 | Owner mode | Never needed: the route lets nothing leave and changes nothing that is sealed. In a run for this page, after owner mode had run out, registering a client was refused with `reauth_required` and this route was answered |
 | The record | No entry |
@@ -879,6 +923,15 @@ step of the first run with "Open my vault" or "Add a document of your own", or h
 "Finish setting up". One request it sends by itself, without a press: `{"setup": "done"}`,
 once a store that is being set up has a client and a document and a call has come under the
 name of one of its clients. It sends `setup` only for a store whose file says `open`.
+
+The page of this version sends no `language`, to this route or when it creates a store, and reads
+none from the state or from the session's answer: it has no switch for a language yet. The app
+keeps the word for whatever asks it to through these routes. In a run for this page a store was
+created over HTTP once without a language and once with `pl`: the files had 35 and 53 bytes and
+mode 0600. `POST /api/interface` with `{"language": "en"}`, then `{"view": "pro"}`, then
+`{"language": "pl"}` each left the head of the record and the number of sealed files as they
+were, and the second kept the language; `{"language": "de"}` was answered 400; and while the
+store was locked the route kept another language.
 
 ## The owner's page
 
@@ -911,7 +964,7 @@ keeps the session in its tab's `sessionStorage` under the key `session`.
 
 | Route | Answer |
 | --- | --- |
-| `GET /api/session` | `{"paired": true or false, "pairing": "code" or "none", "demo": …, "version": …, "name": "Locktender"}`. `paired` says whether the request showed the session. In a demo, which has no pairing (`"pairing": "none"`), the answer also holds `"session"`; with pairing it never does |
+| `GET /api/session` | `{"paired": true or false, "pairing": "code" or "none", "demo": …, "version": …, "name": "Locktender", "language": "en", "pl" or null}`. `paired` says whether the request showed the session. `language` is the one member that comes from the store's directory: the language kept in [the interface file](#the-interface-file), `null` when none is kept or no store exists. It is answered whether the request showed the session or not. In a demo, which has no pairing (`"pairing": "none"`), the answer also holds `"session"`; with pairing it never does |
 | `POST /api/session/pair` with `{"code": "XXXX-XXXX"}` | `{"paired": true, "session": "<64 hexadecimal characters>"}` for the right code. 403 `wrong_code` for another one; 429 `pairing_disabled` for the fifth wrong code of a run and for every code after it; 404 in a demo |
 
 The pairing code has eight characters from `ABCDEFGHJKMNPQRSTVWXYZ23456789` and is printed as
@@ -946,13 +999,13 @@ run for this page all 29 were called against a locked store.
 | Route | Does | Owner mode |
 | --- | --- | --- |
 | `GET /api/state` | The state at a glance: locked or not, the times, who is answered, the head of the record, notices; and two things that are not of the store, `interface` and `launch` ([below](#what-the-answers-say-about-the-interface)). Answers also while the store is locked or does not exist | |
-| `POST /api/store/create` `{passphrase}` | Creates the store, unlocks it, answers the state | |
+| `POST /api/store/create` `{passphrase, language?}` | Creates the store, unlocks it, answers the state. `language` (`en` or `pl`) is checked before anything is created and then kept in [the interface file](#the-interface-file) | |
 | `POST /api/unlock` `{passphrase, hours?}` | Unlocks, for `hours` (0.02 to 168) or the span the app was started with; answers the state | |
 | `POST /api/lock` | Locks; answers the state | |
 | `POST /api/reauth` `{passphrase}` | Checks the passphrase and begins owner mode anew: `{"owner_mode_until": …}` | |
 | `POST /api/serving` `{kinds?, paused?}` | Chooses which kinds of clients are answered (`hosted`, `local`, `both`) and which clients are paused | For `both`, and for every choice after which a client is answered that was not answered before |
 | `POST /api/verify` | Verifies the record again: `{"verified", "head_seq", "head_hash", "records", "seconds"}` | |
-| `POST /api/interface` `{view?, setup?}` | Keeps the view of the page, or that setting up is finished, in [the interface file](#the-interface-file); answers the state. Nothing of the store changes | |
+| `POST /api/interface` `{view?, setup?, language?}` | Keeps the view of the page, its language, or that setting up is finished, in [the interface file](#the-interface-file); answers the state. Nothing of the store changes | |
 | `GET /api/activity?limit=&before=&app=&kind=` | A page of the record, newest first, one sentence per entry | |
 | `GET /api/activity/<seq>` | One entry in full, with the exact text of a release | |
 | `GET /api/approvals` | The passages that wait, each with the text that would be released, and the approvals not yet used | |
@@ -993,11 +1046,12 @@ program, and with no byte from it.
 
 ### What the answers say about the interface
 
-Some fields of four answers are there for the page and say nothing about the documents.
+Some fields of five answers are there for the page and say nothing about the documents.
 
 | Answer | Field | Value |
 | --- | --- | --- |
-| `GET /api/state` | `interface` | `null` while no store exists, else `{"view", "setup", "stored"}`: the two words of [the interface file](#the-interface-file), and whether they come from a file that counts |
+| `GET /api/session` | `language` | `"en"`, `"pl"` or `null`: the language kept in [the interface file](#the-interface-file), told before pairing too |
+| `GET /api/state` | `interface` | `null` while no store exists, else `{"view", "setup", "language", "stored"}`: the words of [the interface file](#the-interface-file), `language` being `null` while none was chosen, and whether they come from a file that counts |
 | | `launch` | `{"command", "port_fixed"}`. `command` is one line of text that starts this installation of the app again: the Python interpreter by its full path, `-m wdva gate app`, `--store` with the absolute path of the store, then `--port` when the app was started with a port, `--lock-after` when it was started with another span than the 8 hours of the default, and `--no-browser` and `--window` when it was started with them. It never holds `--demo` or `--view`. The app composes it once, at start, from its own interpreter and arguments; nothing from a request goes into it. In a demo it is the command for a store of one's own, without `--store` unless the demo was started with one. It is `null` when Python cannot say where its interpreter is. `port_fixed` says whether the app was started with a port |
 | `GET /api/settings` | `changed_from_new` | Which of `defaults`, `groups`, `per_document` and `approval` hold other figures than a new store has. `[]` for a new store |
 | | `ceilings.passage_chars` | 800: the length of a passage that new stores are made with. It is the constant of the code, not `chunk_chars` read from the key slot |

@@ -19,6 +19,11 @@ What the server guarantees before it calls a method:
 
 Passphrases arrive as arguments like any other field. A method must never put
 one into a :class:`ServiceError` message or a returned value.
+
+One method belongs to no endpoint of its own: :meth:`Service.language`. The
+server asks it for the answer it gives a page before pairing, so the request
+behind it has shown no session. It returns one word or ``None`` instead of a
+JSON object, and it must not fail.
 """
 
 from __future__ import annotations
@@ -47,7 +52,7 @@ class ServiceError(Exception):
 
 
 class Service(Protocol):
-    """The app behind the interface. Every method may raise :class:`ServiceError`."""
+    """The app behind the interface. Every method but one may raise :class:`ServiceError`."""
 
     # -- state ------------------------------------------------------------------
 
@@ -55,8 +60,8 @@ class Service(Protocol):
         """What the interface shows at a glance. Answers also when locked or without a store."""
         ...
 
-    def create_store(self, *, passphrase: str) -> JSONObject:
-        """Create the store and return the state."""
+    def create_store(self, *, passphrase: str, language: str | None = None) -> JSONObject:
+        """Create the store and return the state; keep ``language`` for the page if one is given."""
         ...
 
     def unlock(self, *, passphrase: str, hours: float | None = None) -> JSONObject:
@@ -81,8 +86,18 @@ class Service(Protocol):
         """Verify the record chain and say what was found."""
         ...
 
-    def set_interface(self, *, view: str | None = None, setup: str | None = None) -> JSONObject:
-        """Keep which view of the interface the owner uses, or that setup is done; the state."""
+    def set_interface(
+        self, *, view: str | None = None, setup: str | None = None, language: str | None = None
+    ) -> JSONObject:
+        """Keep the view the owner uses, that setup is done, or the page's language; the state."""
+        ...
+
+    def language(self) -> str | None:
+        """The language kept for the owner's page, or ``None`` when none is kept.
+
+        Asked for a request that showed no session, and answered to it: the
+        word must be nothing that is secret, and the method must not raise.
+        """
         ...
 
     # -- activity ---------------------------------------------------------------
