@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025 Enclave
 //
-// The screens before the vault is open (pairing, creating, the locked vault), and
-// the three focused steps of setting up: the app, a document, the first question.
-// Each step is an address. Which step comes next is read from the vault, never
-// from what this page remembers.
+// The screens before the vault is open (pairing, the passphrase of a new vault, the
+// locked vault, the app that does not answer), and the three focused steps of
+// setting up: the app, a document, the first question. Each step is an address.
+// Which step comes next is read from the vault, never from what this page remembers.
+//
+// The four screens take every text from the text table and carry the choice of the
+// language. The three steps keep their own English texts.
 
 import { api } from "./api.js";
 import { ASK_START, FIRST_GROUP, basicBars, copyButton, copyLine, launchBlock, setupDone, setupFacts, waitingSaid } from "./basic.js";
@@ -12,8 +15,9 @@ import { PRODUCT } from "./brand.js";
 import { el, icon } from "./dom.js";
 import { at, bytes, count, num, parseTime, when } from "./format.js";
 import { SAMPLE, dropZone, isSample, loadingBlock, sessionFiles, whoLine } from "./manage.js";
-import { UNANSWERED, activityRow, button, chip, demoPassphraseNote, field, note, pathText, toast } from "./parts.js";
+import { UNANSWERED, activityRow, button, chip, demoPassphraseNote, errorText, field, languageSwitch, note, pathText, toast } from "./parts.js";
 import { GENERAL_SENTENCE, appFormProblem, basicGrantSentence, connectSub, loadConnect, otherAppFields } from "./sheets.js";
+import { chosenLanguage, t } from "./texts.js";
 import { approvalCards } from "./views.js";
 
 function brand(ctx) {
@@ -22,24 +26,36 @@ function brand(ctx) {
     { class: "gate-brand" },
     el("img", { src: "favicon.svg", width: 28, height: 28, alt: "" }),
     el("span", { class: "gate-name" }, PRODUCT),
-    ctx.session && ctx.session.demo ? chip("Demo", "accent") : null,
+    ctx.session && ctx.session.demo ? chip(t("common.chip.demo"), "accent") : null,
   );
 }
 
 /**
- * The frame of every screen that is not the vault itself: the name, one card, a line
- * at the foot. `options.step` is the frame of a step of setting up: the card starts at
- * the top of the window, so that what grows in it moves nothing that stands above,
- * and a bar that says what is wrong (`options.bar`) stands over the card.
+ * The frame of every screen that is not the vault itself: the choice of the language
+ * top right, the name, one card. `options.step` is the frame of a step of setting
+ * up: the card starts at the top of the window, so that what grows in it moves
+ * nothing that stands above, a bar that says what is wrong (`options.bar`) stands
+ * over the card, and a line (`options.foot`) under it.
  */
 function gateScreen(ctx, key, content, options = {}) {
   return el(
     "main",
     { class: ["gate", options.wide && "gate-wide", options.wider && "gate-wider", options.step && "gate-step"], key },
+    el("div", { class: "gate-lang", key: "lang" }, languageSwitch(ctx.chooseLanguage)),
     brand(ctx),
     options.bar ? el("div", { class: "gate-bar", key: "bar" }, options.bar) : null,
     content,
-    el("p", { class: "gate-foot" }, options.foot || `Version ${ctx.session ? ctx.session.version : ""}. Everything on this page comes from ${PRODUCT} on this computer.`),
+    options.foot ? el("p", { class: "gate-foot" }, options.foot) : null,
+  );
+}
+
+/** The foot of a card: its last sentences, each an element of its own, under a hairline. */
+function cardFoot(...sentences) {
+  const said = sentences.filter(Boolean);
+  return el(
+    "p",
+    { class: "gate-foot gate-foot-in", key: "foot" },
+    said.map((text, index) => [index ? " " : null, el("span", null, text)]),
   );
 }
 
@@ -52,11 +68,13 @@ export function bootScreen() {
   );
 }
 
-/** Shown when the app does not answer at all. */
+/**
+ * Shown when the app does not answer at all. Started again, the app has a new address
+ * unless it was given its port, and this page would ask at the old one for ever: so
+ * the screen sends the owner to the address the terminal prints, and promises nothing
+ * about itself.
+ */
 export function offlineScreen(ctx) {
-  // Started again, the app has a new address unless it was given its port, and a new
-  // pairing code. Only the demo runs without one.
-  const pairing = !(ctx.session && ctx.session.pairing === "none");
   return gateScreen(
     ctx,
     "offline",
@@ -64,18 +82,11 @@ export function offlineScreen(ctx) {
       "section",
       { class: "gate-card" },
       el("div", { class: "gate-glyph gate-glyph-amber" }, icon("warning")),
-      el("h1", { class: "gate-title" }, `${PRODUCT} is not answering`),
-      el(
-        "p",
-        { class: "gate-lead" },
-        `This page talks to ${PRODUCT} on this computer. It seems to have stopped. Start it again in a terminal. ` +
-          `It prints its address${pairing ? " and a new pairing code" : ""} there. ` +
-          `With the same address as before, this page continues by itself${pairing ? " and asks for the code" : ""}; ` +
-          "with a new address, which is the usual case, open that one instead.",
-      ),
-      button("Try now", { onclick: () => ctx.start() }),
+      el("h1", { class: "gate-title" }, t("offline.title")),
+      el("p", { class: "gate-lead" }, t("offline.say.1")),
+      button(t("offline.button.try"), { onclick: () => ctx.start() }),
+      cardFoot(t("offline.say.2")),
     ),
-    { foot: `When ${PRODUCT} stops, the vault is locked.` },
   );
 }
 
@@ -86,28 +97,42 @@ function tidyCode(text) {
   return letters.length > 4 ? `${letters.slice(0, 4)}-${letters.slice(4)}` : letters;
 }
 
+/** Whether all eight characters of the code are typed. */
+function complete(code) {
+  return code.replace("-", "").length === 8;
+}
+
 async function pair(ctx) {
   const form = ctx.ui.pair;
-  if (form.busy || form.code.replace("-", "").length < 8) return;
+  const code = form.code;
+  // A code that was refused is not sent again as it stands: five wrong codes switch pairing off.
+  if (form.busy || !complete(code) || code === form.refused) return;
   form.busy = true;
-  form.error = "";
+  form.wrong = false;
+  form.failed = null;
   ctx.render();
   try {
-    await api.pair(form.code);
+    await api.pair(code);
     form.code = "";
+    form.refused = "";
     form.busy = false;
     form.expired = false;
     await ctx.start();
   } catch (error) {
     form.busy = false;
     if (error.code === "pairing_disabled") form.disabled = true;
-    form.error = error.code === "wrong_code" ? "That is not the code. Check the terminal and try again." : error.message;
+    else if (error.code === "wrong_code") {
+      // Nothing is emptied: the owner corrects what is there.
+      form.refused = code;
+      form.wrong = form.code === code;
+    } else form.failed = error;
     ctx.render();
   }
 }
 
 export function pairingScreen(ctx) {
   const form = ctx.ui.pair;
+  const error = form.wrong ? t("pair.error.wrong") : form.failed ? errorText(form.failed) : "";
   return gateScreen(
     ctx,
     "pair",
@@ -121,21 +146,16 @@ export function pairingScreen(ctx) {
           pair(ctx);
         },
       },
-      el("div", { class: "gate-glyph" }, icon("link")),
-      el("h1", { class: "gate-title" }, "Pair this browser"),
-      form.expired ? note("plain", "The session ended. Pair again to continue.") : null,
-      el(
-        "p",
-        { class: "gate-lead", id: "pair-lead" },
-        `Type the pairing code from the terminal where you started ${PRODUCT}. It is on the line that begins with “pairing code”.`,
-      ),
+      el("h1", { class: "gate-title" }, t("pair.title")),
+      form.expired ? note("plain", t("pair.error.expired")) : null,
+      el("p", { class: "gate-lead", id: "pair-lead" }, t("pair.say.1")),
       form.disabled
-        ? note("red", `Pairing is switched off after five wrong codes. Quit ${PRODUCT} in its terminal and start it again to get a new code.`)
+        ? note("red", t("pair.error.disabled"))
         : [
             field({
-              label: "Pairing code",
+              label: t("pair.label.code"),
               id: "pair-code",
-              error: form.error,
+              error,
               control: el("input", {
                 type: "text",
                 id: "pair-code",
@@ -147,26 +167,31 @@ export function pairingScreen(ctx) {
                 autocapitalize: "characters",
                 spellcheck: "false",
                 autofocus: true,
-                "aria-describedby": form.error ? "pair-code-error" : "pair-lead",
-                "aria-invalid": form.error ? "true" : null,
+                "aria-describedby": error ? "pair-code-error" : "pair-lead",
+                "aria-invalid": error ? "true" : null,
                 oninput: (event) => {
                   form.code = tidyCode(event.target.value);
-                  form.error = "";
+                  form.failed = null;
+                  // The code that was refused is as wrong when it stands there again.
+                  form.wrong = form.code === form.refused && form.refused !== "";
                   ctx.render();
+                  // The eighth character sends the code: "Pair" is no press of its own on the way in.
+                  pair(ctx);
                 },
               }),
             }),
-            button(form.busy ? "Pairing…" : "Pair", {
+            // For a code that was corrected after a refusal, and for a request that did not arrive.
+            button(form.busy ? t("pair.button.busy") : t("pair.button.pair"), {
               kind: "primary",
               type: "submit",
               block: true,
               large: true,
               busy: form.busy,
-              disabled: form.code.replace("-", "").length < 8,
+              disabled: !complete(form.code) || form.code === form.refused,
             }),
           ],
+      cardFoot(t("pair.say.2")),
     ),
-    { foot: "Anyone who can read that terminal can pair. The code is never part of an address or a file." },
   );
 }
 
@@ -181,7 +206,7 @@ async function unlock(ctx) {
   const form = ctx.ui.unlock;
   if (form.busy || !form.passphrase) return;
   form.busy = true;
-  form.error = "";
+  form.failed = null;
   ctx.render();
   try {
     const state = await api.unlock(form.passphrase);
@@ -195,7 +220,7 @@ async function unlock(ctx) {
   } catch (error) {
     form.busy = false;
     form.passphrase = "";
-    form.error = error.code === "wrong_passphrase" ? "That passphrase did not open the vault." : error.message;
+    form.failed = error;
     form.shake = (form.shake || 0) + 1;
     ctx.render();
     const input = document.getElementById("unlock-passphrase");
@@ -207,11 +232,12 @@ export function lockedScreen(ctx) {
   const state = ctx.state;
   const form = ctx.ui.unlock;
   const record = state.record;
-  // Two things differ where the view that is kept is Basic: the newest entry of the record is
-  // one of the record's own figures and is left to Pro, and a page that saw the vault lock says
-  // what became of the passages that were waiting then.
-  const basic = Boolean(state.interface && state.interface.view === "basic");
-  const waited = basic ? form.waited || 0 : 0;
+  // The figures of the sealed files and of the record, and the sentence that explains them,
+  // stand only where the view that is kept is Pro: the everyday view shows no figure here.
+  const pro = !(state.interface && state.interface.view === "basic");
+  // What waited when the vault locked is said by a page that saw it lock, in either view.
+  const waited = form.waited || 0;
+  const error = form.failed ? errorText(form.failed, { wrong_passphrase: "locked.error.wrong", busy: "common.error.busy" }) : "";
   return gateScreen(
     ctx,
     "locked",
@@ -226,47 +252,36 @@ export function lockedScreen(ctx) {
         },
       },
       el("div", { class: "gate-glyph gate-glyph-sealed" }, icon("lock")),
-      el("h1", { class: "gate-title" }, "The vault is locked"),
+      el("h1", { class: "gate-title" }, t("locked.title")),
       el(
         "div",
         { class: "vault-id" },
-        el("span", { class: "vault-name" }, state.demo ? "Demo vault" : vaultName(state.store.path)),
+        el("span", { class: "vault-name" }, state.demo ? t("locked.label.demo") : vaultName(state.store.path)),
         el("span", { class: "vault-path" }, pathText(state.store.path, !state.demo)),
       ),
-      el(
-        "dl",
-        { class: "seal-facts" },
-        el("div", null, el("dt", null, "Sealed files"), el("dd", null, num(state.store.sealed_files))),
-        el("div", null, el("dt", null, "Size"), el("dd", null, bytes(state.store.sealed_bytes))),
-        !basic && record && record.head_seq
-          ? el(
-              "div",
-              { title: "The newest entry of the record of what was released: its number and the start of its hash" },
-              el("dt", null, "Last entry"),
-              el("dd", { class: "mono" }, `#${record.head_seq} ${record.head_hash}`),
-            )
-          : null,
-      ),
-      waited > 0
+      pro
         ? el(
-            "p",
-            { class: "note", id: "locked-waiting" },
-            waited === 1
-              ? "1 passage was waiting when the vault locked. It was not released. If an app still needs one, it will ask again after you unlock."
-              : `${num(waited)} passages were waiting when the vault locked. They were not released. If an app still needs one, it will ask again after you unlock.`,
+            "dl",
+            { class: "seal-facts", key: "facts" },
+            el("div", null, el("dt", null, t("locked.label.files")), el("dd", null, num(state.store.sealed_files))),
+            el("div", null, el("dt", null, t("locked.label.size")), el("dd", null, bytes(state.store.sealed_bytes))),
+            record && record.head_seq
+              ? el("div", null, el("dt", null, t("locked.label.last")), el("dd", { class: "mono" }, `#${record.head_seq} ${record.head_hash}`))
+              : null,
           )
         : null,
+      waited > 0 ? el("p", { class: "note", id: "locked-waiting", key: "waited" }, t("locked.status.waited", { n: waited })) : null,
       demoPassphraseNote(state.demo_passphrase, () => {
         form.passphrase = state.demo_passphrase;
-        form.error = "";
+        form.failed = null;
         ctx.render();
         const input = document.getElementById("unlock-passphrase");
         if (input) input.focus();
       }),
       field({
-        label: "Passphrase",
+        label: t("locked.label.passphrase"),
         id: "unlock-passphrase",
-        error: form.error,
+        error,
         control: el("input", {
           type: "password",
           id: "unlock-passphrase",
@@ -275,17 +290,129 @@ export function lockedScreen(ctx) {
           autocomplete: "current-password",
           autofocus: true,
           required: true,
-          "aria-invalid": form.error ? "true" : null,
-          "aria-describedby": form.error ? "unlock-passphrase-error" : null,
+          "aria-invalid": error ? "true" : null,
+          "aria-describedby": error ? "unlock-passphrase-error" : null,
           oninput: (event) => {
             form.passphrase = event.target.value;
             ctx.render();
           },
         }),
       }),
-      button(form.busy ? "Unlocking…" : "Unlock", { kind: "primary", type: "submit", block: true, large: true, busy: form.busy, disabled: !form.passphrase }),
+      button(form.busy ? t("locked.button.busy") : t("locked.button.unlock"), { kind: "primary", type: "submit", block: true, large: true, busy: form.busy, disabled: !form.passphrase }),
+      cardFoot(t("locked.say.1"), pro ? t("locked.say.2") : null),
     ),
-    { foot: "While locked, apps get one answer: the vault is locked. The number and sizes of the sealed files are visible without the key; what is in them is not." },
+  );
+}
+
+// -- the passphrase of a new vault ----------------------------------------------------
+
+async function createVault(ctx) {
+  const form = ctx.ui.create;
+  if (form.busy) return;
+  form.busy = true;
+  form.failed = null;
+  ctx.render();
+  try {
+    // A language the owner pressed here or on the pairing screen goes along; none is chosen for them.
+    const state = await api.createStore(form.passphrase, chosenLanguage());
+    form.passphrase = "";
+    form.again = "";
+    form.busy = false;
+    form.shown = false;
+    // A new vault whose view is Basic goes on to the step that adds an app. One that was
+    // started with the view Pro opens on Overview, where "Getting started" takes over.
+    ctx.navigate(state.interface && state.interface.view === "basic" ? "setup/app" : "overview");
+    ctx.applyState(state);
+    await ctx.refresh();
+  } catch (error) {
+    form.busy = false;
+    form.failed = error;
+    ctx.render();
+  }
+}
+
+/** There is no vault yet: the owner chooses the passphrase that will open it. */
+export function createScreen(ctx) {
+  const form = ctx.ui.create;
+  const length = Array.from(form.passphrase).length;
+  const longEnough = length >= 12;
+  const same = form.passphrase === form.again;
+  const mismatch = form.again.length > 0 && !same;
+  return gateScreen(
+    ctx,
+    "create",
+    el(
+      "form",
+      {
+        class: "gate-card",
+        autocomplete: "off",
+        onsubmit: (event) => {
+          event.preventDefault();
+          if (longEnough && same) createVault(ctx);
+        },
+      },
+      el("h1", { class: "gate-title" }, t("create.title")),
+      field({
+        label: t("create.label.passphrase"),
+        id: "new-passphrase",
+        hint: t(longEnough ? "create.status.long" : "create.status.short", { n: length }),
+        // It cannot be recovered, so it may be looked at while it is chosen.
+        action: button(t(form.shown ? "create.button.hide" : "create.button.show"), {
+          kind: "quiet",
+          small: true,
+          id: "new-passphrase-show",
+          pressed: form.shown ? "true" : "false",
+          label: t(form.shown ? "create.label.hide" : "create.label.show"),
+          onclick: () => {
+            form.shown = !form.shown;
+            ctx.render();
+          },
+        }),
+        control: el("input", {
+          type: form.shown ? "text" : "password",
+          id: "new-passphrase",
+          class: "input input-large",
+          value: form.passphrase,
+          autocomplete: "new-password",
+          autofocus: true,
+          "aria-describedby": "new-passphrase-hint",
+          oninput: (event) => {
+            form.passphrase = event.target.value;
+            ctx.render();
+          },
+        }),
+      }),
+      field({
+        label: t("create.label.again"),
+        id: "new-passphrase-again",
+        error: mismatch ? t("create.error.mismatch") : "",
+        control: el("input", {
+          type: form.shown ? "text" : "password",
+          id: "new-passphrase-again",
+          class: "input input-large",
+          value: form.again,
+          autocomplete: "new-password",
+          "aria-invalid": mismatch ? "true" : null,
+          "aria-describedby": mismatch ? "new-passphrase-again-error" : null,
+          oninput: (event) => {
+            form.again = event.target.value;
+            ctx.render();
+          },
+        }),
+      }),
+      // What the passphrase is for, and that nobody can reset it.
+      note("amber", [el("span", null, t("create.say.1")), " ", el("span", null, t("create.say.2"))]),
+      form.failed ? note("red", errorText(form.failed)) : null,
+      button(form.busy ? t("create.button.busy") : t("create.button.create"), {
+        kind: "primary",
+        type: "submit",
+        block: true,
+        large: true,
+        busy: form.busy,
+        disabled: !(longEnough && same),
+      }),
+      el("p", { class: "gate-where" }, t("create.status.where", { path: ctx.state.store.path })),
+    ),
   );
 }
 
@@ -312,121 +439,6 @@ function stepper(current, done = []) {
         el("span", { class: "step-label" }, label, checked ? el("span", { class: "sr-only" }, " (done)") : null),
       );
     }),
-  );
-}
-
-async function createVault(ctx) {
-  const form = ctx.ui.create;
-  if (form.busy) return;
-  form.busy = true;
-  form.error = "";
-  ctx.render();
-  try {
-    const state = await api.createStore(form.passphrase);
-    form.passphrase = "";
-    form.again = "";
-    form.busy = false;
-    form.shown = false;
-    // A new vault whose view is Basic goes on to the step that adds an app. One that was
-    // started with the view Pro opens on Overview, where "Getting started" takes over.
-    ctx.navigate(state.interface && state.interface.view === "basic" ? "setup/app" : "overview");
-    ctx.applyState(state);
-    await ctx.refresh();
-  } catch (error) {
-    form.busy = false;
-    form.error = error.message;
-    ctx.render();
-  }
-}
-
-/** Step 1 of the first run: there is no vault yet. */
-export function createScreen(ctx) {
-  const form = ctx.ui.create;
-  const length = Array.from(form.passphrase).length;
-  const longEnough = length >= 12;
-  const same = form.passphrase === form.again;
-  const mismatch = form.again.length > 0 && !same;
-  return gateScreen(
-    ctx,
-    "create",
-    el(
-      "form",
-      {
-        class: "gate-card",
-        autocomplete: "off",
-        onsubmit: (event) => {
-          event.preventDefault();
-          if (longEnough && same) createVault(ctx);
-        },
-      },
-      stepper(1),
-      el("h1", { class: "gate-title" }, "Choose a passphrase"),
-      el(
-        "p",
-        { class: "gate-lead" },
-        "Your documents are sealed with a key made from this passphrase. You type it each time you unlock the vault.",
-      ),
-      field({
-        label: "Passphrase",
-        id: "new-passphrase",
-        hint: longEnough ? `${num(length)} characters. Long enough.` : `At least 12 characters; ${num(length)} so far. A few unrelated words work well.`,
-        // It cannot be recovered, so it may be looked at while it is chosen.
-        action: button(form.shown ? "Hide" : "Show", {
-          kind: "quiet",
-          small: true,
-          id: "new-passphrase-show",
-          pressed: form.shown ? "true" : "false",
-          label: form.shown ? "Hide what is typed" : "Show what is typed",
-          onclick: () => {
-            form.shown = !form.shown;
-            ctx.render();
-          },
-        }),
-        control: el("input", {
-          type: form.shown ? "text" : "password",
-          id: "new-passphrase",
-          class: "input input-large",
-          value: form.passphrase,
-          autocomplete: "new-password",
-          autofocus: true,
-          "aria-describedby": "new-passphrase-hint",
-          oninput: (event) => {
-            form.passphrase = event.target.value;
-            ctx.render();
-          },
-        }),
-      }),
-      field({
-        label: "The same passphrase again",
-        id: "new-passphrase-again",
-        error: mismatch ? "The two entries are different." : "",
-        control: el("input", {
-          type: form.shown ? "text" : "password",
-          id: "new-passphrase-again",
-          class: "input input-large",
-          value: form.again,
-          autocomplete: "new-password",
-          "aria-invalid": mismatch ? "true" : null,
-          "aria-describedby": mismatch ? "new-passphrase-again-error" : null,
-          oninput: (event) => {
-            form.again = event.target.value;
-            ctx.render();
-          },
-        }),
-      }),
-      note("amber", "Losing the passphrase loses the vault. There is no recovery."),
-      form.error ? note("red", form.error) : null,
-      button(form.busy ? "Creating the vault…" : "Create the vault", {
-        kind: "primary",
-        type: "submit",
-        block: true,
-        large: true,
-        busy: form.busy,
-        disabled: !(longEnough && same),
-      }),
-      el("p", { class: "gate-where" }, "It will be created at ", pathText(ctx.state.store.path)),
-    ),
-    { wide: true },
   );
 }
 
@@ -897,7 +909,7 @@ function documentsStep(ctx) {
             ),
           ),
           // Said once: the line under the files the owner chose says the same.
-          chosen.some((item) => item.status === "done") ? null : whoLine(ctx, group, 1),
+          chosen.some((item) => item.status === "done") ? null : whoLine(ctx, group),
         )
       : null,
     el(

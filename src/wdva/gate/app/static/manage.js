@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025 Enclave
 //
-// The screens where the owner changes things: Documents, Apps and Vault.
+// The screens where the owner changes things: Documents, Apps and Vault. The zone that
+// takes files and its lines, the sheet that asks before a document is removed and the
+// eight statements of what the product cannot do are the same on every page, and take
+// their texts from the text table.
 
 import { api } from "./api.js";
 import { PRODUCT } from "./brand.js";
 import { el, icon } from "./dom.js";
-import { ago, bytes, count, dayShort, list, megabytes, num, when, whenFull } from "./format.js";
+import { ago, bytes, count, dayShort, megabytes, num, when, whenFull } from "./format.js";
 import {
   button,
   card,
@@ -14,6 +17,7 @@ import {
   confirmSheet,
   destinationChip,
   emptyState,
+  errorText,
   iconButton,
   meterRow,
   note,
@@ -36,6 +40,7 @@ import {
   openConnect,
   readNumber,
 } from "./sheets.js";
+import { t } from "./texts.js";
 
 export function loadingBlock() {
   return el("div", { class: "loading", role: "status" }, el("span", { class: "spinner" }), "Loading…");
@@ -54,11 +59,26 @@ function extension(name) {
   return dot < 0 ? "" : name.slice(dot).toLowerCase();
 }
 
-/** Send files to the vault one after the other and keep a line per file. */
+/**
+ * Why the app did not take a file, as the line of that file. The page has words for a
+ * document that is there already. Any other reason is the app's own sentence, in
+ * English: also "too large" when it comes from the app, which then speaks of the text
+ * in the file and not of its size, a size the page has checked before it sent the file.
+ */
+function refusedWords(error) {
+  if (error.code === "duplicate") return () => t("docs.error.duplicate");
+  return () => t("docs.error.other", { reason: errorText(error) });
+}
+
+/**
+ * Send files to the vault one after the other and keep a line per file. What a line
+ * says is kept as a function, so that it is said in the language the page shows when
+ * it is drawn.
+ */
 export async function uploadFiles(ctx, collection, files) {
   const rules = (ctx.data.documents && ctx.data.documents.upload) || { max_bytes: 20971520, types: [], pdf: true };
   const state = uploadState(ctx, collection);
-  const batch = Array.from(files).map((file) => ({ file, name: file.name, collection, status: "waiting", message: "" }));
+  const batch = Array.from(files).map((file) => ({ file, name: file.name, collection, status: "waiting", words: null }));
   if (!batch.length) return;
   state.items = state.items.concat(batch);
   state.busy = true;
@@ -66,30 +86,29 @@ export async function uploadFiles(ctx, collection, files) {
   let added = 0;
   for (const item of batch) {
     const kind = extension(item.name);
+    const refuse = (words) => {
+      item.status = "error";
+      item.words = words;
+    };
     if (rules.types.length && !rules.types.includes(kind)) {
-      item.status = "error";
-      item.message = `Not added: only ${list(rules.types)} files can be read.`;
+      refuse(() => t("docs.error.type"));
     } else if (kind === ".pdf" && rules.pdf === false) {
-      item.status = "error";
-      item.message = `Not added: reading PDFs is not installed with ${PRODUCT}.`;
+      refuse(() => t("docs.error.pdf"));
     } else if (item.file.size > rules.max_bytes) {
-      item.status = "error";
-      item.message = `Not added: larger than ${megabytes(rules.max_bytes)}.`;
+      refuse(() => t("docs.error.large", { size: megabytes(rules.max_bytes) }));
     } else if (item.file.size === 0) {
-      item.status = "error";
-      item.message = "Not added: the file is empty.";
+      refuse(() => t("docs.error.empty"));
     } else {
       item.status = "sending";
       ctx.render();
       try {
         const answer = await api.addDocument(collection, item.name, item.file);
-        const document = answer.document || {};
+        const passages = (answer.document || {}).passages;
         item.status = "done";
-        item.message = `Sealed: ${count(document.passages, "passage", "passages")}, ${num(document.characters)} characters.`;
+        item.words = () => t("docs.result.sealed", { n: passages });
         added += 1;
       } catch (error) {
-        item.status = "error";
-        item.message = error.code === "duplicate" ? "Not added: this document is already in the vault." : `Not added: ${error.message}`;
+        refuse(refusedWords(error));
         if (error.status === 401 || error.code === "locked") break;
       }
     }
@@ -98,9 +117,9 @@ export async function uploadFiles(ctx, collection, files) {
   }
   state.busy = false;
   const failed = batch.length - added;
-  if (added && !failed) toast(`${count(added, "document", "documents")} added to “${collection}”.`, "green");
-  else if (added) toast(`${num(added)} added to “${collection}”, ${num(failed)} not added.`, "amber");
-  else toast(batch.length === 1 ? batch[0].message : "No document was added.", "red");
+  if (added && !failed) toast(t("docs.result.added", { n: added }), "green");
+  else if (added) toast(t("docs.result.mixed", { added, failed }), "amber");
+  else toast(batch.length === 1 && batch[0].words ? batch[0].words() : t("docs.result.noneadded"), "red");
   await ctx.refresh();
 }
 
@@ -111,16 +130,6 @@ function sealedCount(state) {
 /** The lines of the files that were chosen for one collection since this page was loaded. */
 export function sessionFiles(ctx, collection) {
   return uploadState(ctx, collection).items;
-}
-
-/**
- * What is true of a file after it was added. The browser hands the app the file's
- * name and content, never its place, so the app can say only this.
- */
-export function leftOutsideText(sealed) {
-  return sealed === 1
-    ? "The file you chose is still where it was, not encrypted. Removing or moving it is up to you: this app cannot do it for you, and it cannot hand a file back out of the vault."
-    : "The files you chose are still where they were, not encrypted. Removing or moving them is up to you: this app cannot do it for you, and it cannot hand a file back out of the vault.";
 }
 
 /**
@@ -141,21 +150,18 @@ export function whoMayAsk(apps, collection, readWords) {
 /**
  * What is true of the files that were just sealed into one collection: which apps can ask
  * for them from now on. Adding a document never asks for the passphrase, so this is said
- * where the files are added. Names are the names the apps have in the vault.
+ * where the files are added, and it is never left out. Names are the names the apps have
+ * in the vault.
  */
-export function whoLine(ctx, collection, sealed) {
+export function whoLine(ctx, collection) {
   const data = ctx.data.apps;
   if (!data) return null;
-  const them = sealed === 1 ? "it" : "them";
-  const names = whoMayAsk(data.apps, collection, `${GRANT_LABEL.read}: passages of it can leave without asking`);
+  // By the two words of an access and nothing else: a collection may be named like something every object has.
+  const names = data.apps.filter((app) => ["approve", "read"].includes(app.grants[collection])).map((app) => app.name);
   return el(
     "li",
     { class: "upload-said", key: `who-${collection}` },
-    el(
-      "p",
-      { class: "upload-who", role: "status" },
-      names.length ? `Apps that may use your documents can ask for ${them} from now on: ${names.join(", ")}.` : `No app can ask for ${them} yet.`,
-    ),
+    el("p", { class: "upload-who", role: "status" }, names.length ? t("docs.result.who", { apps: names }) : t("docs.result.nobody")),
   );
 }
 
@@ -180,8 +186,6 @@ export function dropZone(ctx, collection, options = {}) {
   const inputId = `files-${collection}`;
   const hasFiles = (event) => event.dataTransfer && Array.from(event.dataTransfer.types || []).includes("Files");
   const accept = (files) => (held ? options.take(Array.from(files)) : uploadFiles(ctx, collection, files));
-  // Where the documents are not told apart by collection, the one collection of a new vault is not named.
-  const unnamed = held || (options.who && collection === "documents");
   let index = 0;
   return el(
     "div",
@@ -216,23 +220,18 @@ export function dropZone(ctx, collection, options = {}) {
       "div",
       { class: "drop-line" },
       icon("upload"),
-      el(
-        "span",
-        { class: "drop-text" },
-        el("strong", null, zone.over > 0 ? (unnamed ? "Drop to add" : `Drop to add to “${collection}”`) : "Drop files here"),
-        zone.over > 0 ? null : " or ",
-      ),
+      el("span", { class: "drop-text" }, t(zone.over > 0 ? "docs.label.dropnow" : "docs.label.drop")),
       el(
         "label",
         { class: ["btn", options.filled ? "btn-primary" : "btn-default", "btn-small", "file-button"], for: inputId },
-        el("span", { class: "btn-label" }, "Choose files"),
+        el("span", { class: "btn-label" }, t("docs.button.add")),
         el("input", {
           type: "file",
           id: inputId,
           class: "sr-only",
           multiple: true,
           accept: rules.types.join(","),
-          "aria-label": held ? "Choose files to add" : `Choose files to add to ${collection}`,
+          "aria-label": t("docs.button.add"),
           onchange: (event) => {
             const files = Array.from(event.target.files || []);
             event.target.value = "";
@@ -241,15 +240,12 @@ export function dropZone(ctx, collection, options = {}) {
         }),
       ),
     ),
-    el(
-      "p",
-      { class: "drop-hint" },
-      `Text files and PDFs, up to ${megabytes(rules.max_bytes)} each. A sealed copy of each file goes into the vault.`,
-    ),
+    // What can be read stands where the choice is made: the file dialog greys the rest out without a word.
+    el("p", { class: "drop-hint" }, t("docs.status.types", { size: megabytes(rules.max_bytes) })),
     state.items.length
       ? el(
           "ul",
-          { class: "upload-list", "aria-label": "Files from this session" },
+          { class: "upload-list" },
           lists.map((entry) => [
             entry.list.items.map((item) => {
               index += 1;
@@ -263,22 +259,21 @@ export function dropZone(ctx, collection, options = {}) {
                   el("span", { class: "upload-name", title: item.name }, item.name),
                   // With several groups each file says which one it went to.
                   lists.length > 1 ? el("span", { class: "upload-group" }, entry.name) : null,
-                  el("span", { class: "upload-note" }, item.status === "sending" ? "Sealing…" : item.status === "waiting" ? "Waiting" : item.message),
+                  el("span", { class: "upload-note" }, item.status === "sending" ? t("docs.status.sealing") : item.words ? item.words() : t("docs.status.waiting")),
                 ),
               );
             }),
             // Said under the files of each collection, since each has its own apps.
-            options.who && sealedCount(entry.list) ? whoLine(ctx, entry.name, sealedCount(entry.list)) : null,
+            options.who && sealedCount(entry.list) ? whoLine(ctx, entry.name) : null,
           ]),
-          // Said once per list: where the file came from is not something the app is told.
-          sealedCount(state)
-            ? el("li", { class: "upload-outside", key: "outside" }, note("amber", leftOutsideText(sealedCount(state))))
-            : null,
+          // Said once per list: a sealed copy is in the vault, and the file that was chosen is
+          // still where it was, not encrypted. Where it lies is not something the app is told.
+          sealedCount(state) ? el("li", { class: "upload-outside", key: "outside" }, note("amber", t("docs.say.1"))) : null,
           !state.busy
             ? el(
                 "li",
                 { class: "upload-clear", key: "clear" },
-                button("Clear this list", {
+                button(t("docs.button.clear"), {
                   kind: "quiet",
                   small: true,
                   onclick: () => {
@@ -325,16 +320,17 @@ function releasedText(released) {
 
 export async function removeDocument(ctx, document) {
   const agreed = await confirmSheet({
-    title: `Remove “${document.title}”?`,
-    text: "Apps can no longer search or read it. What was released earlier stays in the record.",
-    sentenceText: "Its files are deleted, not shredded; backups keep what they have.",
-    confirmLabel: "Remove",
+    title: t("remove.title", { title: document.title }),
+    text: t("remove.say.1"),
+    sentenceText: t("remove.say.2"),
+    confirmLabel: t("common.button.remove"),
+    cancelLabel: t("common.button.cancel"),
     danger: true,
   });
   if (!agreed) return;
   try {
     await api.removeDocument(document.id);
-    toast(`Removed “${document.title}”.`, "green");
+    toast(t("remove.result.done", { title: document.title }), "green");
   } catch (error) {
     toastError(error);
   }
@@ -1023,21 +1019,29 @@ async function addWord(ctx) {
   await ctx.refresh();
 }
 
-/** What the product is not, in eight statements. The Vault page and a sheet of the Basic page show them. */
+/**
+ * What the product is not, in eight statements: the keys of their texts. Every page
+ * that shows the statements takes them from this one list, through `cannotList`.
+ */
 export const CANNOT = [
-  "Take text back. What an app received is with that app and, for a hosted app, with its provider; the app keeps its own copy too.",
-  "Tell who is calling. App names are labels: any program running as you can call under a name that is answered.",
-  "Notice instructions hidden in a document. Limits bound what can be lost; one allowed passage is enough to leak that passage.",
-  "Keep a whole document in. Search answers show which passages contain the words asked for, and passages add up, one by one.",
-  "Replace more than the words you listed. Other forms of the same name or number pass.",
-  "Protect your passphrase from other programs running as you, or bring back a lost one.",
-  "Prove anything with its record. It is a log of what was released; whoever can delete files can roll it back.",
-  "Shred. Removing a document deletes files, and backups keep what they have.",
+  "how.cannot.1",
+  "how.cannot.2",
+  "how.cannot.3",
+  "how.cannot.4",
+  "how.cannot.5",
+  "how.cannot.6",
+  "how.cannot.7",
+  "how.cannot.8",
 ];
+
+/** The eight statements as a list, in the language the page shows. */
+export function cannotList() {
+  return el("ul", { class: "cannot" }, CANNOT.map((key) => el("li", { key }, t(key))));
+}
 
 /** The line that says which version this is, and that it is a preview. */
 export function versionLine(state) {
-  return `${PRODUCT} ${state.version} · a preview: it has not yet been tried against the agent applications it lists, and it does not run on Windows.`;
+  return t("how.version", { version: state.version });
 }
 
 export function vaultView(ctx) {
@@ -1063,7 +1067,7 @@ export function vaultView(ctx) {
           fact("Inside", `${count(facts.documents, "document", "documents")} in ${count(facts.collections, "collection", "collections")} · ${num(facts.characters)} characters`),
           fact("Copies of the files you added", facts.originals_kept > 0 ? `${num(facts.originals_kept)}, sealed like the text` : "None"),
           fact("Last entry of the record", `#${record.head_seq} ${record.head_hash}`, { mono: true }),
-          fact("Kept beside the vault, not sealed", "Which view you use, and whether setup was finished"),
+          fact("Kept beside the vault, not sealed", "Which view you use, whether setup was finished, and your language once you chose one"),
         ),
         { key: "location" },
       ),
@@ -1148,7 +1152,7 @@ export function vaultView(ctx) {
       ),
       card(
         `What ${PRODUCT} cannot do`,
-        el("ul", { class: "cannot" }, CANNOT.map((text, index) => el("li", { key: `cannot-${index}` }, text))),
+        cannotList(),
         { key: "cannot", class: "span-2" },
       ),
       el("p", { class: "version span-2", key: "version" }, versionLine(state)),

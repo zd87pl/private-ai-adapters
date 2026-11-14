@@ -924,9 +924,13 @@ step of the first run with "Open my vault" or "Add a document of your own", or h
 once a store that is being set up has a client and a document and a call has come under the
 name of one of its clients. It sends `setup` only for a store whose file says `open`.
 
-The page of this version sends no `language`, to this route or when it creates a store, and reads
-none from the state or from the session's answer: it has no switch for a language yet. The app
-keeps the word for whatever asks it to through these routes. In a run for this page a store was
+The page sends `language` when the owner presses "English" or "Polski" in its switch, once a
+store exists and the page is paired, for a locked store too. A language pressed before there was
+a store goes along with `POST /api/store/create`, and one pressed before pairing is sent right
+after it. The page sends one request to this route at a time. Which language it shows: what the
+owner pressed since the page was loaded, which the page keeps in its memory and nowhere in the
+browser; else `language` of the state or of the session's answer; else the browser's own where
+that is Polish or English, and English otherwise. In a run for this page a store was
 created over HTTP once without a language and once with `pl`: the files had 35 and 53 bytes and
 mode 0600. `POST /api/interface` with `{"language": "en"}`, then `{"view": "pro"}`, then
 `{"language": "pl"}` each left the head of the record and the number of sealed files as they

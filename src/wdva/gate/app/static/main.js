@@ -11,8 +11,9 @@ import { el, icon, render } from "./dom.js";
 import { at, num, parseTime } from "./format.js";
 import { bootScreen, createScreen, freshFirstRun, lockedScreen, offlineScreen, openStep, pairingScreen, setupScreen, stepApp } from "./gateway.js";
 import { appsView, documentsView, vaultView } from "./manage.js";
-import { button, chip, closeAllSheets, iconButton, segmented, toast, toastError, watchSheets } from "./parts.js";
+import { button, chip, closeAllSheets, iconButton, languageSwitch, segmented, toast, toastError, watchSheets } from "./parts.js";
 import { requestReauth } from "./sheets.js";
+import { chooseLanguage, chosenLanguage, keptLanguage, t } from "./texts.js";
 import { activityView, approvalCardKey, approvalsView, detailPanel, overviewView } from "./views.js";
 
 const POLL_MS = 2000;
@@ -78,10 +79,11 @@ function freshLeft() {
 
 function freshUi() {
   return Object.assign(freshFirstRun(), {
-    pair: { code: "", busy: false, error: "", disabled: false, expired: false },
+    // `refused`: the code the app refused last, which is not sent again as it stands. `failed`: another error, as it came.
+    pair: { code: "", busy: false, wrong: false, refused: "", failed: null, disabled: false, expired: false },
     // `waited`: how many passages were waiting when this page saw the vault lock.
-    unlock: { passphrase: "", busy: false, error: "", shake: 0, waited: 0 },
-    create: { passphrase: "", again: "", busy: false, error: "", shown: false },
+    unlock: { passphrase: "", busy: false, failed: null, shake: 0, waited: 0 },
+    create: { passphrase: "", again: "", busy: false, failed: null, shown: false },
     uploads: {},
     notes: Object.create(null), // by group name, and a group may be named "constructor"
     limits: null,
@@ -91,7 +93,9 @@ function freshUi() {
     verifyFailure: "",
     deciding: new Set(),
     decided: new Map(),
+    // By app and reference: the cards that say their text changed, and the cards whose details are unfolded.
     approvalNotes: {},
+    approvalDetails: new Set(),
     approvalSignature: null,
     releaseArmedAt: Number.POSITIVE_INFINITY,
     dismissQuietUntil: 0,
@@ -151,6 +155,7 @@ const ctx = {
   loadMoreLeft,
   setUpInPro,
   start,
+  chooseLanguage: pressLanguage,
 };
 
 // -- drawing ------------------------------------------------------------------------
@@ -222,6 +227,7 @@ function sidebar() {
     el(
       "div",
       { class: "sidebar-foot" },
+      languageSwitch(pressLanguage),
       viewSwitch(),
       el(
         "div",
@@ -344,6 +350,7 @@ function topbar() {
       el("span", { class: "brand-name" }, PRODUCT),
       state.demo ? chip("Demo", "accent") : null,
     ),
+    languageSwitch(pressLanguage, { short: true }),
     el(
       "div",
       { class: "topbar-lock" },
@@ -383,12 +390,13 @@ function stuckScreen() {
   return el(
     "main",
     { class: "gate", key: "stuck" },
+    el("div", { class: "gate-lang", key: "lang" }, languageSwitch(pressLanguage)),
     el(
       "section",
       { class: "gate-card" },
-      el("h1", { class: "gate-title" }, "This page has no session"),
-      el("p", { class: "gate-lead" }, `${PRODUCT} did not give this page a session. Reload the page. If that does not help, quit ${PRODUCT} in its terminal and start it again.`),
-      button("Reload", { kind: "primary", onclick: () => window.location.reload() }),
+      el("h1", { class: "gate-title" }, t("stuck.title")),
+      el("p", { class: "gate-lead" }, t("stuck.say.1")),
+      button(t("stuck.button.reload"), { onclick: () => window.location.reload() }),
     ),
   );
 }
@@ -436,7 +444,7 @@ function paint() {
   const state = ctx.state;
   const waiting = state && state.today ? state.today.approvals_waiting : 0;
   let title = PRODUCT;
-  if (state && state.store.exists && state.locked) title = `${PRODUCT} – locked`;
+  if (state && state.store.exists && state.locked) title = t("nav.tab.locked");
   else if (waiting > 0) title = `(${num(waiting)}) ${PRODUCT}`;
   if (document.title !== title) document.title = title;
   // The icon of the tab carries a dot while a passage waits for the owner.
@@ -685,8 +693,10 @@ function applyState(next, force = false) {
     closeAllSheets();
     forget();
     ctx.ui.unlock.waited = waited;
-    toast("The vault is locked.", "plain");
+    toast(t("nav.result.locked"), "plain");
   }
+  // The language the app keeps beside the vault is the one shown, unless the owner pressed one on this page.
+  if (next.interface) keptLanguage(next.interface.language);
   // Which page an address opens that names none is decided by the view that is kept, once the app has said it.
   if (next.interface && !(previous && previous.interface)) settleRoute();
   // Whenever the Basic page opens, the focus goes to its headline, never to a button of a card.
@@ -696,6 +706,8 @@ function applyState(next, force = false) {
   const retry = Object.keys(ctx.loadErrors).length > 0;
   if (isOpen && (force || retry || !wasOpen || previous.cursor !== next.cursor)) lastLoad = loadRoute();
   schedule();
+  // A language that was pressed before the app could keep it (on the pairing screen) is sent now.
+  keepLanguage();
 }
 
 async function fetchState(force) {
@@ -970,6 +982,38 @@ async function setUpInPro() {
   schedule();
 }
 
+// -- the language ---------------------------------------------------------------------
+
+/** The language this page last asked the app to keep, so that one press is one request. */
+let languageSent = null;
+
+/**
+ * Have the app keep the language the owner pressed, beside the vault. That needs a
+ * vault and a paired page: before there is one, the press stays in this page's memory
+ * and goes along with the passphrase of the new vault. Nothing is said when it
+ * worked: the page is the answer.
+ */
+async function keepLanguage() {
+  const wanted = chosenLanguage();
+  const state = ctx.state;
+  if (wanted === null || wanted === languageSent || ctx.phase !== "ready" || !state || !state.store.exists) return;
+  if (state.interface && state.interface.language === wanted) return;
+  languageSent = wanted;
+  try {
+    applyState(await api.setInterface({ language: wanted }));
+  } catch (error) {
+    toastError(error);
+  }
+}
+
+/** The owner pressed "English" or "Polski": the page changes at once, then the app is asked to keep the word. */
+function pressLanguage(code) {
+  chooseLanguage(code);
+  languageSent = null;
+  schedule();
+  keepLanguage();
+}
+
 async function lockNow() {
   if (ctx.ui.locking) return;
   ctx.ui.locking = true;
@@ -1001,6 +1045,8 @@ async function start() {
   }
   ctx.session = session;
   ctx.offline = false;
+  // The app tells the kept language before pairing, so that the pairing screen is in it.
+  keptLanguage(session.language);
   if (!session.paired) {
     // Without pairing (the demo) the session comes with the answer itself. When it
     // did not, there is no code to ask for either.

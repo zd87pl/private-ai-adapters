@@ -1,0 +1,190 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025 Enclave
+//
+// The texts of the page in Polish: one flat table, a key for each text. A value is
+// one text, or the plural forms of one (`one`, `few`, `many` and `other`). A place for a
+// value is its name in braces, and the product's name is the place {product}. This
+// file imports nothing, and only texts.js reads it.
+
+export const TEXT = Object.freeze({
+  // Every screen
+  "common.label.language": "Język",
+  "common.lang.en": "English",
+  "common.lang.pl": "Polski",
+  "common.chip.demo": "Demo",
+  "common.button.cancel": "Anuluj",
+  "common.button.remove": "Usuń",
+  "common.status.justnow": "przed chwilą",
+  "common.error.unknown": "Coś poszło nie tak.",
+  "common.error.cancelled": "Nic nie zostało zmienione.",
+  "common.error.busy": "Sejf jest otwarty w innym programie; najpierw zablokuj go tam.",
+  "common.error.unavailable": "Sejf nie może teraz odpowiedzieć.",
+  "nav.result.locked": "Sejf jest zablokowany.",
+  "nav.tab.locked": "{product} – zablokowany",
+
+  // Pairing, and a page without a session
+  "pair.title": "Sparuj tę przeglądarkę",
+  "pair.say.1": "Wpisz kod parowania z terminala, w którym działa {product}.",
+  "pair.say.2": "Sparować może każdy, kto widzi ten terminal.",
+  "pair.label.code": "Kod parowania",
+  "pair.button.pair": "Sparuj",
+  "pair.button.busy": "Parowanie…",
+  "pair.error.wrong": "To nie ten kod. Sprawdź terminal i spróbuj ponownie.",
+  "pair.error.expired": "Sesja wygasła. Sparuj przeglądarkę ponownie.",
+  "pair.error.disabled": "Po pięciu błędnych kodach parowanie jest wyłączone. Zamknij {product} w terminalu i uruchom ponownie.",
+  "stuck.title": "Ta strona nie ma sesji",
+  "stuck.say.1": "Odśwież stronę, a jeśli to nie pomoże, zamknij {product} w terminalu i uruchom ponownie.",
+  "stuck.button.reload": "Odśwież",
+
+  // The passphrase of a new vault
+  "create.title": "Ustaw hasło",
+  "create.label.passphrase": "Hasło",
+  "create.label.again": "Jeszcze raz",
+  "create.button.show": "Pokaż",
+  "create.button.hide": "Ukryj",
+  "create.label.show": "Pokaż wpisywany tekst",
+  "create.label.hide": "Ukryj wpisywany tekst",
+  "create.status.short": "Co najmniej 12 znaków; na razie {n}",
+  "create.status.long": {
+    one: "{n} znak: wystarczy",
+    few: "{n} znaki: wystarczy",
+    many: "{n} znaków: wystarczy",
+    other: "{n} znaku: wystarczy",
+  },
+  "create.error.mismatch": "Hasła nie są takie same.",
+  "create.say.1": "Hasło zamyka Twoje dokumenty na tym komputerze.",
+  "create.say.2": "Nikt go nie zresetuje: utrata hasła oznacza utratę sejfu.",
+  "create.button.create": "Utwórz sejf",
+  "create.button.busy": "Tworzenie sejfu…",
+  "create.status.where": "Powstanie w: {path}",
+
+  // The approval card
+  "card.title": "{app} prosi o fragment dokumentu „{title}”",
+  "card.chip.hosted": "Trafiłby do firmy {destination}",
+  "card.chip.local": "Zostaje tu, o ile aplikacja naprawdę jest lokalna",
+  "card.status.claimed": "Przedstawia się jako {claimed} (niesprawdzone)",
+  "card.status.asked": "Poproszono {ago}",
+  "card.status.asked.times": {
+    one: "Poproszono {n} raz, po raz pierwszy {ago}",
+    few: "Poproszono {n} razy, po raz pierwszy {ago}",
+    many: "Poproszono {n} razy, po raz pierwszy {ago}",
+    other: "Poproszono {n} raza, po raz pierwszy {ago}",
+  },
+  "card.label.text": "Dokładny tekst, który zostałby udostępniony",
+  "card.status.meta": {
+    one: "{n} znak · fragment {passage} z {passages}",
+    few: "{n} znaki · fragment {passage} z {passages}",
+    many: "{n} znaków · fragment {passage} z {passages}",
+    other: "{n} znaku · fragment {passage} z {passages}",
+  },
+  "card.say.1": "Po udostępnieniu ten tekst trafia do firmy {destination} i nie da się tego cofnąć.",
+  "card.say.1.local": "Po udostępnieniu ten tekst trafia do aplikacji i zostaje na tym komputerze tylko wtedy, gdy aplikacja naprawdę jest lokalna.",
+  "card.say.2": "Nazwa „{app}” to tylko etykieta: {product} nie może sprawdzić, który program pyta.",
+  "card.button.no": "Nie udostępniaj",
+  "card.button.yes": "Udostępnij raz",
+  "card.label.wait": "Najpierw przeczytaj tekst",
+  "card.button.details": "Szczegóły",
+  "card.status.document": "Ten dokument: udostępniono już {released} z {characters} znaków; po tym {after}.",
+  "card.status.today": "Ta aplikacja, ostatnie 24 godziny: {used} z {limit} znaków.",
+  "card.details.say.1.each": "Czeka, bo ta aplikacja pyta Cię za każdym razem.",
+  "card.details.say.1.allowance": "Czeka, bo wykracza poza to, co aplikacja może przeczytać z tego dokumentu bez pytania.",
+  "card.say.3.nofit": "Limity aplikacji odrzuciłyby teraz ten fragment, nawet za Twoją zgodą.",
+  "card.result.yes": "Udostępniono raz aplikacji {app}, do {time}. Napisz w niej: „spróbuj ponownie”.",
+  "card.result.no": "Nie udostępniono. Jeśli {app} poprosi ponownie, fragment wróci tutaj.",
+  "card.result.changed": "Tekst zmienił się od chwili wyświetlenia, więc nic nie udostępniono. Przeczytaj go ponownie.",
+
+  // The zone that takes files, and its lines
+  "docs.say.1": "Do sejfu trafia zaszyfrowana kopia, a dodany plik zostaje tam, gdzie był, niezaszyfrowany.",
+  "docs.button.add": "Dodaj dokumenty",
+  "docs.label.drop": "Upuść pliki tutaj",
+  "docs.label.dropnow": "Upuść, aby dodać",
+  "docs.status.types": "PDF lub tekst, każdy do {size}",
+  "docs.status.sealing": "Szyfrowanie…",
+  "docs.status.waiting": "W kolejce",
+  "docs.result.sealed": {
+    one: "Zaszyfrowano: {n} fragment",
+    few: "Zaszyfrowano: {n} fragmenty",
+    many: "Zaszyfrowano: {n} fragmentów",
+    other: "Zaszyfrowano: {n} fragmentu",
+  },
+  "docs.result.who": "Aplikacje, które mogą odtąd o to prosić: {apps}.",
+  "docs.result.nobody": "Żadna aplikacja nie może jeszcze o to prosić.",
+  "docs.error.type": "Nie dodano: można odczytać tylko pliki PDF i tekstowe. Plik Worda zapisz jako PDF i dodaj ponownie.",
+  "docs.error.pdf": "Nie dodano: w tej instalacji brakuje obsługi plików PDF.",
+  "docs.error.large": "Nie dodano: plik większy niż {size}.",
+  "docs.error.empty": "Nie dodano: plik jest pusty.",
+  "docs.error.duplicate": "Nie dodano: ten dokument już jest w sejfie.",
+  "docs.error.other": "Nie dodano: {reason}",
+  "docs.button.clear": "Wyczyść tę listę",
+  "docs.result.added": {
+    one: "Dodano {n} dokument.",
+    few: "Dodano {n} dokumenty.",
+    many: "Dodano {n} dokumentów.",
+    other: "Dodano {n} dokumentu.",
+  },
+  "docs.result.mixed": "Dodano {added}, nie dodano {failed}.",
+  "docs.result.noneadded": "Nie dodano żadnego dokumentu.",
+
+  // The sheet that asks before a document is removed
+  "remove.title": "Usunąć „{title}”?",
+  "remove.say.1": "Aplikacje nie będą już mogły go przeszukiwać ani czytać, a to, co udostępniono wcześniej, zostaje w Aktywności.",
+  "remove.say.2": "Jego pliki są usuwane, ale nie nadpisywane, a kopie zapasowe zachowują to, co mają.",
+  "remove.result.done": "Usunięto „{title}”.",
+
+  // The details of an entry
+  "panel.label.close": "Zamknij szczegóły",
+  "panel.label.text": "Dokładny tekst, który opuścił sejf",
+  "panel.say.1": "Ten tekst ma teraz firma {destination}.",
+  "panel.say.2": "{product} nie może tego cofnąć.",
+  "panel.say.1.local": "Ten tekst ma teraz aplikacja, a zostaje na tym komputerze tylko wtedy, gdy aplikacja naprawdę jest lokalna.",
+  "panel.label.query": "Czego szukano",
+  "panel.button.record": "Szczegóły wpisu",
+  "panel.label.entry": "Wpis nr {seq}",
+
+  // The sheet that asks for the passphrase again, and the demo's note
+  "reauth.title": "Wpisz hasło ponownie",
+  "reauth.say.1": "To wymaga hasła, bo ostatnio wpisano je ponad 10 minut temu.",
+  "reauth.label.passphrase": "Hasło",
+  "reauth.button.continue": "Dalej",
+  "reauth.button.busy": "Sprawdzanie…",
+  "reauth.error.wrong": "To hasło jest nieprawidłowe.",
+  "demo.say.1": "To demo, a hasło do jego sejfu to {passphrase}.",
+  "demo.say.2": "Hasło do prawdziwego sejfu nigdy nie jest pokazywane.",
+  "demo.button.fill": "Wpisz je",
+
+  // The locked vault
+  "locked.title": "Sejf jest zablokowany",
+  "locked.label.demo": "Sejf demo",
+  "locked.label.passphrase": "Hasło",
+  "locked.button.unlock": "Odblokuj",
+  "locked.button.busy": "Odblokowywanie…",
+  "locked.error.wrong": "To hasło nie otworzyło sejfu.",
+  "locked.status.waited": {
+    one: "Gdy sejf został zablokowany, czekał {n} fragment; nie został udostępniony.",
+    few: "Gdy sejf został zablokowany, czekały {n} fragmenty; żaden nie został udostępniony.",
+    many: "Gdy sejf został zablokowany, czekało {n} fragmentów; żaden nie został udostępniony.",
+    other: "Gdy sejf został zablokowany, czekało {n} fragmentu; żaden nie został udostępniony.",
+  },
+  "locked.say.1": "Gdy sejf jest zablokowany, aplikacje dostają jedną odpowiedź: sejf jest zablokowany.",
+  "locked.say.2": "Liczbę i rozmiary zaszyfrowanych plików widać bez klucza, ale ich zawartości nie.",
+  "locked.label.files": "Zaszyfrowane pliki",
+  "locked.label.size": "Rozmiar",
+  "locked.label.last": "Ostatni wpis",
+
+  // The app does not answer
+  "offline.title": "{product} nie odpowiada",
+  "offline.say.1": "Uruchom {product} ponownie w terminalu i otwórz adres, który się tam pojawi.",
+  "offline.say.2": "Gdy {product} przestaje działać, sejf jest zablokowany.",
+  "offline.button.try": "Spróbuj teraz",
+
+  // What the product cannot do
+  "how.cannot.1": "Nie odbierze tekstu z powrotem. To, co aplikacja dostała, jest u niej, a w przypadku aplikacji wysyłającej tekst do dostawcy także u tego dostawcy.",
+  "how.cannot.2": "Nie stwierdzi, kto pyta. Nazwy aplikacji to etykiety: każdy program działający na Twoim koncie może pytać pod nazwą, która dostaje odpowiedzi.",
+  "how.cannot.3": "Nie zauważy poleceń ukrytych w dokumencie. Limity ograniczają możliwą stratę; jeden udostępniony fragment wystarczy, by ten fragment wyciekł.",
+  "how.cannot.4": "Nie zatrzyma całego dokumentu. Wyniki wyszukiwania pokazują, które fragmenty zawierają szukane słowa, a fragmenty sumują się jeden po drugim.",
+  "how.cannot.5": "Nie zastąpi niczego poza słowami z Twojej listy. Inne formy tej samej nazwy lub liczby przechodzą.",
+  "how.cannot.6": "Nie ochroni hasła przed innymi programami działającymi na Twoim koncie i nie odzyska utraconego.",
+  "how.cannot.7": "Niczego nie udowodni swoim rejestrem. To dziennik tego, co udostępniono; kto może usuwać pliki, może go cofnąć.",
+  "how.cannot.8": "Nie usuwa danych bezpowrotnie. Usunięcie dokumentu kasuje pliki bez nadpisywania, a kopie zapasowe zachowują to, co mają.",
+  "how.version": "{product} {version} · wczesna wersja: nie sprawdzono jej jeszcze z aplikacjami AI, które wymienia, i nie działa w systemie Windows.",
+});

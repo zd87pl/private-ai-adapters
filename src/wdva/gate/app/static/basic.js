@@ -20,7 +20,7 @@ import { api } from "./api.js";
 import { PRODUCT } from "./brand.js";
 import { el, icon } from "./dom.js";
 import { ago, at, count, dayShort, num, parseTime, percent, whenFull } from "./format.js";
-import { CANNOT, dropZone, isSample, loadingBlock, removeApp, removeDocument, uploadFiles, versionLine, whoMayAsk } from "./manage.js";
+import { cannotList, dropZone, isSample, loadingBlock, removeApp, removeDocument, uploadFiles, versionLine, whoMayAsk } from "./manage.js";
 import {
   UNANSWERED,
   activityRow,
@@ -1433,7 +1433,7 @@ function openCannot(ctx) {
         "div",
         { class: "sheet-content" },
         sheetHead(title),
-        el("ul", { class: "cannot" }, CANNOT.map((statement, index) => el("li", { key: `cannot-${index}` }, statement))),
+        cannotList(),
         el("p", { class: "version" }, versionLine(ctx.state)),
         sheetFoot(button("Close", { onclick: () => self.close(), autofocus: true })),
       ),

@@ -84,11 +84,12 @@ MARKUP_AND_CODE_SINKS = {
 
 # Sentences the interface must show where the owner decides, word for word.
 REQUIRED_SENTENCES = [
+    # Where the texts of a screen or a part live in the text tables, its sentences are pinned
+    # there, key by key (REQUIRED_TEXTS in test_gate_interface_texts.py). Here stand the
+    # sentences of the screens that keep their own English texts.
     "Losing the passphrase loses the vault. There is no recovery.",
-    "Its files are deleted, not shredded; backups keep what they have.",
     'Text this app receives from "${collection}" is sent to ${app.destination} '
     "and cannot be recalled.",
-    "This text is with ${item.destination} now. ${PRODUCT} cannot take it back.",
     "Stays on this Mac, if the app really is local",
     "any program running as you, including a hosted agent that can run",
     "Other forms (inflected, abbreviated, reversed order, split across lines) are different "
@@ -269,6 +270,15 @@ def test_the_page_has_what_the_scripts_and_a_reader_need() -> None:
     assert {"app", "toasts"} <= ids
     assert any(a.get("id") == "toasts" and a.get("aria-live") == "polite" for _tag, a in page.tags)
     assert any(tag == "noscript" for tag, _ in page.tags)
+    # Without scripts the page cannot choose a language, so it says its one sentence in both.
+    said = re.search(r"<noscript>(.*?)</noscript>", text, re.S)
+    assert said is not None
+    assert re.findall(r"<p([^>]*)>", said.group(1)) == [
+        ' class="noscript"',
+        ' class="noscript" lang="pl"',
+    ]
+    assert "Do wy\u015bwietlenia tej strony potrzebny jest JavaScript." in said.group(1)
+    assert "ka\u017cdy plik pochodzi z programu {{product}} na tym komputerze." in said.group(1)
 
 
 # -- nothing inline, nothing from outside -----------------------------------------
@@ -341,7 +351,8 @@ def test_scripts_import_only_each_other_and_all_are_used() -> None:
             r"""^(?:import|export)\b[^;"'`]*?\bfrom\s*["']([^"']+)["']\s*;""", code, re.M
         )
         specifiers += re.findall(r"""^import\s*["']([^"']+)["']""", code, re.M)
-        assert specifiers or name in ("dom.js", "format.js", "brand.js"), f"{name} imports nothing"
+        alone = ("dom.js", "format.js", "brand.js", "text-en.js", "text-pl.js")
+        assert specifiers or name in alone, f"{name} imports nothing"
         for specifier in specifiers:
             assert re.fullmatch(r"\./[a-z0-9-]+\.js", specifier), f"{name} imports {specifier!r}"
             waiting.append(specifier[2:])
@@ -527,17 +538,23 @@ def test_a_passphrase_is_only_ever_typed_into_a_password_field_and_sent() -> Non
     }
     assert re.search(r"create: \{[^}]*\bshown: false\b", without_comments(scripts()["main.js"]))
     gateway = without_comments(scripts()["gateway.js"])
-    created = gateway.index("await api.createStore(form.passphrase);")
+    created = gateway.index("await api.createStore(form.passphrase, chosenLanguage());")
     assert "form.shown = false;" in gateway[created : created + 300], (
         "the chosen passphrase stays on show after the vault was created"
     )
     api = without_comments(scripts()["api.js"])
-    senders = re.findall(r"(\w+): \(passphrase\) => call\(\"POST\", \"(/api/[a-z/]+)\"", api)
+    senders = re.findall(
+        r"(\w+): \(passphrase(?:, language)?\) => call\(\"POST\", \"(/api/[a-z/]+)\"", api
+    )
     assert sorted(path for _name, path in senders) == [
         "/api/reauth",
         "/api/store/create",
         "/api/unlock",
     ]
+    # The line that sends a new passphrase has a second argument, and it is the language the
+    # owner chose before the vault existed: a word of two letters, never anything typed.
+    assert "createStore: (passphrase, language) => call(" in api
+    assert "body: language ? { passphrase, language } : { passphrase }" in api
 
 
 def test_a_release_cannot_be_pressed_through() -> None:
@@ -558,6 +575,11 @@ def test_a_release_cannot_be_pressed_through() -> None:
     assert "disarm(ctx);" in decide[:sent], "the other cards stay ready while one is decided"
     assert decide.count("disarm(ctx);") >= 2, "the cards are ready at once after a decision"
     assert "ctx.ui.decided.set(key" in decide, "a decided card leaves its place at once"
+    # "Details" unfolds lines under the two buttons, so the cards below move: an unfolded card
+    # is not the card of the last draw, and "Release once" waits again.
+    cards = function_body(views, "export function approvalCards(ctx, ")
+    assert "approvalKey(entry.item) + unfolded(entry.item)" in cards
+    assert "ctx.ui.approvalDetails.has(pairKey(item))" in cards
     # Every change of the cards makes "Release once" wait again, and it waits from the start.
     # The check is in the one function that draws cards, so it holds on every screen with a card.
     cards = function_body(views, "export function approvalCards(ctx, ")
@@ -580,9 +602,12 @@ def test_a_release_cannot_be_pressed_through() -> None:
     assert int(wait.group(1)) >= 1000
     # Neither answer is the loud button, and the safe one comes first.
     actions = views[views.index('{ class: "approval-actions" }') :]
-    first, second = re.findall(r'button\("([^"]+)", \{([^}]*)\}', actions)[:2]
-    assert first[0] == "Don\u2019t release"
-    assert second[0] == "Release once"
+    # They are named by the keys of their texts ("Don't release", "Release once").
+    first, second = re.findall(r'button\(t\("([^"]+)"\), \{([^}]*)\}', actions)[:2]
+    assert first[0] == "card.button.no"
+    assert second[0] == "card.button.yes"
+    assert 'key: "dismiss"' in first[1]
+    assert 'key: "release"' in second[1]
     assert "kind:" not in first[1]
     assert "kind:" not in second[1]
     # A decision is sent from this one module, and the two buttons are drawn nowhere else.
@@ -667,9 +692,12 @@ def test_the_demo_passphrase_is_shown_only_as_the_app_sent_it() -> None:
     note = parts[start : parts.index("\n}\n", start)]
     # Nothing is shown unless the app sent a passphrase, which it does for the demo alone.
     assert 'if (typeof passphrase !== "string" || !passphrase) return null;' in note
-    assert "This is the demo." in note
-    assert "The passphrase of a real vault is never shown." in note
-    assert 'button("Fill it in"' in note
+    # Its three texts are keys of the text tables; the passphrase is an element of its own
+    # inside the first sentence, and it is the one the app sent.
+    assert 'around("demo.say.1", "passphrase")' in note
+    assert 'el("strong", { class: "mono demo-pass-word" }, passphrase)' in note
+    assert 't("demo.say.2")' in note
+    assert 'button(t("demo.button.fill")' in note
     uses = {
         name: re.findall(r"demoPassphraseNote\(([^,]+),", without_comments(script))
         for name, script in scripts().items()
@@ -696,12 +724,16 @@ def test_the_page_says_only_what_it_knows_about_the_files_the_owner_chose() -> N
         r"you can (?:now )?delete (?:the|your) (?:file|original)",
     ):
         assert re.search(claim, shown, re.I) is None, f"the page claims: {claim}"
+    # The claims are looked for in the two text tables too: they are scripts like the others.
+    assert {"text-en.js", "text-pl.js"} <= set(shown_texts())
+    # What is true of a file after it was added is one sentence of the tables (docs.say.1: a
+    # sealed copy is in the vault, and the file that was added stays where it was, not
+    # encrypted). It is said once per list of added files, not once per file.
     manage = without_comments(scripts()["manage.js"])
-    assert "The file you chose is still where it was, not encrypted." in manage
-    assert "The files you chose are still where they were, not encrypted." in manage
-    assert manage.count("Removing or moving") == 2  # one sentence for one file, one for several
-    # Said once per list of added files, not once per file.
-    assert manage.count("leftOutsideText(sealedCount(state))") == 1
+    zone = function_body(manage, "export function dropZone(ctx, collection, options = {}) {")
+    said = 'sealedCount(state) ? el("li", { class: "upload-outside", key: "outside" }, '
+    assert said + 'note("amber", t("docs.say.1"))) : null,' in zone
+    assert manage.count('t("docs.say.1")') == 1
     assert 'fact("Copies of the files you added"' in manage
 
 
@@ -755,15 +787,16 @@ def test_the_screen_for_an_app_that_stopped_says_what_starting_it_again_brings()
     start = gateway.index("export function offlineScreen(ctx) {")
     screen = gateway[start : gateway.index("\n}\n", start)]
     # Started again, the app is at a new address unless it was given its port, and this
-    # page asks at the old one for ever. So the page does not promise to continue.
-    assert "the page continues by itself." not in screen
-    assert "With the same address as before, this page continues by itself" in screen
-    assert "with a new address, which is the usual case, open that one instead." in screen
-    assert "It prints its address" in screen
-    # A new pairing code is part of it, except in the demo, which has none.
-    assert 'const pairing = !(ctx.session && ctx.session.pairing === "none");' in screen
-    assert '${pairing ? " and a new pairing code" : ""}' in screen
-    assert '${pairing ? " and asks for the code" : ""}' in screen
+    # page asks at the old one for ever. So the screen sends the owner to the address the
+    # terminal prints (offline.say.1, pinned word for word with the tables) and promises
+    # nothing about itself: it holds no sentence of its own at all.
+    assert 'el("p", { class: "gate-lead" }, t("offline.say.1")),' in screen
+    assert 'cardFoot(t("offline.say.2")),' in screen
+    assert 'el("h1", { class: "gate-title" }, t("offline.title")),' in screen
+    assert 'button(t("offline.button.try"), { onclick: () => ctx.start() }),' in screen
+    for text in quoted_texts(screen):
+        assert len(text.split()) <= 2, f"the screen holds a text of its own: {text!r}"
+    assert "by itself" not in screen
 
 
 def css_rules(name: str, selector: str) -> list[str]:
@@ -1039,7 +1072,8 @@ def test_basic_changes_access_only_where_the_vault_has_one_group() -> None:
     assert failed.index("if (opened) {") < failed.index("form.error = error.message;")
     assert 'id: "basic-error", key: "error", role: "alert"' in sheet
     api = without_comments(scripts()["api.js"])
-    assert 'throw new ApiError(403, "cancelled", "Nothing was changed.");' in api
+    # ("Nothing was changed.", common.error.cancelled in the text tables.)
+    assert 'throw new ApiError(403, "cancelled", t("common.error.cancelled"));' in api
 
 
 def test_adding_to_one_of_several_groups_chooses_no_group_for_the_owner() -> None:
@@ -1089,20 +1123,23 @@ def test_adding_to_one_of_several_groups_chooses_no_group_for_the_owner() -> Non
 def test_after_a_sealed_file_the_page_says_which_apps_can_ask_for_it() -> None:
     manage = without_comments(scripts()["manage.js"])
     zone = function_body(manage, "export function dropZone(ctx, collection, options = {}) {")
-    wanted = "options.who && sealedCount(entry.list) ? whoLine(ctx, entry.name, sealedCount("
+    wanted = "options.who && sealedCount(entry.list) ? whoLine(ctx, entry.name) : null,"
     assert wanted in zone
     # It stands above the note about the file that was left outside, which is said once.
-    assert zone.index(wanted) < zone.index("leftOutsideText(sealedCount(state))")
-    line = function_body(manage, "function whoLine(ctx, collection, sealed) {")
+    assert zone.index(wanted) < zone.index('note("amber", t("docs.say.1"))')
+    # The line is one of two texts of the tables, and it is never left out: either apps are
+    # named, by the names they have in the vault, or the line says that no app can ask yet.
+    line = function_body(manage, "export function whoLine(ctx, collection) {")
     assert 'class: "upload-who", role: "status"' in line
     assert (
-        '`Apps that may use your documents can ask for ${them} from now on: ${names.join(", ")}.`'
+        'names.length ? t("docs.result.who", { apps: names }) : t("docs.result.nobody")'
     ) in line
-    assert "`No app can ask for ${them} yet.`" in line
-    assert 'const them = sealed === 1 ? "it" : "them";' in line
-    assert "`${GRANT_LABEL.read}: passages of it can leave without asking`" in line
-    # Names are the names the apps have in the vault, with what each may do. An app that has the
-    # access and is not answered right now is listed with that said.
+    assert ".map((app) => app.name);" in line
+    assert '["approve", "read"].includes(app.grants[collection])' in line
+    assert ".label" not in line
+    # Where a page says what each app may do with a group (the sheet of the Basic page), the
+    # names come with those words. An app that has the access and is not answered right now is
+    # listed with that said.
     who = function_body(manage, "export function whoMayAsk(apps, collection, readWords) {")
     assert "return `${app.name} (${access}${idle})`;" in who
     assert 'app.grants[collection] === "approve" || app.grants[collection] === "read"' in who
@@ -1176,22 +1213,38 @@ def test_what_the_product_cannot_do_is_one_list_in_both_views() -> None:
     manage = without_comments(scripts()["manage.js"])
     listed = re.search(r"export const CANNOT = \[(.*?)\n\];", manage, re.S)
     assert listed is not None
-    assert len(re.findall(r'^\s+"[^"\n]+",$', listed.group(1), re.M)) == 8
-    assert "CANNOT.map(" in function_body(manage, "export function vaultView(ctx) {")
+    # The eight statements are eight keys of the text tables, in their order.
+    assert re.findall(r'^\s+"([^"\n]+)",$', listed.group(1), re.M) == [
+        f"how.cannot.{number}" for number in range(1, 9)
+    ]
+    drawn = function_body(manage, "export function cannotList() {")
+    assert 'el("ul", { class: "cannot" }, CANNOT.map((key) => el("li", { key }, t(key))))' in drawn
+    assert "cannotList()," in function_body(manage, "export function vaultView(ctx) {")
     line = function_body(manage, "export function versionLine(state) {")
-    assert "a preview: it has not yet been tried against the agent applications it lists" in line
+    assert 'return t("how.version", { version: state.version });' in line
     basic = without_comments(scripts()["basic.js"])
     sheet = function_body(basic, "function openCannot(ctx) {")
     assert "const title = `What ${PRODUCT} cannot do`;" in sheet
-    assert "CANNOT.map(" in sheet
+    assert "cannotList()," in sheet
     assert "versionLine(ctx.state)" in sheet
     assert 'button("Close", { onclick: () => self.close(), autofocus: true })' in sheet
     assert 'class: "link", id: "basic-cannot", onclick: () => openCannot(ctx)' in basic
-    # Neither the statements nor the line about the version are written a second time.
-    everything = "\n".join(without_comments(source) for source in scripts().values())
-    assert everything.count("a preview: it has not yet been tried") == 1
-    assert everything.count("Take text back.") == 1
+    # Neither the statements nor the line about the version are written a second time: the
+    # scripts name each key once, and each table holds each text once.
+    pages = {name: code for name, code in scripts().items() if not name.startswith("text-")}
+    everything = "\n".join(without_comments(source) for source in pages.values())
+    assert everything.count('"how.version"') == 1
+    assert everything.count('"how.cannot.1"') == 1
+    assert everything.count("CANNOT.map(") == 1
+    assert everything.count("cannotList(") == 3  # its definition, the Vault page, the sheet
     assert everything.count("versionLine(") == 3  # its definition, the Vault page, the sheet
+    for name in ("text-en.js", "text-pl.js"):
+        table = scripts()[name]
+        assert table.count('"how.version"') == 1, name
+        assert len(re.findall(r'^  "how\.cannot\.\d": ', table, re.M)) == 8, name
+    english = scripts()["text-en.js"]
+    assert english.count("a preview: it has not yet been tried against the AI apps it lists") == 1
+    assert english.count("Take text back.") == 1
 
 
 def test_the_sample_letter_is_recognised_by_its_title_and_its_length() -> None:
@@ -1295,8 +1348,14 @@ def test_the_view_has_two_labels_and_no_toast() -> None:
     assert 'viewChoice("pro")' in function_body(main, "function viewSwitch() {")
     assert "viewSwitch()," in function_body(main, "function sidebar() {")
     assert 'viewChoice("basic")' in function_body(main, "function basicShell() {")
-    # Keeping the view says nothing when it worked: the screen is the answer.
-    assert main.count("api.setInterface(") == 1
+    # Keeping the view says nothing when it worked: the screen is the answer. The one other
+    # word this script has the app keep is the language, and that says nothing either.
+    assert main.count("api.setInterface(") == 2
+    language = function_body(main, "async function keepLanguage() {")
+    asked, refused = language.split("} catch (error) {")
+    assert "applyState(await api.setInterface({ language: wanted }));" in asked
+    assert "toast" not in asked
+    assert "toastError(error);" in refused
     keep = function_body(main, "async function keepView(view) {")
     kept, failed = keep.split("} catch (error) {")
     assert "applyState(await api.setInterface({ view }));" in kept
@@ -1374,19 +1433,28 @@ def test_the_top_bar_of_basic_claims_no_state_of_the_vault_while_the_app_does_no
 def test_the_locked_screen_says_in_both_views_what_is_visible_without_the_key() -> None:
     gateway = without_comments(scripts()["gateway.js"])
     screen = function_body(gateway, "export function lockedScreen(ctx) {")
-    assert 'const basic = Boolean(state.interface && state.interface.view === "basic");' in screen
-    # In Basic the newest entry of the record is left out. The two figures and the sentence
-    # that explains them are there in both views.
-    assert "!basic && record && record.head_seq" in screen
-    for fact in ('el("dt", null, "Sealed files")', 'el("dt", null, "Size")'):
-        line = next(line for line in screen.splitlines() if fact in line)
-        assert "basic" not in line
-    assert (
-        'foot: "While locked, apps get one answer: the vault is locked. The number and sizes of '
-        'the sealed files are visible without the key; what is in them is not."'
-    ) in screen
-    # What waited when the vault locked is said only by a page that saw it lock.
-    assert "const waited = basic ? form.waited || 0 : 0;" in screen
+    assert 'const pro = !(state.interface && state.interface.view === "basic");' in screen
+    # Sentence 1 stands in both views: while locked, apps get one answer. The three figures
+    # (sealed files, size, the newest entry of the record) and the sentence that explains
+    # them stand only where the view that is kept is Pro: the everyday view shows no figure
+    # of the record on the locked screen.
+    assert 'cardFoot(t("locked.say.1"), pro ? t("locked.say.2") : null),' in screen
+    assert screen.count('t("locked.say.1")') == 1
+    assert screen.count('t("locked.say.2")') == 1
+    figures = re.search(
+        r'pro\s*\?\s*el\(\s*"dl",\s*\{ class: "seal-facts", key: "facts" \},(.*?)\n        : null,',
+        screen,
+        re.S,
+    )
+    assert figures is not None, "the figures are drawn whatever view is kept"
+    for label in ("locked.label.files", "locked.label.size", "locked.label.last"):
+        assert screen.count(f't("{label}")') == 1, label
+        assert f't("{label}")' in figures.group(1), f"{label} is drawn outside the figures"
+    assert "record && record.head_seq" in figures.group(1)
+    # What waited when the vault locked is said only by a page that saw it lock, in either view.
+    assert "const waited = form.waited || 0;" in screen
+    assert 'waited > 0 ? el("p", { class: "note", id: "locked-waiting", key: "waited" }, ' in screen
+    assert 't("locked.status.waited", { n: waited })' in screen
     main = without_comments(scripts()["main.js"])
     seen = function_body(main, "function applyState(next, force = false) {")
     locking = seen[seen.index("if (wasOpen && !isOpen) {") :]
@@ -1412,9 +1480,10 @@ def test_the_vault_page_says_where_the_view_is_kept() -> None:
     manage = without_comments(scripts()["manage.js"])
     page = function_body(manage, "export function vaultView(ctx) {")
     record = page.index('fact("Last entry of the record"')
+    # The page keeps a third word there from the moment the owner chooses a language.
     kept = page.index(
         'fact("Kept beside the vault, not sealed", '
-        '"Which view you use, and whether setup was finished")'
+        '"Which view you use, whether setup was finished, and your language once you chose one")'
     )
     assert record < kept < page.index('{ key: "location" }')
 
@@ -1424,16 +1493,20 @@ def test_the_details_fold_the_record_on_the_basic_page() -> None:
     body = function_body(views, "function panelBody(ctx, panel) {")
     assert 'const folded = ctx.route === "basic";' in body
     assert "const open = folded && ctx.ui.panelMore === true;" in body
-    button = body[body.index('button("Record details", {') :]
+    button = body[body.index('button(t("panel.button.record"), {') :]
     assert 'id: "panel-more",' in button[:200]
     assert 'expanded: open ? "true" : "false",' in button[:200]
     assert "!folded || open ? recordBlocks(item) : null," in body
     # What left, where it went and that it cannot be taken back are never behind the button.
     fold = body.index("folded\n")
+    # (Their texts are keys of the tables: "The exact text that left", "This text is with ...
+    # now.", "... cannot take it back.", "Says it is ..., unverified".)
     for shown in (
-        '"The exact text that left"',
-        "This text is with ${item.destination} now.",
-        "unverified",
+        't("panel.label.text")',
+        't("panel.say.1", { destination: item.destination })',
+        't("panel.say.2")',
+        't("panel.say.1.local")',
+        't("card.status.claimed", { claimed: item.claimed })',
     ):
         assert 0 < body.index(shown) < fold, shown
     blocks = function_body(views, "function recordBlocks(item) {")
@@ -1889,6 +1962,327 @@ def test_the_lower_parts_are_folded_only_while_the_demo_guide_is_open() -> None:
         assert '"details"' not in without_comments(source), name
     # "What left the vault" is not among them: it holds the rows and the stops the guide speaks of.
     assert "foldOf(" not in function_body(basic, "function leftSection(ctx, stops) {")
+
+
+# -- two languages ----------------------------------------------------------------
+
+
+def test_only_texts_js_reads_the_tables() -> None:
+    sources = {name: without_comments(source) for name, source in scripts().items()}
+    for name, code in sources.items():
+        reads = re.findall(r'from "\./(text-[a-z]+)\.js"', code)
+        if name == "texts.js":
+            assert sorted(reads) == ["text-en", "text-pl"]
+        else:
+            assert reads == [], f"{name} reads a table itself"
+    # Whoever asks for a text asks the one function, and got it from that module.
+    for name, code in sources.items():
+        if name != "texts.js" and re.search(r"(?<![\w.])t\(", code):
+            imported = re.search(r'import \{([^}]*)\} from "\./texts\.js";', code)
+            assert imported is not None, f"{name} asks for texts"
+            assert "t" in [word.strip() for word in imported.group(1).split(",")], name
+    reader = sources["texts.js"]
+    assert sorted(re.findall(r'from "\./([a-z-]+)\.js"', reader)) == [
+        "brand",
+        "format",
+        "text-en",
+        "text-pl",
+    ]
+    assert 'export const LANGUAGES = ["en", "pl"];' in reader
+    for exported in (
+        "language()",
+        "setLanguage(code)",
+        "firstLanguage(listed)",
+        "t(key, values = {})",
+    ):
+        assert f"export function {exported} {{" in reader, exported
+    # A key the Polish table lacks is shown in English, one that both lack as the key itself;
+    # the product's name is put in from brand.js and stands in no table.
+    assert "own.call(TABLES[shown], key) ? TABLES[shown][key] : own.call(ENGLISH, key)" in reader
+    assert "return `⟦${key}⟧`;" in reader
+    assert 'if (name === "product") return PRODUCT;' in reader
+    # Numbers and lists are written by the rules of the language, through format.js.
+    assert 'if (typeof value === "number") return num(value);' in reader
+    assert "if (Array.isArray(value)) return list(value);" in reader
+
+
+def test_the_language_is_kept_by_the_app_and_not_in_the_browser() -> None:
+    sources = {name: without_comments(source) for name, source in scripts().items()}
+    for name, code in sources.items():
+        assert "localStorage" not in code, name
+        if name != "api.js":
+            assert "sessionStorage" not in code, name
+    # What the owner pressed is a variable of texts.js: gone when the page is loaded again.
+    reader = sources["texts.js"]
+    assert "let pressed = null;" in reader
+    choose = function_body(reader, "export function chooseLanguage(code) {")
+    assert "pressed = code;" in choose
+    assert "setLanguage(code);" in choose
+    assert reader.count("pressed = ") == 2  # where it is made, and the press
+    # Which language is shown: the press; else what the app keeps; else the browser's.
+    kept = function_body(reader, "export function keptLanguage(code) {")
+    assert kept.splitlines()[1].strip() == "if (pressed !== null) return;"
+    assert "LANGUAGES.includes(code) ? code : browserLanguage()" in kept
+    assert "setLanguage(browserLanguage());" in reader
+    first = function_body(reader, "export function firstLanguage(listed) {")
+    assert "/^(pl|en)(-|$)/i" in first
+    assert 'return "en";' in first
+    assert "document.documentElement.lang = code;" in function_body(
+        reader, "export function setLanguage(code) {"
+    )
+    # The app is asked to keep it from the switch, once a vault exists and the page is paired;
+    # before that the press goes along with the passphrase of the new vault.
+    main = sources["main.js"]
+    press = function_body(main, "function pressLanguage(code) {")
+    assert press.index("chooseLanguage(code);") < press.index("keepLanguage();")
+    keep = function_body(main, "async function keepLanguage() {")
+    assert 'ctx.phase !== "ready" || !state || !state.store.exists' in keep
+    assert "api.setInterface({ language: wanted })" in keep
+    assert main.count("api.setInterface({ language") == 1
+    for name, code in sources.items():
+        if name != "main.js":
+            assert "setInterface({ language" not in code, name
+    assert "await api.createStore(form.passphrase, chosenLanguage());" in sources["gateway.js"]
+    # What the app keeps is shown: the session's answer says it before pairing, the state after.
+    assert "keptLanguage(session.language);" in function_body(main, "async function start() {")
+    seen = function_body(main, "function applyState(next, force = false) {")
+    assert "if (next.interface) keptLanguage(next.interface.language);" in seen
+    # One such request at a time: the app writes all its words at each, so two at once could
+    # lose one.
+    api = sources["api.js"]
+    assert 'const sent = interfaceSent.then(() => call("POST", "/api/interface", { body }));' in api
+
+
+def test_the_switch_stands_on_every_screen_before_the_vault_is_open_and_in_both_frames() -> None:
+    parts = without_comments(scripts()["parts.js"])
+    switch = function_body(
+        parts, "export function languageSwitch(choose, { short = false } = {}) {"
+    )
+    # Two words, the one that is shown marked as pressed; the words are the same in both tables.
+    assert "LANGUAGES.map((code) =>" in switch
+    assert '"aria-pressed": code === shown ? "true" : "false",' in switch
+    assert '"aria-label": t(LANGUAGE_WORD[code]),' in switch
+    assert 'role: "group", "aria-label": t("common.label.language")' in switch
+    assert "onclick: () => choose(code)," in switch
+    assert 'const LANGUAGE_WORD = { en: "common.lang.en", pl: "common.lang.pl" };' in parts
+    for name in ("text-en.js", "text-pl.js"):
+        table = scripts()[name]
+        assert '"common.lang.en": "English",' in table, name
+        assert '"common.lang.pl": "Polski",' in table, name
+    # Top right of the four screens (and of a step of setting up), through their one frame.
+    gateway = without_comments(scripts()["gateway.js"])
+    frame = function_body(gateway, "function gateScreen(ctx, key, content, options = {}) {")
+    assert (
+        'el("div", { class: "gate-lang", key: "lang" }, languageSwitch(ctx.chooseLanguage)),'
+        in frame
+    )
+    for head in (
+        "export function offlineScreen(ctx) {",
+        "export function pairingScreen(ctx) {",
+        "export function lockedScreen(ctx) {",
+        "export function createScreen(ctx) {",
+    ):
+        assert "return gateScreen(" in function_body(gateway, head), head
+    assert gateway.count("languageSwitch(") == 1
+    # In today's two frames: the foot of Pro's sidebar, and the top bar of the Basic page.
+    main = without_comments(scripts()["main.js"])
+    assert "chooseLanguage: pressLanguage," in main
+    foot = function_body(main, "function sidebar() {")
+    assert foot.index("languageSwitch(pressLanguage),") < foot.index("viewSwitch(),")
+    assert "languageSwitch(pressLanguage, { short: true })," in function_body(
+        main, "function topbar() {"
+    )
+    assert "languageSwitch(pressLanguage)" in function_body(main, "function stuckScreen() {")
+    # The switch is laid out by its own rules and is no part of the choice of the view.
+    assert "segmented" not in switch
+    assert [bool(rule) for rule in css_rules("app.css", ".gate-lang")] == [True]
+    assert ["position: absolute" in rule for rule in css_rules("app.css", ".gate-lang")] == [True]
+
+
+def test_the_eighth_character_of_the_code_pairs() -> None:
+    gateway = without_comments(scripts()["gateway.js"])
+    screen = function_body(gateway, "export function pairingScreen(ctx) {")
+    typed = screen[screen.index("oninput: (event) => {") :]
+    typed = typed[: typed.index("\n                },")]
+    # Whatever is typed is tidied, and then the one function that pairs is asked: it sends the
+    # code once all eight characters are there, so "Pair" is no press of its own on the way in.
+    assert typed.index("form.code = tidyCode(event.target.value);") < typed.index("pair(ctx);")
+    assert 'return code.replace("-", "").length === 8;' in function_body(
+        gateway, "function complete(code) {"
+    )
+    send = function_body(gateway, "async function pair(ctx) {")
+    guard = "if (form.busy || !complete(code) || code === form.refused) return;"
+    assert guard in send
+    assert send.index(guard) < send.index("await api.pair(code);")
+    assert gateway.count("api.pair(") == 1
+    # A code that was refused is not sent again as it stands, by a key or by the button: five
+    # wrong codes switch pairing off. Nothing is emptied.
+    refused = send[send.index('else if (error.code === "wrong_code") {') :]
+    assert "form.refused = code;" in refused[: refused.index("}")]
+    assert 'form.code = "";' not in send[send.index("} catch (error) {") :]
+    assert "disabled: !complete(form.code) || form.code === form.refused," in screen
+    assert 'if (error.code === "pairing_disabled") form.disabled = true;' in send
+    assert 'form.disabled\n        ? note("red", t("pair.error.disabled"))' in screen
+    # The module has no timer: nothing is sent later, or again.
+    assert "setTimeout" not in gateway
+    assert "setInterval" not in gateway
+
+
+# The functions that draw what every view shares, and the four screens before the vault is
+# open. Each takes every text from the text tables.
+ON_THE_TABLE = {
+    "gateway.js": (
+        "export function offlineScreen(ctx) {",
+        "async function pair(ctx) {",
+        "export function pairingScreen(ctx) {",
+        "async function unlock(ctx) {",
+        "export function lockedScreen(ctx) {",
+        "async function createVault(ctx) {",
+        "export function createScreen(ctx) {",
+    ),
+    "main.js": ("function stuckScreen() {",),
+    "views.js": (
+        "async function decide(ctx, item, release, event) {",
+        "function decidedWords(ctx, done) {",
+        "function decidedLine(ctx, done) {",
+        "function whyItWaits(item) {",
+        "function approvalCard(ctx, item, index) {",
+    ),
+    "sheets.js": ("export function requestReauth(demoPassphrase = null) {",),
+    "manage.js": (
+        "function refusedWords(error) {",
+        "export async function uploadFiles(ctx, collection, files) {",
+        "export function whoLine(ctx, collection) {",
+        "export function dropZone(ctx, collection, options = {}) {",
+        "export async function removeDocument(ctx, document) {",
+        "export function cannotList() {",
+        "export function versionLine(state) {",
+    ),
+    "parts.js": (
+        "export function demoPassphraseNote(passphrase, fill) {",
+        "export function languageSwitch(choose, { short = false } = {}) {",
+        "export function errorText(error, own = {}) {",
+        "export function toastError(error) {",
+    ),
+}
+
+
+def sentences_of(code: str) -> list[str]:
+    """The quoted texts of some code that a person would read as words: three words or more,
+    and not a list of classes."""
+    return [
+        text
+        for text in quoted_texts(code)
+        if len(text.split()) > 2 and not re.fullmatch(r"[a-z0-9 -]+", text.strip())
+    ]
+
+
+def test_the_parts_every_view_shares_hold_no_sentence_of_their_own() -> None:
+    for name, heads in ON_THE_TABLE.items():
+        code = without_comments(scripts()[name])
+        for head in heads:
+            body = function_body(code, head)
+            assert sentences_of(body) == [], f"{name}, {head}"
+            # Nor a label: every quoted text with a capital is a tag, a key or a name of the code.
+            for text in quoted_texts(body):
+                if re.match(r"[A-Z][a-z]+( [a-z]+)*$", text.strip()):
+                    assert text.strip() in ("POST", "Files"), f"{name}, {head}: {text!r}"
+    assert sentences_of(
+        'toast("The vault is locked."); el("p", { class: "note note-plain x" })'
+    ) == ["The vault is locked."]
+    # What went wrong is worded by the page for the codes it knows, in the place that knows them.
+    gateway = without_comments(scripts()["gateway.js"])
+    assert (
+        "errorText(form.failed, "
+        '{ wrong_passphrase: "locked.error.wrong", busy: "common.error.busy" })'
+    ) in function_body(gateway, "export function lockedScreen(ctx) {")
+    assert 'form.wrong ? t("pair.error.wrong")' in function_body(
+        gateway, "export function pairingScreen(ctx) {"
+    )
+    sheet = function_body(
+        without_comments(scripts()["sheets.js"]),
+        "export function requestReauth(demoPassphrase = null) {",
+    )
+    assert 'errorText(form.failed, { wrong_passphrase: "reauth.error.wrong" })' in sheet
+    parts = without_comments(scripts()["parts.js"])
+    everywhere = re.search(r"const WORDED = \{(.*?)\};", parts, re.S)
+    assert everywhere is not None
+    assert dict(re.findall(r'(\w+): "([^"]+)"', everywhere.group(1))) == {
+        "locked": "nav.result.locked",
+        "unavailable": "common.error.unavailable",
+        "cancelled": "common.error.cancelled",
+        "offline": "offline.title",
+    }
+    # Any other code is said in the app's own sentence.
+    words = function_body(parts, "export function errorText(error, own = {}) {")
+    assert 'return error && error.message ? error.message : t("common.error.unknown");' in words
+    card = function_body(
+        without_comments(scripts()["views.js"]), "function approvalCard(ctx, item, index) {"
+    )
+    assert 'changed ? note("amber", t("card.result.changed")) : null,' in card
+
+
+def test_numbers_and_times_are_written_by_the_rules_of_the_language() -> None:
+    source = without_comments(scripts()["format.js"])
+    assert "import" not in source, "format.js imports nothing: texts.js tells it the language"
+    assert "export function useLanguage(code, words = {}) {" in source
+    told = function_body(
+        without_comments(scripts()["texts.js"]), "export function setLanguage(code) {"
+    )
+    assert 'useLanguage(code, { justNow: TABLES[code]["common.status.justnow"] });' in told
+    for made in (
+        "new Intl.NumberFormat(tag",
+        "new Intl.DateTimeFormat(tag",
+        "new Intl.RelativeTimeFormat(tag",
+        "new Intl.ListFormat(tag",
+    ):
+        assert made in source, made
+    # Polish, or the browser's own kind of English; where the browser has neither, British
+    # English, whose dates read "16 Nov, 18:00".
+    assert 'tag = code === "pl" ? "pl" : english();' in source
+    assert 'return "en-GB";' in function_body(source, "function english() {")
+    assert "en-US" not in source
+    # How long ago, by three rules: under a minute the words of the table; minutes and hours
+    # always with their number, which is never 0; from a day on in days.
+    since = function_body(source, "function since(moment, now, style) {")
+    assert "if (seconds < 60) return justNow;" in since
+    assert 'relative("always", style).format(-Math.floor(seconds / 60), "minute");' in since
+    assert 'relative("always", style).format(-Math.floor(seconds / 3600), "hour");' in since
+    assert 'relative("auto", style).format(-days, "day");' in since
+    assert (
+        since.index("seconds < 60") < since.index("seconds < 3600") < since.index("seconds < 86400")
+    )
+    assert 'since(moment, now, "long")' in function_body(
+        source, "export function ago(text, now = new Date()) {"
+    )
+    assert 'since(moment, now, "short")' in function_body(
+        source, "export function agoShort(text, now = new Date()) {"
+    )
+    # A date inside a Polish sentence is written in numbers: a month's name would need an ending.
+    clock = function_body(source, "export function clock(text, now = new Date()) {")
+    assert 'const month = tag === "pl" ? "numeric" : "short";' in clock
+    # A list is joined by the rule of the language, a size carries the unit of the language.
+    assert 'new Intl.ListFormat(tag, { type: "conjunction" })' in source
+    assert 'style: "unit"' in source
+    # Every function the pages use is still there, under its name.
+    for name in (
+        "num",
+        "count",
+        "percent",
+        "bytes",
+        "megabytes",
+        "parseTime",
+        "when",
+        "whenFull",
+        "ago",
+        "agoShort",
+        "dayShort",
+        "at",
+        "untilShort",
+        "list",
+        "sentence",
+    ):
+        assert re.search(rf"^export function {name}\(", source, re.M), name
 
 
 # -- what the interface says ------------------------------------------------------

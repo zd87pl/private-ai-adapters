@@ -2,12 +2,14 @@
 // Copyright 2025 Enclave
 //
 // The screens the owner reads: Overview, Activity with its detail panel, and
-// Approvals.
+// Approvals. The approval card and the simple parts of the detail panel are the
+// same on every page and take their texts from the text table; what only the six
+// pages show keeps its own English texts.
 
 import { api } from "./api.js";
 import { PRODUCT } from "./brand.js";
 import { el, icon } from "./dom.js";
-import { ago, at, count, list, num, sentence, untilShort, when, whenFull } from "./format.js";
+import { ago, at, clock, count, list, num, sentence, untilShort, when, whenFull } from "./format.js";
 import { loadingBlock, servingStrip } from "./manage.js";
 import {
   UNANSWERED,
@@ -28,6 +30,7 @@ import {
   toast,
   toastError,
 } from "./parts.js";
+import { t } from "./texts.js";
 
 // -- Overview -----------------------------------------------------------------------
 
@@ -627,7 +630,7 @@ function panelBody(ctx, panel) {
           "div",
           { class: "panel-who" },
           destinationChip(item),
-          item.claimed ? el("span", { class: "muted" }, `Says it is ${item.claimed}, unverified`) : null,
+          item.claimed ? el("span", { class: "muted" }, t("card.status.claimed", { claimed: item.claimed })) : null,
         )
       : null,
     refusal ? note(item.code === "NEEDS_APPROVAL" ? "amber" : "plain", (item.code === "OVER_LIMIT" && VARIANT_TEXT[item.variant]) || REFUSAL_TEXT[item.code] || "Nothing was released.") : null,
@@ -641,23 +644,24 @@ function panelBody(ctx, panel) {
         )
       : null,
     item.query
-      ? el("section", { class: "panel-section" }, el("h3", { class: "mini-title" }, "What it searched for"), el("pre", { class: "code code-wrap", tabindex: 0 }, el("code", null, item.query)))
+      ? el("section", { class: "panel-section" }, el("h3", { class: "mini-title" }, t("panel.label.query")), el("pre", { class: "code code-wrap", tabindex: 0 }, el("code", null, item.query)))
       : null,
     item.text
       ? el(
           "section",
           { class: "panel-section" },
-          el("h3", { class: "mini-title" }, "The exact text that left", el("span", { class: "mini-aside" }, `${num(item.characters)} characters`)),
-          el("pre", { class: "code code-wrap released", tabindex: 0, "aria-label": "The exact text that left" }, el("code", null, item.text)),
-          hosted ? el("p", { class: "gone" }, icon("out"), el("span", null, `This text is with ${item.destination} now. ${PRODUCT} cannot take it back.`)) : null,
-          item.hosted === false ? el("p", { class: "gone" }, icon("mac"), el("span", null, "This text is with the app now. It stays on this Mac only if the app really is local.")) : null,
+          el("h3", { class: "mini-title" }, el("span", null, t("panel.label.text")), el("span", { class: "mini-aside" }, count(item.characters, "character", "characters"))),
+          el("pre", { class: "code code-wrap released", tabindex: 0, "aria-label": t("panel.label.text") }, el("code", null, item.text)),
+          // Where the text is now, and that it cannot be taken back: two sentences, each an element of its own.
+          hosted ? el("p", { class: "gone" }, icon("out"), el("span", null, el("span", null, t("panel.say.1", { destination: item.destination })), " ", el("span", null, t("panel.say.2")))) : null,
+          item.hosted === false ? el("p", { class: "gone" }, icon("mac"), el("span", null, t("panel.say.1.local"))) : null,
         )
       : null,
     folded
       ? el(
           "div",
           { class: "panel-more", key: "more" },
-          button("Record details", {
+          button(t("panel.button.record"), {
             kind: "quiet",
             small: true,
             id: "panel-more",
@@ -669,7 +673,7 @@ function panelBody(ctx, panel) {
           }),
         )
       : null,
-    open ? el("p", { class: "panel-kicker", key: "number" }, `Entry #${panel.seq}`) : null,
+    open ? el("p", { class: "panel-kicker", key: "number" }, t("panel.label.entry", { seq: String(panel.seq) })) : null,
     !folded || open ? recordBlocks(item) : null,
   ];
 }
@@ -680,13 +684,13 @@ export function detailPanel(ctx) {
   if (!panel) return null;
   return el(
     "aside",
-    { class: "panel", key: "panel", "aria-label": `Details of entry ${panel.seq}`, tabindex: -1, id: "panel" },
+    { class: "panel", key: "panel", "aria-label": t("panel.label.entry", { seq: String(panel.seq) }), tabindex: -1, id: "panel" },
     el(
       "header",
       { class: "panel-head" },
       // The number of the entry belongs to the record's own figures: on the Basic page it is with them.
-      el("span", { class: "panel-kicker" }, ctx.route === "basic" ? null : `Entry #${panel.seq}`),
-      iconButton("x", "Close the details", { onclick: () => ctx.closePanel() }),
+      el("span", { class: "panel-kicker" }, ctx.route === "basic" ? null : t("panel.label.entry", { seq: String(panel.seq) })),
+      iconButton("x", t("panel.label.close"), { onclick: () => ctx.closePanel() }),
     ),
     el("div", { class: "panel-scroll", key: `p-${panel.seq}` }, panelBody(ctx, panel)),
   );
@@ -725,11 +729,6 @@ function releaseArmed(ctx) {
   return performance.now() >= ctx.ui.releaseArmedAt;
 }
 
-function passagePhrase(item) {
-  const of = item.passages ? ` of ${num(item.passages)}` : "";
-  return `passage ${num(item.passage)}${of} of “${item.title}”`;
-}
-
 async function decide(ctx, item, release, event) {
   // The second press of a double click is not a second decision.
   if (event && event.detail > 1) return;
@@ -748,11 +747,9 @@ async function decide(ctx, item, release, event) {
     if (release) {
       const answer = await api.release(item.app, item.ref, item.body_sha256);
       outcome = { release: true, until: answer.valid_until };
-      toast(`Approved once for ${item.app}. It can read this passage until ${when(answer.valid_until, ctx.now)}.`, "green");
     } else {
       await api.dismiss(item.app, item.ref);
       outcome = { release: false, until: null };
-      toast(`Not released. If ${item.app} asks again, the passage comes back here.`, "plain");
     }
   } catch (error) {
     if (error.code === "changed") changed = true;
@@ -760,7 +757,11 @@ async function decide(ctx, item, release, event) {
   }
   if (outcome) {
     // The card stays in its place as one line for a moment: the cards below it do not jump up.
-    ctx.ui.decided.set(key, Object.assign(outcome, { item, position: Math.max(0, position) }));
+    // The same words are a message at the foot of the window.
+    Object.assign(outcome, { item, position: Math.max(0, position) });
+    ctx.ui.decided.set(key, outcome);
+    ctx.ui.approvalDetails.delete(key);
+    toast(decidedWords(ctx, outcome), release ? "green" : "plain");
     setTimeout(() => {
       ctx.ui.decided.delete(key);
       ctx.render();
@@ -768,9 +769,8 @@ async function decide(ctx, item, release, event) {
   }
   // The card stays as it is until the new list is in; then the message appears with it.
   await ctx.refresh();
-  if (changed) {
-    ctx.ui.approvalNotes[key] = "The text changed since it was shown, so nothing was released. Read it again before you decide.";
-  }
+  // The text changed since it was shown, so nothing was released: the card says so.
+  if (changed) ctx.ui.approvalNotes[key] = true;
   ctx.ui.deciding.delete(key);
   ctx.ui.dismissQuietUntil = performance.now() + QUIET_MS;
   disarm(ctx);
@@ -786,128 +786,120 @@ function approvalEntries(ctx, waiting) {
   return entries;
 }
 
+/** What a decision brought, in one text: the line that takes the card's place, and the message. */
+function decidedWords(ctx, done) {
+  const app = done.item.app;
+  return done.release ? t("card.result.yes", { app, time: clock(done.until, ctx.now) }) : t("card.result.no", { app });
+}
+
 function decidedLine(ctx, done) {
   const item = done.item;
   return el(
     "div",
     { class: ["decided", done.release ? "decided-yes" : "decided-no"], key: approvalCardKey(item.app, item.ref), role: "status" },
     icon(done.release ? "check" : "x"),
-    el(
-      "span",
-      null,
-      done.release
-        ? [
-            "Approved once for ",
-            el("strong", null, item.app),
-            `: ${passagePhrase(item)}, valid until ${when(done.until, ctx.now)}`,
-          ]
-        : ["Not released to ", el("strong", null, item.app), `: ${passagePhrase(item)}`],
-    ),
+    el("span", null, decidedWords(ctx, done)),
   );
 }
 
 /**
- * Why a passage waits for the owner: the app has to ask for every passage of this
- * collection, or it may read but this passage goes past what a document gives
- * without asking.
+ * Why a passage waits for the owner, as the key of its sentence: the app may read,
+ * but this passage goes past what a document gives without asking; or the app asks
+ * for every passage.
  */
 function whyItWaits(item) {
-  const document = item.document || {};
-  if (item.mode === "read" && !item.inside_free_allowance) {
-    const free = typeof document.free === "number" ? `, ${num(document.free)} characters of this document` : "";
-    return `It waits for you although this app can read “${item.collection}”: without asking, apps of its kind get only a document’s free allowance${free}, and this passage would go past it. The allowance is set under Vault.`;
-  }
-  if (item.inside_free_allowance) {
-    return "This passage is inside the document’s free allowance. It waits for you because this app is set to “Ask me each time”.";
-  }
-  return `It waits for you because this app is set to “Ask me each time” for “${item.collection}”.`;
+  return item.mode === "read" && !item.inside_free_allowance ? "card.details.say.1.allowance" : "card.details.say.1.each";
 }
 
+/**
+ * One waiting passage. Top to bottom: who asks for what; one line of facts (where the
+ * text would go, what the caller says it is, when it asked); the exact text and its
+ * figures; the two sentences that stay where the decision is made; the two answers,
+ * the careful one first and neither filled; "Details", which unfolds three lines.
+ */
 function approvalCard(ctx, item, index) {
-  const busy = ctx.ui.deciding.has(pairKey(item));
+  const key = pairKey(item);
+  const busy = ctx.ui.deciding.has(key);
   const ready = releaseArmed(ctx) && !ctx.ui.deciding.size;
-  const changed = ctx.ui.approvalNotes[pairKey(item)];
+  const changed = ctx.ui.approvalNotes[key] === true;
   const document = item.document || {};
   const today = item.today || {};
   const headingId = `approval-${index}`;
+  const detailsId = `approval-details-${index}`;
+  const open = ctx.ui.approvalDetails.has(key);
+  const asked = ago(item.first_asked, ctx.now);
   return el(
     "article",
     { class: "card approval", key: approvalCardKey(item.app, item.ref), "aria-labelledby": headingId },
     el(
       "header",
       { class: "approval-head" },
-      el(
-        "div",
-        { class: "approval-who" },
-        el(
-          "h2",
-          { class: "approval-title", id: headingId },
-          el("strong", null, item.app),
-          item.hosted
-            ? [` asks to send ${passagePhrase(item)} (${item.collection}) to `, el("strong", null, item.destination)]
-            : ` asks for ${passagePhrase(item)} (${item.collection})`,
-        ),
-        el(
-          "p",
-          { class: "approval-meta" },
-          destinationChip(item),
-          item.claimed ? el("span", null, `Says it is ${item.claimed}, unverified`) : null,
-        ),
-      ),
+      // The app is named by the name it has in the vault, never by a readable one.
+      el("h2", { class: "approval-title", id: headingId }, t("card.title", { app: item.app, title: item.title })),
       el(
         "p",
-        { class: "approval-asked" },
-        item.times_asked > 1 ? `Asked ${num(item.times_asked)} times, first ` : "Asked ",
-        el("time", { datetime: item.first_asked, title: whenFull(item.first_asked) }, ago(item.first_asked, ctx.now)),
+        { class: "approval-meta" },
+        chip(item.hosted ? t("card.chip.hosted", { destination: item.destination }) : t("card.chip.local"), "plain", item.hosted ? "out" : "mac", null, "chip-dest"),
+        item.claimed ? el("span", { class: "approval-claimed" }, t("card.status.claimed", { claimed: item.claimed })) : null,
+        el(
+          "span",
+          { class: "approval-asked", title: whenFull(item.first_asked) },
+          item.times_asked > 1 ? t("card.status.asked.times", { n: item.times_asked, ago: asked }) : t("card.status.asked", { ago: asked }),
+        ),
       ),
     ),
-    changed ? note("amber", changed) : null,
+    changed ? note("amber", t("card.result.changed")) : null,
     el(
       "div",
       { class: "approval-text" },
-      el(
-        "h3",
-        { class: "mini-title" },
-        "The exact text that would be released",
-        el("span", { class: "mini-aside" }, `${num(item.characters)} characters · ${item.ref}`),
-      ),
-      el("pre", { class: "code code-wrap released", tabindex: 0, "aria-label": "The exact text that would be released" }, el("code", null, item.body)),
+      el("h3", { class: "mini-title" }, t("card.label.text")),
+      el("pre", { class: "code code-wrap released", tabindex: 0, "aria-label": t("card.label.text") }, el("code", null, item.body)),
+      el("p", { class: "approval-figures" }, t("card.status.meta", { n: item.characters, passage: item.passage, passages: item.passages })),
     ),
     el(
-      "ul",
-      { class: "approval-counts" },
-      el(
-        "li",
-        null,
-        `This document: ${num(document.released)} of ${num(document.characters)} characters already released to ${document.to || "apps of this kind"}; ${num(document.after)} after this.`,
-      ),
-      el("li", null, `This app, last 24 hours: ${num(today.used)} of ${num(today.limit)} characters used.`),
-      el("li", null, whyItWaits(item)),
-      item.fits_limits === false
-        ? el("li", { class: "is-amber" }, "The app’s limits would refuse this passage right now, even with your approval.")
+      "div",
+      { class: "approval-says" },
+      el("p", { class: "approval-sentence" }, item.hosted ? t("card.say.1", { destination: item.destination }) : t("card.say.1.local")),
+      el("p", { class: "approval-label" }, t("card.say.2", { app: item.app })),
+      // The one third sentence of a card, and only in this case: it is never behind "Details".
+      item.fits_limits === false ? el("p", { class: "approval-nofit" }, icon("warning"), el("span", null, t("card.say.3.nofit"))) : null,
+    ),
+    el(
+      "div",
+      { class: "approval-actions" },
+      button(t("card.button.no"), { key: "dismiss", onclick: (event) => decide(ctx, item, false, event), waiting: busy }),
+      button(t("card.button.yes"), {
+        key: "release",
+        onclick: (event) => decide(ctx, item, true, event),
+        waiting: !ready,
+        title: ready || busy ? null : t("card.label.wait"),
+      }),
+    ),
+    el(
+      "div",
+      { class: "approval-more" },
+      button(t("card.button.details"), {
+        kind: "quiet",
+        small: true,
+        key: "more",
+        expanded: open ? "true" : "false",
+        controls: detailsId,
+        onclick: () => {
+          // What unfolds moves the cards below, so "Release once" waits again (see approvalCards).
+          if (open) ctx.ui.approvalDetails.delete(key);
+          else ctx.ui.approvalDetails.add(key);
+          ctx.render();
+        },
+      }),
+      open
+        ? el(
+            "ul",
+            { class: "approval-details", id: detailsId, key: "more-lines" },
+            el("li", null, t("card.status.document", { released: document.released, characters: document.characters, after: document.after })),
+            el("li", null, t("card.status.today", { used: today.used, limit: today.limit })),
+            el("li", null, t(whyItWaits(item))),
+          )
         : null,
-    ),
-    el(
-      "footer",
-      { class: "approval-foot" },
-      el(
-        "p",
-        { class: "approval-sentence" },
-        item.hosted
-          ? ["Once released, this text is sent to ", el("strong", null, item.destination), " and cannot be recalled."]
-          : "Once released, this text is with the app. It stays on this Mac only if the app really is local.",
-      ),
-      el(
-        "div",
-        { class: "approval-actions" },
-        button("Don’t release", { key: "dismiss", onclick: (event) => decide(ctx, item, false, event), waiting: busy }),
-        button("Release once", {
-          key: "release",
-          onclick: (event) => decide(ctx, item, true, event),
-          waiting: !ready,
-          title: ready || busy ? null : "Read the text first",
-        }),
-      ),
     ),
   );
 }
@@ -958,7 +950,13 @@ export function approvalCards(ctx, { limit = null, around = "" } = {}) {
   if (!data) return null;
   const entries = approvalEntries(ctx, data.waiting);
   const shown = limit === null ? entries : entries.slice(0, limit);
-  const signature = [around].concat(shown.map((entry) => (entry.item ? approvalKey(entry.item) : `done ${pairKey(entry.done.item)}`))).join("\n\n");
+  // What was unfolded on a card that is gone is forgotten: a passage that waits anew starts folded.
+  for (const key of Array.from(ctx.ui.approvalDetails)) {
+    if (!data.waiting.some((item) => pairKey(item) === key)) ctx.ui.approvalDetails.delete(key);
+  }
+  // A card whose details are unfolded is not the card of the last draw: the cards below it have moved.
+  const unfolded = (item) => (ctx.ui.approvalDetails.has(pairKey(item)) ? "\ndetails" : "");
+  const signature = [around].concat(shown.map((entry) => (entry.item ? approvalKey(entry.item) + unfolded(entry.item) : `done ${pairKey(entry.done.item)}`))).join("\n\n");
   if (signature !== ctx.ui.approvalSignature) {
     ctx.ui.approvalSignature = signature;
     disarm(ctx);

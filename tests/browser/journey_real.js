@@ -26,6 +26,11 @@
 // and a restart. The first run as the page offers it, and the Basic page, are walked
 // by journey_basic.js.
 //
+// On its way it chooses Polish four times: on the pairing screen, on the passphrase
+// screen, for an approval card and on the locked screen. Each time everything that can
+// be read there must be a text of the Polish table or a name, and a reload keeps the
+// language once the vault exists. The rest of the walk is in English.
+//
 // Every step prints "ok" or "FAIL". Exit status 1 when a step failed, the page
 // logged an error, a request failed, or an HTTP error came that no step announced.
 
@@ -39,6 +44,7 @@ const {
   agentCall,
   apiGet,
   check,
+  chooseLanguage,
   closePage,
   deadline,
   decideApproval,
@@ -47,11 +53,13 @@ const {
   expectOldSessionRefused,
   finish,
   newPage,
+  notOfTable,
   note,
   openBrowser,
   pageReachedApp,
   pressCopy,
   readOptions,
+  reload,
   run,
   shortDirectory,
   shot,
@@ -60,6 +68,8 @@ const {
   step,
   stopApp,
   switchView,
+  textTable,
+  textsIn,
   withdraw,
 } = require('./common');
 
@@ -79,17 +89,21 @@ const TEXT = {
   connect: 'Connect', // two buttons on an app's card
   limits: 'Limits',
   terminal: /terminal/i, // where the pairing page sends the owner for the code
-  noRecovery: /no recovery/i, // beside the new passphrase
+  nobodyResets: /Nobody can reset it/, // beside the new passphrase
   notEncrypted: /not encrypted/i, // about the files the owner chose, after adding them
   cannotBeRecalled: /cannot be recalled/i, // wherever text is given to a hosted app
   cannotCheck: /cannot check/i, // about an app declared local
   runningAsYou: /any program running as you/i, // before both kinds of apps are answered together
   cannotTakeBack: /cannot take it back/i, // under text that has left
   unverified: /unverified/i, // beside the name an app gives itself
-  although: /although/i, // why a passage waits although the app can read the collection
+  isALabel: /is a label/i, // on a card: what the name of the app is
+  pastAllowance: /goes past what the app may read of this document without asking/, // why a passage waits although the app can read the collection
   originalsKept: /originals? kept/i, // what the vault screen must not say
-  steps: ['Passphrase', 'App', 'Documents', 'First question'], // the four parts of setting up
 };
+
+/** What stands alone on a screen and is no text of a table: the two letters of each language, a figure, a size. */
+const CODES = ['EN', 'PL'];
+const FIGURE = /^[\d\s.,]+( (bajt\w*|bytes?|kB|MB|GB))?$/;
 
 /** Fragments of what an agent is told. These texts are fixed in wdva.gate.messages. */
 const AGENT = {
@@ -159,6 +173,8 @@ run(async () => {
   let base = '';
   let product = '';
   let code = '';
+  /** The Polish table of the page, as the app serves it. */
+  let polish = null;
 
   const get = (pathname) => apiGet(page, base, pathname);
   const state = () => get('/api/state');
@@ -192,6 +208,19 @@ run(async () => {
       if (await hasClass(steps.nth(index), 'is-next')) return { number: index + 1, total, href: await steps.nth(index).locator('a.btn').getAttribute('href') };
     }
     return { number: 0, total, href: null };
+  };
+  /**
+   * Everything that can be read inside `selector` is a text of the Polish table or one of
+   * `names`, and each of the keys in `shown` is among it: the screen is in Polish, and it
+   * is the screen that was meant.
+   */
+  const allPolish = async (selector, names, shown) => {
+    const read = await textsIn(page, selector);
+    const foreign = notOfTable(read, polish, [product, ...CODES, ...names]);
+    check(foreign.length === 0, `in Polish, ${selector} still shows: ${JSON.stringify(foreign)}`);
+    for (const key of shown) {
+      check(notOfTable(read, { [key]: polish[key] }).length < read.length, `in Polish, ${selector} does not show the text of ${key}`);
+    }
   };
   const startIsAt = (number, href) =>
     eventually(async () => {
@@ -252,29 +281,65 @@ run(async () => {
     check(app.lines[0] === `${product} ${session.version}`, `the first line is not the name and the version: ${app.lines[0]}`);
     const lead = await page.locator('#pair-lead').textContent();
     check(lead.includes(product) && TEXT.terminal.test(lead), `the page does not say where the code is: ${lead}`);
+    // An English browser, and no vault to keep another choice: the page starts in English.
+    check(session.language === null && (await page.locator('html').getAttribute('lang')) === 'en', `the page starts in "${await page.locator('html').getAttribute('lang')}", the app keeps ${JSON.stringify(session.language)}`);
+    check((await page.locator('.gate-card button[type="submit"]').isDisabled()) === true, '"Pair" can be pressed before a code is typed');
     await picture('01-pair');
   });
 
-  await step('a wrong code is refused in plain words, the right one pairs', async () => {
+  await step('Polish chosen on the pairing screen: every text is the Polish table\'s, and nothing is sent', async () => {
+    polish = await textTable(page, base, 'pl');
+    const asked = [];
+    const listen = (request) => {
+      if (request.method() !== 'GET') asked.push(`${request.method()} ${new URL(request.url()).pathname}`);
+    };
+    page.on('request', listen);
+    await chooseLanguage(page, '.gate-lang', 'pl');
+    await allPolish('#app', [], ['pair.title', 'pair.say.1', 'pair.say.2', 'pair.label.code', 'pair.button.pair']);
+    check((await page.locator('.gate-lang .lang').getAttribute('aria-label')) === polish['common.label.language'], 'the switch is not named in Polish');
+    // The switch stays top right, also in a window as narrow as a phone, where the card fills the width.
+    await page.setViewportSize({ width: 400, height: 800 });
+    const [lang, card] = [await page.locator('.gate-lang').boundingBox(), await page.locator('.gate-card').boundingBox()];
+    check(lang.x + lang.width <= 400 && lang.x > 200 && lang.y + lang.height <= card.y, `at 400 px the switch is at ${JSON.stringify(lang)}, the card at ${JSON.stringify(card)}`);
+    check(Math.round(card.x) === 16 && Math.round(card.width) === 368, `at 400 px the card does not fill the width with 16 px at each side: ${JSON.stringify(card)}`);
+    check((await page.evaluate(() => document.documentElement.scrollWidth)) <= 400, 'at 400 px the pairing screen scrolls sideways');
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await picture('01b-pair-polish');
+    // There is no vault to keep the choice beside: the press stays in the page's memory.
+    page.off('request', listen);
+    check(asked.length === 0, `choosing a language before a vault exists sent: ${asked.join(', ')}`);
+  });
+
+  await step('a wrong code is refused in plain words; the eighth character of the right one pairs, without a press', async () => {
     const pair = page.locator('.gate-card button[type="submit"]');
+    const wrong = code === 'AAAA-AAAA' ? 'BBBB-BBBB' : 'AAAA-AAAA';
     expectHttp(403, '/api/session/pair');
-    await page.fill('#pair-code', code === 'AAAA-AAAA' ? 'BBBB-BBBB' : 'AAAA-AAAA');
-    await pair.click();
+    // The eighth character sends the code. No press on "Pair" is on the way in.
+    await page.fill('#pair-code', wrong);
     const refusal = page.locator('#pair-code-error');
     await refusal.waitFor({ state: 'visible', timeout: WAIT });
     const words = (await refusal.textContent()).trim();
-    check(/\s/.test(words) && !/wrong_code|403/.test(words), `the refusal is not a sentence: ${words}`);
+    check(words === polish['pair.error.wrong'] && /\s/.test(words) && !/wrong_code|403/.test(words), `the refusal is not the sentence of the table: ${words}`);
+    // Nothing was emptied, and the code that was refused cannot be sent again as it stands.
+    check((await page.inputValue('#pair-code')) === wrong, `after the refusal the field holds "${await page.inputValue('#pair-code')}"`);
+    check(await pair.isDisabled(), '"Pair" would send the refused code a second time');
     // Typed the way a person might: lower case, a blank for the hyphen.
     await page.fill('#pair-code', code.toLowerCase().replace('-', ' '));
-    await pair.click();
     await page.locator('#new-passphrase').waitFor({ state: 'visible', timeout: WAIT });
   });
 
   // ------------------------------------------------------------------ create the vault
-  await step('creating the vault: the rules of the passphrase are said, the place is shown', async () => {
+  await step('creating the vault: the rules of the passphrase are said in English and in Polish, the place is shown', async () => {
     const create = page.locator('.gate-card button[type="submit"]');
-    check(TEXT.noRecovery.test(await page.locator('.gate-card .note-amber').textContent()), 'the page does not say that a lost passphrase cannot be recovered');
+    // The language chosen on the pairing screen is still the one shown: every text here is Polish.
+    check((await page.locator('html').getAttribute('lang')) === 'pl', 'the language chosen before pairing was lost by pairing');
+    await allPolish('#app', [], ['create.title', 'create.label.passphrase', 'create.label.again', 'create.say.1', 'create.say.2', 'create.button.create', 'create.status.where', 'create.status.short']);
+    await picture('02b-create-polish');
+    await chooseLanguage(page, '.gate-lang', 'en');
+    check(TEXT.nobodyResets.test(await page.locator('.gate-card .note-amber').textContent()), 'the page does not say that nobody can reset a lost passphrase');
     check((await page.locator('.gate-where').textContent()).includes(store), `the page does not show where the vault is created: ${await page.locator('.gate-where').textContent()}`);
+    // One card of 420 px, and no row of steps: the passphrase is the one thing to do here.
+    check(Math.round((await page.locator('.gate-card').boundingBox()).width) === 420 && (await count('ol.steps')) === 0, 'the passphrase screen is not one card of 420 px without a row of steps');
     await page.fill('#new-passphrase', 'too short');
     await eventually(async () => /\b9\b/.test(await page.locator('#new-passphrase-hint').textContent()), WAIT, 'the hint does not count the nine characters typed');
     check(await create.isDisabled(), 'a short passphrase can be sent');
@@ -284,18 +349,31 @@ run(async () => {
     check(await create.isDisabled(), 'two different entries can be sent');
     await page.fill('#new-passphrase-again', PASSPHRASE);
     await eventually(async () => (await count('#new-passphrase-again-error')) === 0, WAIT, 'the two entries still count as different');
-    // The parts of setting up are named before the vault exists: four, and pairing is not one of them.
-    const labels = (await page.locator('ol.steps .step-label').allTextContents()).map((label) => label.trim());
-    check(JSON.stringify(labels) === JSON.stringify(TEXT.steps), `the parts of setting up are ${JSON.stringify(labels)}`);
     await picture('02-create');
+    // The language that is pressed last goes along with the passphrase: Polish.
+    await chooseLanguage(page, '.gate-lang', 'pl');
     await create.click();
     // The step that follows is an address, and it is the one that adds an app.
     await page.locator('form.gate-card[data-key="step-3"]').waitFor({ state: 'visible', timeout: 40000 });
-    check(new URL(page.url()).hash === '#/setup/app', `after "Create the vault" the address is ${page.url()}`);
+    check(new URL(page.url()).hash === '#/setup/app', `after "Create my vault" the address is ${page.url()}`);
     const now = await state();
     check(now.locked === false && now.store.exists === true, 'the vault is not unlocked after it was created');
     check(!('demo_passphrase' in now), 'a real vault sends a passphrase');
-    check(now.interface.view === 'basic' && now.interface.setup === 'open', `a new vault starts as ${JSON.stringify(now.interface)}`);
+    check(now.interface.view === 'basic' && now.interface.setup === 'open' && now.interface.language === 'pl', `a new vault starts as ${JSON.stringify(now.interface)}`);
+  });
+
+  await step('the app keeps the language beside the vault: a reload shows Polish again, and one press changes it back', async () => {
+    check((await get('/api/session')).language === 'pl', 'the session\'s answer does not name the kept language');
+    await reload(page);
+    await page.locator('form.gate-card[data-key="step-3"]').waitFor({ state: 'visible', timeout: WAIT });
+    check((await page.locator('html').getAttribute('lang')) === 'pl', `after a reload the page is in "${await page.locator('html').getAttribute('lang')}"`);
+    check((await page.locator('.gate-lang button[data-language="pl"]').getAttribute('aria-pressed')) === 'true', 'after a reload the switch does not mark Polish');
+    // A press now is kept by the app at once: the vault exists.
+    const kept = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/interface', { timeout: WAIT });
+    await chooseLanguage(page, '.gate-lang', 'en');
+    check((await kept).status() === 200, 'the app did not keep the language');
+    await eventually(async () => (await state()).interface.language === 'en', WAIT, 'the state does not name the language that was pressed');
+    check((await count('#toasts .toast')) === 0, 'choosing a language left a message');
   });
 
   await step('the first run can be skipped, and the empty overview says what to do next, in order', async () => {
@@ -593,7 +671,7 @@ run(async () => {
     await picture('18-overview-after-calls');
   });
 
-  await step('a passage of "tax" waits for the owner, with its exact text, and is released once', async () => {
+  await step('a passage of "tax" waits for the owner, with its exact text, in English and in Polish, and is released once', async () => {
     calls.taxSearch = agent(store, HOSTED, 'search', 'tax refund', 'tax');
     check(calls.taxSearch.code === 'OK' && calls.taxSearch.text.includes(AGENT.withheld), `tax search: ${calls.taxSearch.text}`);
     const ref = REF.exec(calls.taxSearch.text)[1];
@@ -613,7 +691,27 @@ run(async () => {
     check(body === TAX_LINE, `the card shows: ${body}`);
     const sentence = await card.locator('.approval-sentence').textContent();
     check(sentence.includes(waiting.destination) && TEXT.cannotBeRecalled.test(sentence), `before the release the card says: ${sentence}`);
+    // The card names the app by the name it has in the vault, and says what that name is.
+    check((await card.locator('.approval-title').textContent()) === `${HOSTED} asks for a passage of \u201ctax-2025\u201d`, `the card is titled: ${await card.locator('.approval-title').textContent()}`);
+    const label = await card.locator('.approval-label').textContent();
+    check(label.includes(HOSTED) && label.includes(product) && TEXT.isALabel.test(label), `about the name the card says: ${label}`);
+    check(TEXT.unverified.test(await card.locator('.approval-meta').textContent()) && (await card.locator('.approval-meta').textContent()).includes(waiting.destination), `the line of facts reads: ${await card.locator('.approval-meta').textContent()}`);
+    // The two answers: the careful one first, neither filled.
+    const answers = await card.locator('.approval-actions button').evaluateAll((nodes) => nodes.map((node) => `${node.dataset.key} ${node.classList.contains('btn-primary')}`));
+    check(JSON.stringify(answers) === JSON.stringify(['dismiss false', 'release false']), `the answers of the card are ${JSON.stringify(answers)}`);
     await picture('19-approval-card');
+    // In Polish, every text of the card is the Polish table's; what is in the box is the owner's own text.
+    await chooseLanguage(page, '.sidebar-foot', 'pl');
+    await allPolish(`.approval[data-key="${key}"]`, [TAX_LINE], ['card.title', 'card.chip.hosted', 'card.status.claimed', 'card.label.text', 'card.status.meta', 'card.say.1', 'card.say.2', 'card.button.no', 'card.button.yes', 'card.button.details']);
+    // "Details" unfolds three lines, and "Release once" waits again: the cards below would have moved.
+    await card.locator('button[data-key="more"]').click();
+    await eventually(async () => (await card.locator('.approval-details li').count()) === 3, WAIT, '"Details" did not unfold three lines');
+    check(await hasClass(card.locator('button[data-key="release"]'), 'is-waiting'), '"Release once" stayed ready while the card unfolded');
+    await allPolish(`.approval[data-key="${key}"]`, [TAX_LINE], ['card.status.document', 'card.status.today', 'card.details.say.1.each']);
+    await picture('19b-approval-card-polish');
+    await chooseLanguage(page, '.sidebar-foot', 'en');
+    await card.locator('button[data-key="more"]').click();
+    await eventually(async () => (await card.locator('.approval-details').count()) === 0, WAIT, '"Details" did not fold again');
     await decideApproval(page, key, 'release');
     calls.approved = agent(store, HOSTED, 'read', ref);
     check(calls.approved.code === 'OK' && calls.approved.text.includes(body), `read after approval: ${JSON.stringify(calls.approved)}`);
@@ -648,8 +746,11 @@ run(async () => {
     await card.waitFor({ state: 'visible', timeout: WAIT });
     const waiting = (await get('/api/approvals')).waiting.find((item) => item.ref === ref);
     check(waiting && waiting.mode === 'read' && waiting.inside_free_allowance === false, `the passage waits as: ${JSON.stringify(waiting && { mode: waiting.mode, inside: waiting.inside_free_allowance })}`);
-    const why = await card.locator('.approval-counts').textContent();
-    check(TEXT.although.test(why) && why.includes('documents'), `the card does not say why a passage waits that the app may read: ${why}`);
+    // Why it waits is behind "Details", with the two lines of figures.
+    await card.locator('button[data-key="more"]').click();
+    const why = card.locator('.approval-details');
+    await why.waitFor({ state: 'visible', timeout: WAIT });
+    check(TEXT.pastAllowance.test(await why.textContent()), `the card does not say why a passage waits that the app may read: ${await why.textContent()}`);
     await picture('20b-approval-past-allowance');
     await decideApproval(page, key, 'dismiss');
     await page.locator('.card-empty').waitFor({ state: 'visible', timeout: WAIT });
@@ -707,7 +808,7 @@ run(async () => {
   });
 
   // ------------------------------------------------------------------ lock, unlock
-  await step('locking: the page shows the locked vault and the app is told so', async () => {
+  await step('locking: the page shows the locked vault and the app is told so; in Polish every text of it is the Polish table\'s, and a reload keeps the language', async () => {
     await page.click('button.lock-now');
     await page.locator('#unlock-passphrase').waitFor({ state: 'visible', timeout: WAIT });
     check((await page.locator('.vault-path').textContent()) === store, `the locked screen shows: ${await page.locator('.vault-path').textContent()}`);
@@ -715,7 +816,24 @@ run(async () => {
     await eventually(async () => (await page.title()) !== product && (await page.title()).includes(product), WAIT, `the title does not say that the vault is locked: ${await page.title()}`);
     const locked = agent(store, HOSTED, 'search', 'rent');
     check(locked.code === 'LOCKED' && locked.text.includes(product), `locked: ${JSON.stringify(locked)}`);
+    // The view that is kept is Pro: the three figures stand under the place, and the foot has both sentences.
+    check((await page.locator('dl.seal-facts dt').count()) === 3 && (await page.locator('.gate-foot span').count()) === 2, 'the locked screen of a vault whose view is Pro lacks a figure or a sentence');
     await picture('22-locked');
+    // In Polish, every text of the locked screen is the Polish table's. The app keeps the word
+    // also while the vault is locked, so a reload shows the same screen in the same language.
+    await chooseLanguage(page, '.gate-lang', 'pl');
+    const names = ['vault', /^[^/]*\/$/, /^#\d+ [0-9a-f]+$/, FIGURE];
+    const shown = ['locked.title', 'locked.label.files', 'locked.label.size', 'locked.label.last', 'locked.label.passphrase', 'locked.button.unlock', 'locked.say.1', 'locked.say.2'];
+    await allPolish('#app', names, shown);
+    await eventually(async () => (await state()).interface.language === 'pl', WAIT, 'the app did not keep the language of a locked vault');
+    await eventually(async () => (await page.title()) === polish['nav.tab.locked'].replace('{product}', product), WAIT, `in Polish the tab is called "${await page.title()}"`);
+    await reload(page);
+    await page.locator('#unlock-passphrase').waitFor({ state: 'visible', timeout: WAIT });
+    check((await page.locator('html').getAttribute('lang')) === 'pl', 'a reload of the locked screen lost the language');
+    await allPolish('#app', names, shown);
+    await picture('22b-locked-polish');
+    await chooseLanguage(page, '.gate-lang', 'en');
+    await eventually(async () => (await state()).interface.language === 'en', WAIT, 'the app did not keep the language that was chosen back');
   });
 
   await step('unlocking: a wrong passphrase is refused, the right one brings everything back', async () => {
@@ -777,8 +895,8 @@ run(async () => {
     const refused = expectOldSessionRefused();
     await page.locator('#pair-code').waitFor({ state: 'visible', timeout: 40000 });
     pageReachedApp();
+    // The eighth character of the code pairs.
     await page.fill('#pair-code', again[1]);
-    await page.locator('.gate-card button[type="submit"]').click();
     await page.locator('#unlock-passphrase').waitFor({ state: 'visible', timeout: WAIT });
     withdraw(refused);
     await page.fill('#unlock-passphrase', PASSPHRASE);

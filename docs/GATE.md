@@ -261,8 +261,8 @@ Whichever way you choose:
 
 ## First run with your own documents
 
-The first run has four steps, and each screen names them at its top: "Passphrase", "App",
-"Documents" and "First question". Pairing comes before them. You can stop at any point; what you
+The first run has four steps: "Passphrase", "App", "Documents" and "First question". The three
+screens after the passphrase name them at their top. Pairing comes before them. You can stop at any point; what you
 have done stays, and [Stopping and coming back](#stopping-and-coming-back) says how you find the
 next step again.
 
@@ -283,12 +283,29 @@ pairing code: TF98-4GSA   (type it into the page; anyone who can read this termi
 Ctrl-C locks the vault and quits.
 ```
 
-Your browser opens the page "Pair this browser". Type the code from the line that begins with
-"pairing code"; upper and lower case and the hyphen do not matter. The code is new at every
-start, and it is never part of an address or a file. It is what a web page you have open, or
-another program on the computer, would need before it could use the page of your vault. It is not
-a wall against programs that run under your account: anyone who can read that Terminal window can
-pair.
+Your browser opens the page "Pair this browser". It says: "Type the pairing code from the
+terminal where Locktender runs." That is the code on the line that begins with "pairing code";
+upper and lower case and the hyphen do not matter, and the page writes the hyphen itself. **The
+eighth character sends the code**: there is nothing to press. The button "Pair" is for a code
+that did not arrive, and it stays off for a code that was just refused until you have changed
+it. The code is new at every start, and it is never part of an address or a file. It is what a
+web page you have open, or another program on the computer, would need before it could use the
+page of your vault. It is not a wall against programs that run under your account, and the foot
+of the screen says so: "Anyone who can read that terminal can pair."
+
+**English or Polish.** Top right of this screen, and of every screen before the vault is open,
+stand two words, "English" and "Polski". The page starts in the language of your browser where
+that is Polish or English, and in English otherwise; a press changes it at once. While there is
+no vault the choice lives in the page alone, so reloading the tab loses it. "Create my vault"
+keeps it with the vault, and from then on a press is kept at once, also while the vault is
+locked: [Basic and Pro](#basic-and-pro) says where. The switch also stands at the foot of the
+sidebar in Pro and in the top bar of the Basic page (there as "EN" and "PL"). In this version
+the chosen language reaches the screens before the vault is open, the approval card, the sheet
+"Enter your passphrase again", the place where files are added with its lines, the question
+before a document is removed, the eight statements under "What Locktender cannot do", and a few
+labels of the panel that shows one entry of the record. Numbers, sizes and times are written
+the way the chosen language writes them on every page ("12 000", "5 min temu"). Everything else
+on the page is in English, and so is everything an AI app is told.
 
 - **The pairing belongs to the tab.** Reloading the tab keeps it. A new tab or window asks for
   the code again, and takes the same code for as long as Locktender runs.
@@ -304,23 +321,24 @@ Leave the Terminal window open. Locktender runs in it; the browser page is only 
 
 The screen "Choose a passphrase" asks for a passphrase twice. The rules:
 
-- **At least 12 characters.** There is no other rule. The page suggests a few unrelated words,
-  and "Show" lets you look at what you type while you choose.
-- **It cannot be recovered.** The page says "Losing the passphrase loses the vault. There is no
-  recovery." and means it: there is no reset, no hint and no second key.
+- **At least 12 characters.** There is no other rule; a few unrelated words work well. The line
+  under the field counts what you have typed, and "Show" lets you look at it while you choose.
+- **It cannot be recovered.** The page says what the passphrase is for and that it means it: "It
+  locks your documents on this computer. Nobody can reset it: a lost passphrase is a lost
+  vault." There is no reset, no hint and no second key.
 - **It cannot be changed** in this preview.
 - **It is never stored.** A key is made from it each time you unlock, and the files of the vault
   are sealed with a key that only this one opens. You type it when you unlock, and again before
   a change that lets more text leave; see
   [When the passphrase is asked again](#when-the-passphrase-is-asked-again).
 
-"Create the vault" makes the folder named under the button and unlocks it. Step 2 follows. From
+"Create my vault" makes the folder named under the button and unlocks it. Step 2 follows. From
 here on the address of the page names the step, so reloading the tab shows the same step again.
 
-Along with the vault, Locktender writes two words into a small file in the vault's folder that is
-not sealed: which view you use, which is Basic for a new vault, and that setting up is not
-finished. The file can hold a third word, a language for the page (`en` or `pl`). The page has no
-switch for it yet, so the file of a vault you create here holds the two.
+Along with the vault, Locktender writes two or three words into a small file in the vault's
+folder that is not sealed: which view you use, which is Basic for a new vault, that setting up is
+not finished, and your language (`en` or `pl`) if you chose one on the way here. Without a
+choice the file holds the two words, and the page goes by your browser.
 [Basic and Pro](#basic-and-pro) says what the file is for.
 
 ### Step 2: App
@@ -382,7 +400,8 @@ photo or a Word file cannot be read." Under it stands who can use the document a
 example "claude-desktop can then search it and ask for passages; each passage waits for your
 approval.", and the amber sentence about where text goes.
 
-Drop files onto "Drop files here", or press "Choose files".
+Drop files onto "Drop files here", or press "Add documents". The line under it says what can
+be read: "PDF or text, up to 20 MB each".
 
 - **File types:** `.txt`, `.md`, `.markdown`, `.rst`, `.text` and `.pdf`. Text files must be
   UTF-8.
@@ -399,16 +418,22 @@ What happens to a file you add:
    `https://`, `www.` or `mailto:` is replaced with `[link removed]`.
 2. The text is cut into **passages** of at most 800 characters. A passage is what an app reads.
 3. The text and a copy of the file are sealed into the vault. The page answers, for example,
-   "Sealed: 1 passage, 418 characters."
+   "Sealed: 1 passage".
+
+A file that is not added gets a line that begins "Not added:" and says why. For a file of
+another kind it also says what to do: "Not added: only PDF and text files can be read. Save a
+Word file as PDF and add that."
 
 Under the files that were sealed the screen says who can ask for them from now on, for example
-"Apps that may use your documents can ask for it from now on: claude-desktop (Ask me each time)."
-Adding a document never asks for the passphrase, so this is said where the documents are added
-in the first run and on the Basic page.
+"Apps that can ask for it from now on: claude-desktop." It names the apps by the names they have
+in the vault, and not what each may do with the document: that is on the Basic page under
+"Apps", and in Pro. Adding a document never asks for the passphrase, so this is said where the
+documents are added in the first run and on the Basic page.
 
 **The file you added stays where it was, not encrypted.** The page says so after every upload:
-"The file you chose is still where it was, not encrypted. Removing or moving it is up to you: this
-app cannot do it for you, and it cannot hand a file back out of the vault." Two things follow.
+"A sealed copy goes into the vault, and the file you add stays where it was, not encrypted."
+Removing or moving that file is up to you: Locktender cannot do it for you, and it cannot hand a
+file back out of the vault. Two things follow.
 Locktender is not a place to keep your only copy, because this preview cannot give a file back.
 And the original is behind the lock only if no AI app can read the folder it lies in: an app that
 was given that folder reads the file there and does not need Locktender for it. The page does not
@@ -572,9 +597,11 @@ above "Lock now"; in a narrow window, where the sidebar shows icons, it is one b
 Basic view". A press switches at once: "Basic" opens the Basic page, "Pro" opens Overview.
 
 **Where the choice is kept.** Beside the vault, in the file `run/interface.json` in the vault's
-folder, together with one more word: whether setting up is finished. So the choice belongs to the
-vault and not to the browser: it is the same in every tab and after a restart. The file is not
-sealed, it is no setting of the vault, and changing it leaves no entry in the record.
+folder, together with two more words: whether setting up is finished, and the language of the
+page once you chose one ("English" or "Polski", wherever the two words stand). So the choices
+belong to the vault and not to the browser: they are the same in every tab and after a restart,
+and the screens that come before the vault is open, pairing included, are in that language. The
+file is not sealed, it is no setting of the vault, and changing it leaves no entry in the record.
 
 - A new vault starts in Basic.
 - A vault from before the two views has no such file. It opens in Pro until you choose "Basic",
@@ -809,8 +836,8 @@ your approval is not listed here: it is a card. A press on a line opens the entr
 text goes when an app that sends text to a provider can use the documents, and the place to add
 files, which works as in [Step 3](#step-3-documents). "Show the documents" unfolds a table with
 "Title", "Passages", "Added" and "Left so far", and a bin in each row. The bin asks first: "Apps
-can no longer search or read it. What was released earlier stays in the record.", and "Its files
-are deleted, not shredded; backups keep what they have." Under the table: "Apps are shown a
+can no longer search or read it, and what was released earlier stays under Activity.", and "Its
+files are deleted, not shredded, and backups keep what they have." Under the table: "Apps are shown a
 document's number, not its file name.", unless Pro switched titles on. While the sample letter
 of the first run is in the vault, a line says "1 of them is the invented sample letter.", with
 the button "Remove it".
@@ -943,19 +970,38 @@ card, and the card is the same wherever it shows: on the Basic page under "Appro
 the page Approvals, and during the first run on the screen "Ask your first question". The picture
 under [Try it in two minutes](#try-it-in-two-minutes) shows one.
 
-The card shows which app asks, for which passage of which document, where the text would be sent,
-and "The exact text that would be released". Under the text it says how much of this document has
-already been released to apps of that kind, how much this app has used in the last 24 hours, and
-why the passage waits. Then you choose:
+The card, from top to bottom:
+
+- **Who asks for what**: "claude-desktop asks for a passage of “tax-2025”". The app is named by
+  the name it has in the vault.
+- **One line of facts**: where the text would go ("Would be sent to Anthropic", or for an app
+  you declared local "Stays here, if the app really is local"), what the calling program said it
+  is ("Says it is claude-ai 1.2, unverified"), and when it asked ("Asked 5 minutes ago").
+- **"The exact text that would be released"**, in a box, and under it its size and its place in
+  the document: "661 characters · passage 2 of 3".
+- **Two sentences that stay where you decide**: "Once released, this text is sent to Anthropic
+  and cannot be recalled.", and "The name “claude-desktop” is a label: Locktender cannot check
+  which program is asking." In one case a third stands under them: "The app’s limits would
+  refuse this passage right now, even with your yes."
+- **The two answers**, "Don’t release" first. Neither is the filled button.
+- **"Details"**, which unfolds three lines: how much of this document has already been released
+  and how much it would be after this, how much this app has used in the last 24 hours, and why
+  the passage waits ("It waits because this app asks you each time.", or "It waits because it
+  goes past what the app may read of this document without asking.").
+
+Then you choose:
 
 - **"Release once"**. Pro says it at the top of its page: "Each approval is for one passage, one
   app, one time. An approval that is not used expires." By default it expires after 10 minutes.
   The app gets the passage when it asks again; if it does not ask by itself, tell it "try again".
+  The page answers in the card's place and in a message: "Released once for claude-desktop,
+  until 6:10 PM. Tell it: “try again”."
   Until the app has read the passage, the approval is listed under "Approved, not read yet",
   where "Withdraw" takes it back. The button can be pressed a second and a half after the cards
-  have appeared, changed or moved, or after a bar, the panel or a sheet near them has come or
-  gone, so that a press cannot land on a card you have not read.
-- **"Don’t release"**. Nothing is released. If the app asks again, the passage comes back.
+  have appeared, changed or moved (unfolding "Details" moves them), or after a bar, the panel or
+  a sheet near them has come or gone, so that a press cannot land on a card you have not read.
+- **"Don’t release"**. Nothing is released. If the app asks again, the passage comes back, and
+  the page says so: "Not released. If claude-desktop asks again, the passage comes back here."
 
 The app is told that the passage needs your approval and to ask you to open "Approvals" in
 Locktender, so a well-behaved assistant tells you in the conversation. Nothing tells the app what
@@ -1092,20 +1138,22 @@ wdva gate app --lock-after 2
 
 Closing the browser tab does not lock anything: Locktender keeps running in its Terminal window
 until the time above. While the vault is locked, every app gets the same answer, that the vault is
-locked and that it should ask you to unlock it. The locked page shows the number and the size of
-the sealed files, which anyone who can see the folder can see too, and nothing of what is in them.
-Where the view is Pro it also shows the number of the newest entry of the record and the start
-of its hash.
+locked and that it should ask you to unlock it. The locked page says so in its foot: "While
+locked, apps get one answer: the vault is locked." Where the view that is kept is Pro, it also
+shows the number and the size of the sealed files, which anyone who can see the folder can see
+too, the number of the newest entry of the record and the start of its hash, and a second
+sentence: "The number and sizes of the sealed files are visible without the key, and what is in
+them is not." Where the view is Basic it shows none of these figures.
 
 A passage that waits when the vault locks is not released, and it does not wait any more after
-you unlock: the app has to ask again. Where the view is Basic and the page saw the vault lock,
-the locked page says so, for example: "1 passage was waiting when the vault locked. It was not
-released. If an app still needs one, it will ask again after you unlock."
+you unlock: the app has to ask again. A page that saw the vault lock says so on the locked
+screen, for example: "1 passage was waiting when the vault locked; it was not released."
 
 ### When the passphrase is asked again
 
 For ten minutes after you typed the passphrase, the changes that let more text leave go through.
-After that, such a change opens a sheet "Enter your passphrase again". These changes are:
+After that, such a change opens a sheet "Enter your passphrase again", which says why: "This
+needs your passphrase because you last typed it more than 10 minutes ago." These changes are:
 
 - adding an app;
 - giving an app a collection, or moving it from "Ask me each time" to "Can read";
@@ -1122,10 +1170,10 @@ passphrase, the page says "Nothing was changed."
 
 Never held up: lowering a limit, pausing, taking a collection away from an app, closing a
 collection, approving or refusing a single passage, adding and removing documents, adding a word
-to replace, switching between Basic and Pro, and locking. Note the one that may surprise: a
-document you add to a collection is available at once to every app that has that collection.
-That is why the Basic page and the first run say, under the files you added, which apps can ask
-for them from now on. Pro's Documents page does not say it.
+to replace, switching between Basic and Pro, choosing a language, and locking. Note the one that
+may surprise: a document you add to a collection is available at once to every app that has
+that collection. That is why the Basic page and the first run say, under the files you added,
+which apps can ask for them from now on. Pro's Documents page does not say it.
 
 Passphrases are checked one at a time, and a wrong one is answered after a second at the
 earliest: four wrong ones sent at the same moment were answered after 1, 2, 3 and 4 seconds in a
@@ -1410,9 +1458,9 @@ is printed in Terminal, and the command ends.
 | "That is not the code. Check the terminal and try again." | The pairing code was mistyped, or it is the code of an earlier start. | Type the code from the Terminal window in which Locktender runs now. |
 | "Pairing is switched off after five wrong codes." | Five wrong codes were sent since Locktender started, by you or by another program. | Quit Locktender with Ctrl-C and start it again. A tab that is paired already goes on working until then. |
 | "Pair this browser" in a tab of a browser you paired before | The pairing belongs to the tab. A new tab or window has none. | Type the code from the Terminal window again. It is the same code until Locktender is restarted. |
-| "The session ended. Pair again to continue." | Locktender was restarted and came back at the same address, so the open page reached it again. The pairing of the earlier run is gone. | Type the new code. The old one answers "That is not the code." |
+| "The session ended. Pair again." | Locktender was restarted and came back at the same address, so the open page reached it again. The pairing of the earlier run is gone. | Type the new code. The old one answers "That is not the code." |
 | A bar "Locktender is not answering. Is it still running in its terminal? What you see may be out of date.", and "State unknown" where the page said "Unlocked": at the top right in Basic, at the bottom left in Pro | The program in Terminal has stopped, or its window was closed. When it stops, the vault is locked. | Start it again. On the Basic page and on the steps of the first run the bar has the command: "To start it again, run this in Terminal:", with "Copy", and under it what to expect: "It opens a new page. This one can then be closed.", or, where Locktender was started with `--no-browser`, "It prints the address of a new page. Open that one; this one can then be closed." Where it was started with a fixed `--port`: "This page continues by itself." In Pro the bar has the sentence alone, and so has a demo, which that command would not start again. Without a fixed `--port` Locktender has a new address after a restart: open the one on the `open:` line and pair there. With the same address, the open page continues by itself and asks for the new code. |
-| A page "Locktender is not answering" with the button "Try now" | The same, seen by a page that had nothing of the vault to show yet. | The same. The page says it in these words: "With the same address as before, this page continues by itself and asks for the code; with a new address, which is the usual case, open that one instead." |
+| A page "Locktender is not answering" with the button "Try now" | The same, seen by a page that had nothing of the vault to show yet. | The same. The page says it in these words: "Start Locktender again in a terminal, then open the address it prints." It promises nothing about itself: a new start has a new address unless you named a port, and only at the same address does "Try now" find Locktender again. |
 | "That passphrase did not open the vault." | A wrong passphrase. Each try takes at least a second. | Try again. There is no limit on tries and no recovery; see "You forgot the passphrase" below. |
 | "The vault is open in another program. Lock it there first." | A second Locktender has this vault unlocked, usually in another Terminal window. | Lock or quit it there. A crash cannot leave a vault locked out: the lock ends with the program that held it. |
 | "Locktender ended without locking last time (a crash or a forced quit)." | The program was killed while the vault was unlocked. The files stayed sealed. | Nothing. Press "Got it". |

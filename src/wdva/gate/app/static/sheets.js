@@ -15,6 +15,7 @@ import {
   copyText,
   demoPassphraseNote,
   destinationChip,
+  errorText,
   field,
   note,
   openSheet,
@@ -24,6 +25,7 @@ import {
   toast,
   toastError,
 } from "./parts.js";
+import { t } from "./texts.js";
 
 export const GRANT_LABEL = { none: "No access", read: "Can read", approve: "Ask me each time" };
 
@@ -66,16 +68,17 @@ let reauthOpen = null;
 /**
  * Ask for the passphrase. Resolves to true once it was accepted, false when the owner gave up.
  * `demoPassphrase` is the passphrase of the demo vault when this is the demo: the sheet then
- * shows it, because nobody could answer otherwise.
+ * shows it, because nobody could answer otherwise. Its one sentence says when the passphrase
+ * is asked for and not what for: not every press that asks lets more text leave.
  */
 export function requestReauth(demoPassphrase = null) {
   if (reauthOpen) return reauthOpen;
-  const form = { passphrase: "", busy: false, error: "" };
+  const form = { passphrase: "", busy: false, failed: null };
   const submit = async (event, sheet) => {
     event.preventDefault();
     if (form.busy || !form.passphrase) return;
     form.busy = true;
-    form.error = "";
+    form.failed = null;
     sheet.update();
     try {
       await api.reauth(form.passphrase);
@@ -84,33 +87,31 @@ export function requestReauth(demoPassphrase = null) {
     } catch (error) {
       form.busy = false;
       form.passphrase = "";
-      form.error = error.code === "wrong_passphrase" ? "That passphrase is not right." : error.message;
+      form.failed = error;
       sheet.update();
       const input = document.getElementById("reauth-passphrase");
       if (input) input.focus();
     }
   };
   const sheet = openSheet(
-    (self) =>
-      el(
+    (self) => {
+      const error = form.failed ? errorText(form.failed, { wrong_passphrase: "reauth.error.wrong" }) : "";
+      return el(
         "form",
         { class: "sheet-content", onsubmit: (event) => submit(event, self), autocomplete: "off" },
         el("div", { class: "sheet-glyph" }, icon("key")),
-        sheetHead(
-          "Enter your passphrase again",
-          "A change that lets more text leave the vault needs your passphrase when you last typed it more than 10 minutes ago.",
-        ),
+        sheetHead(t("reauth.title"), t("reauth.say.1")),
         demoPassphraseNote(demoPassphrase, () => {
           form.passphrase = demoPassphrase;
-          form.error = "";
+          form.failed = null;
           self.update();
           const input = document.getElementById("reauth-passphrase");
           if (input) input.focus();
         }),
         field({
-          label: "Passphrase",
+          label: t("reauth.label.passphrase"),
           id: "reauth-passphrase",
-          error: form.error,
+          error,
           control: el("input", {
             type: "password",
             id: "reauth-passphrase",
@@ -119,19 +120,20 @@ export function requestReauth(demoPassphrase = null) {
             autocomplete: "current-password",
             autofocus: true,
             required: true,
-            "aria-invalid": form.error ? "true" : null,
-            "aria-describedby": form.error ? "reauth-passphrase-error" : null,
+            "aria-invalid": error ? "true" : null,
+            "aria-describedby": error ? "reauth-passphrase-error" : null,
             oninput: (event) => {
               form.passphrase = event.target.value;
             },
           }),
         }),
         sheetFoot(
-          button("Cancel", { onclick: () => self.close(false) }),
-          button(form.busy ? "Checking…" : "Continue", { kind: "primary", type: "submit", busy: form.busy }),
+          button(t("common.button.cancel"), { onclick: () => self.close(false) }),
+          button(t(form.busy ? "reauth.button.busy" : "reauth.button.continue"), { kind: "primary", type: "submit", busy: form.busy }),
         ),
-      ),
-    { label: "Enter your passphrase again" },
+      );
+    },
+    { label: t("reauth.title") },
   );
   reauthOpen = sheet.closed.then((value) => {
     reauthOpen = null;

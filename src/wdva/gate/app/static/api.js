@@ -4,15 +4,20 @@
 // The only module that talks to the app. Every address it uses is written out
 // below, one function per endpoint.
 
-import { PRODUCT } from "./brand.js";
+import { t } from "./texts.js";
 
-/** An answer that is an error: the HTTP status, a short code and one sentence for a person. */
+/**
+ * An answer that is an error: the HTTP status, a short code and one sentence for a
+ * person. The sentence is the app's own, in English. `reason` is one more word of the
+ * answer where it has one (why a file was refused), else null.
+ */
 export class ApiError extends Error {
-  constructor(status, code, message) {
+  constructor(status, code, message, reason = null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    this.reason = reason;
   }
 }
 
@@ -52,15 +57,11 @@ export function configure({ unauthorized, reauth }) {
   hooks.reauth = reauth;
 }
 
-const FALLBACK = {
-  0: `${PRODUCT} is not answering. Is it still running in its terminal?`,
-  400: `${PRODUCT} could not use that.`,
-  403: `${PRODUCT} refused that request.`,
-  404: "That is no longer there.",
-  409: "That does not fit the current state of the vault.",
-  413: `That is larger than ${PRODUCT} accepts.`,
-  503: "The vault cannot be reached right now.",
-};
+/** What is said for an answer that brings no sentence of its own, in the language of the page. */
+function fallback(status) {
+  if (status === 0) return t("offline.title");
+  return t(status === 503 ? "common.error.unavailable" : "common.error.unknown");
+}
 
 async function send(method, path, options) {
   let url = path;
@@ -87,7 +88,7 @@ async function send(method, path, options) {
   try {
     response = await fetch(url, init);
   } catch (_error) {
-    throw new ApiError(0, "offline", FALLBACK[0]);
+    throw new ApiError(0, "offline", fallback(0));
   }
   let data = null;
   try {
@@ -97,11 +98,9 @@ async function send(method, path, options) {
   }
   if (response.ok) return data === null ? {} : data;
   const error = data && typeof data.error === "object" && data.error ? data.error : {};
-  const message =
-    typeof error.message === "string" && error.message
-      ? error.message
-      : FALLBACK[response.status] || `Something went wrong in ${PRODUCT}.`;
-  throw new ApiError(response.status, typeof error.code === "string" ? error.code : "error", message);
+  const message = typeof error.message === "string" && error.message ? error.message : fallback(response.status);
+  const reason = typeof error.reason === "string" && error.reason ? error.reason : null;
+  throw new ApiError(response.status, typeof error.code === "string" ? error.code : "error", message, reason);
 }
 
 async function call(method, path, options = {}) {
@@ -114,7 +113,7 @@ async function call(method, path, options = {}) {
     }
     if (error.code === "reauth_required" && hooks.reauth && !options.plain) {
       const accepted = await hooks.reauth();
-      if (!accepted) throw new ApiError(403, "cancelled", "Nothing was changed.");
+      if (!accepted) throw new ApiError(403, "cancelled", t("common.error.cancelled"));
       return send(method, path, options);
     }
     throw error;
@@ -122,6 +121,10 @@ async function call(method, path, options = {}) {
 }
 
 const part = encodeURIComponent;
+
+// The app reads the words it keeps beside the vault and writes them all. So the page
+// sends one such request at a time: of two at once, one word could be lost.
+let interfaceSent = Promise.resolve();
 
 export const api = {
   session: async () => {
@@ -143,13 +146,18 @@ export const api = {
   },
 
   state: () => call("GET", "/api/state"),
-  createStore: (passphrase) => call("POST", "/api/store/create", { body: { passphrase } }),
+  // `language` goes along only when the owner chose one before the vault existed.
+  createStore: (passphrase, language) => call("POST", "/api/store/create", { body: language ? { passphrase, language } : { passphrase } }),
   unlock: (passphrase) => call("POST", "/api/unlock", { body: { passphrase } }),
   lock: () => call("POST", "/api/lock"),
   reauth: (passphrase) => call("POST", "/api/reauth", { body: { passphrase }, plain: true }),
   setServing: (body) => call("POST", "/api/serving", { body }),
   verify: () => call("POST", "/api/verify"),
-  setInterface: (body) => call("POST", "/api/interface", { body }),
+  setInterface: (body) => {
+    const sent = interfaceSent.then(() => call("POST", "/api/interface", { body }));
+    interfaceSent = sent.catch(() => {});
+    return sent;
+  },
 
   activity: (query) => call("GET", "/api/activity", { query }),
   activityDetail: (seq) => call("GET", `/api/activity/${part(seq)}`),

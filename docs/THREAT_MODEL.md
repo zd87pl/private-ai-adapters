@@ -495,14 +495,16 @@ the passphrase. What that gains:
   page that is open stays on the page it shows. A change written into the
   file, and not sent through the API, is taken up when the vault is next
   unlocked or Locktender is next started.
-- With Basic kept, the locked screen leaves out the head of the record
-  ("Last entry").
+- With Basic kept, the locked screen leaves out the figures of the sealed
+  files and the head of the record ("Sealed files", "Size", "Last entry").
 - The card "Finish setting up" goes away. Through the file it can also be made
   to come back, which the API does not allow.
 - The language that is kept changes, or one is kept where none was. Through
-  the file it can also be taken away, which the API does not allow. The page
-  does not read the word yet, so today this changes what the app answers and
-  nothing the owner sees.
+  the file it can also be taken away, which the API does not allow. A page
+  on which the owner has not pressed a language shows the kept one from its
+  next question to the app on: the screens before the vault is open, the
+  approval card and the other parts that follow the language say in Polish
+  what they said in English, or the other way round.
 - Nothing else. Nothing leaves, nothing sealed changes, and the record is not
   touched: in a run for this page the head of the record and the number of
   sealed files were the same before and after a change of the view, and in a
@@ -1077,8 +1079,9 @@ vault cannot do, the computer has to: a screen lock and full-disk encryption.
 - **Where the original lies.** Locktender seals a copy of a document. The file
   the copy was made from stays where it was, not encrypted: adding a document
   neither moves nor deletes it. The page says so under the files it has just
-  sealed ("The file you chose is still where it was, not encrypted."). It does
-  not say which folders an AI app can read, and Locktender cannot know. An AI
+  sealed ("A sealed copy goes into the vault, and the file you add stays where
+  it was, not encrypted."). It does not say which folders an AI app can read,
+  and Locktender cannot know. An AI
   app that was given a folder reads the files in it by itself, without asking
   Locktender, and nothing it reads that way is limited, approved or recorded.
   Two examples, from the vendor's own pages as read on 2026-11-13, neither

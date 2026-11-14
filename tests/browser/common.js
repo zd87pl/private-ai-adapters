@@ -3,7 +3,8 @@
 //
 // Nothing in this file knows a step. It reads the options from the environment,
 // starts and stops the app through launch_app.py, opens the browser engine that
-// was asked for, listens for what the page does wrong, and prints the result.
+// was asked for, listens for what the page does wrong, reads the page's text
+// tables, and prints the result.
 //
 // Rules the walk-throughs keep, so that they run in Chromium, WebKit and Firefox
 // alike and on a slow machine:
@@ -23,6 +24,7 @@
 const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 
 const HERE = __dirname;
 const ENGINES = ['chromium', 'webkit', 'firefox'];
@@ -489,6 +491,59 @@ async function lockElsewhere(page, base) {
   if (!response.ok()) throw new Error(`POST /api/lock answered ${response.status()}`);
 }
 
+// -- the languages --------------------------------------------------------------------
+
+/**
+ * The text table of one language ("en" or "pl") as the app serves it to the page: the
+ * object that text-<code>.js exports. The file is the one the page loads; it is read
+ * here as text and its one object is taken out of it.
+ */
+async function textTable(page, base, code) {
+  const response = await page.context().request.get(new URL(`text-${code}.js`, base).href, { timeout: WAIT });
+  if (!response.ok()) throw new Error(`GET text-${code}.js answered ${response.status()}`);
+  const source = await response.text();
+  const holder = {};
+  vm.runInNewContext(source.replace('export const TEXT =', 'TEXT ='), holder);
+  if (!holder.TEXT || typeof holder.TEXT !== 'object') throw new Error(`text-${code}.js holds no table`);
+  return holder.TEXT;
+}
+
+/** Every text a person can read inside the element `selector` names: its text nodes, trimmed, without the empty ones. */
+function textsIn(page, selector) {
+  return page.locator(selector).first().evaluate((root) => {
+    const found = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const text = node.data.replace(/\s+/g, ' ').trim();
+      if (text) found.push(text);
+    }
+    return found;
+  });
+}
+
+/**
+ * Which of `texts` are neither a text of `table`, with anything in the places for
+ * values, nor one of `names` (a text, or a pattern for a whole text). An empty answer
+ * means: everything that is read there is the table's or a name.
+ */
+function notOfTable(texts, table, names = []) {
+  const escaped = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = (text) => new RegExp(`^${text.split(/\{[a-z]+\}/).map(escaped).join('.+?')}$`);
+  const known = [];
+  for (const value of Object.values(table)) {
+    for (const text of typeof value === 'string' ? [value] : Object.values(value)) known.push(pattern(text));
+  }
+  const isName = (text) => names.some((name) => (typeof name === 'string' ? name === text : name.test(text)));
+  return texts.filter((text) => !isName(text) && !known.some((one) => one.test(text)));
+}
+
+/** Press a language in the switch that `scope` holds ("en" or "pl"), and wait until the page is in it. */
+async function chooseLanguage(page, scope, code) {
+  await page.locator(`${scope} .lang button[data-language="${code}"]`).click();
+  await page.locator(`html[lang="${code}"]`).waitFor({ state: 'attached', timeout: WAIT });
+  await eventually(async () => (await page.locator(`${scope} .lang button[data-language="${code}"]`).getAttribute('aria-pressed')) === 'true', WAIT, `the switch does not mark "${code}" as the language that is shown`);
+}
+
 /** Whether the element has the focus of its page. */
 function focused(locator) {
   return locator.evaluate((node) => node === document.activeElement);
@@ -694,6 +749,7 @@ module.exports = {
   agentCall,
   apiGet,
   check,
+  chooseLanguage,
   closePage,
   deadline,
   decideApproval,
@@ -704,6 +760,7 @@ module.exports = {
   focused,
   lockElsewhere,
   newPage,
+  notOfTable,
   note,
   openBrowser,
   pageReachedApp,
@@ -721,5 +778,7 @@ module.exports = {
   step,
   stopApp,
   switchView,
+  textTable,
+  textsIn,
   withdraw,
 };

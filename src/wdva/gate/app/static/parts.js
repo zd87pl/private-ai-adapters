@@ -2,10 +2,11 @@
 // Copyright 2025 Enclave
 //
 // The pieces every screen is made of: buttons, chips, meters, switches, sheets,
-// toasts, and one row of activity.
+// toasts, the choice of the language, and one row of activity.
 
 import { el, icon, render } from "./dom.js";
 import { agoShort, num, sentence, whenFull } from "./format.js";
+import { LANGUAGES, around, language, t } from "./texts.js";
 
 export function button(label, options = {}) {
   const { kind = "default", onclick, disabled, type = "button", glyph, small, large, block, title, autofocus, busy, waiting } = options;
@@ -219,6 +220,8 @@ export function note(tone, text, extra = null) {
  */
 export function demoPassphraseNote(passphrase, fill) {
   if (typeof passphrase !== "string" || !passphrase) return null;
+  // The passphrase is an element of its own inside its sentence, so that it is read letter by letter.
+  const [before, after] = around("demo.say.1", "passphrase");
   return el(
     "div",
     { class: "note note-plain demo-pass", key: "demo-pass" },
@@ -226,9 +229,43 @@ export function demoPassphraseNote(passphrase, fill) {
     el(
       "div",
       { class: "note-text" },
-      el("p", null, "This is the demo. The passphrase of its vault is ", el("strong", { class: "mono demo-pass-word" }, passphrase), "."),
-      el("p", { class: "muted small" }, "It is shown because the demo holds invented documents only. The passphrase of a real vault is never shown."),
-      button("Fill it in", { small: true, onclick: fill, id: "demo-pass-fill" }),
+      el("p", null, before, el("strong", { class: "mono demo-pass-word" }, passphrase), after),
+      el("p", { class: "muted small" }, t("demo.say.2")),
+      button(t("demo.button.fill"), { small: true, onclick: fill, id: "demo-pass-fill" }),
+    ),
+  );
+}
+
+// -- the language -------------------------------------------------------------------
+
+const LANGUAGE_WORD = { en: "common.lang.en", pl: "common.lang.pl" };
+
+/**
+ * The choice of the language: two words, the one that is shown marked as pressed.
+ * `choose(code)` is called with "en" or "pl". Each button also holds its two letters
+ * ("EN", "PL"), which a narrow place shows in place of the word (`short`, or the
+ * stylesheet of the place); the word is the button's name either way.
+ */
+export function languageSwitch(choose, { short = false } = {}) {
+  const shown = language();
+  return el(
+    "div",
+    { class: ["lang", short && "lang-short"], role: "group", "aria-label": t("common.label.language"), key: "language" },
+    LANGUAGES.map((code) =>
+      el(
+        "button",
+        {
+          type: "button",
+          class: ["lang-option", code === shown && "is-current"],
+          lang: code,
+          "data-language": code,
+          "aria-pressed": code === shown ? "true" : "false",
+          "aria-label": t(LANGUAGE_WORD[code]),
+          onclick: () => choose(code),
+        },
+        el("span", { class: "lang-word" }, t(LANGUAGE_WORD[code])),
+        el("span", { class: "lang-code", "aria-hidden": "true" }, code.toUpperCase()),
+      ),
     ),
   );
 }
@@ -310,10 +347,31 @@ export function toast(message, tone = "plain") {
   }, stay);
 }
 
+/** The codes of an answer for which the page has one text wherever they come. */
+const WORDED = {
+  locked: "nav.result.locked",
+  unavailable: "common.error.unavailable",
+  cancelled: "common.error.cancelled",
+  offline: "offline.title",
+};
+
+/**
+ * What went wrong, in the language of the page where the page has a text for it.
+ * `own` names the keys for the codes that the place which asks knows; four codes have
+ * one text everywhere. For every other code it is the app's own sentence, in English.
+ */
+export function errorText(error, own = {}) {
+  const has = Object.prototype.hasOwnProperty;
+  const code = error && typeof error.code === "string" ? error.code : "";
+  if (has.call(own, code)) return t(own[code]);
+  if (has.call(WORDED, code)) return t(WORDED[code]);
+  return error && error.message ? error.message : t("common.error.unknown");
+}
+
 /** Show what went wrong, unless the owner simply closed the passphrase sheet. */
 export function toastError(error) {
   if (error && (error.code === "cancelled" || error.status === 401)) return;
-  toast(error && error.message ? error.message : "Something went wrong.", "red");
+  toast(errorText(error), "red");
 }
 
 // -- sheets -----------------------------------------------------------------------

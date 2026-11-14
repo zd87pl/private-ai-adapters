@@ -30,7 +30,7 @@
 //      the Basic page; a busy day: five passages waiting.
 //
 // Runs A and E count what the offered path costs a person (presses, addresses, typed fields, file
-// dialogs) from "Create the vault" to the first request seen on the page, and fail above the numbers
+// dialogs) from "Create my vault" to the first request seen on the page, and fail above the numbers
 // the first run was designed to. See COUNT below for the numbers, and for the one that is higher
 // than the design and why.
 //
@@ -93,7 +93,7 @@ const REF = /ref=(d-[0-9a-f]{12})\.(\d+)/;
 const ARM_MS = 1500;
 
 /**
- * What the offered path may cost, from "Create the vault" to the first request of the owner's own
+ * What the offered path may cost, from "Create my vault" to the first request of the owner's own
  * app seen on the page, with one document. The first run was designed to these numbers: the walk
  * fails above them, so that a change which makes the first run longer is seen.
  *
@@ -128,8 +128,7 @@ const TEXT = {
   untilYouAddOne: 'No app can ask for it until you add one.',
   notAdded: /^Not added: /,
   noneAdded: 'None of those files could be added. You can go on with an invented sample letter and add your own documents later.',
-  whoAsks: (name) => `Apps that may use your documents can ask for it from now on: ${name} (Ask me each time).`,
-  whoReads: (name) => `Apps that may use your documents can ask for it from now on: ${name} (Can read: passages of it can leave without asking).`,
+  whoAsks: (...names) => `Apps that can ask for it from now on: ${names.join(' and ')}.`,
   notEncrypted: /not encrypted/i,
   sampleAdded: 'Added: an invented sample letter (1 passage). Its text says that it is invented. You can remove it at any time.',
   waitingFor: (name) => `Waiting for the first request under the name ${name}. This page notices it by itself.`,
@@ -189,8 +188,8 @@ const TEXT = {
   canRead: 'Can read',
   noAccess: 'No access',
   nothingChanged: 'Nothing was changed.',
-  lockedFoot: 'While locked, apps get one answer: the vault is locked. The number and sizes of the sealed files are visible without the key; what is in them is not.',
-  oneWaited: '1 passage was waiting when the vault locked. It was not released. If an app still needs one, it will ask again after you unlock.',
+  lockedFoot: 'While locked, apps get one answer: the vault is locked.',
+  oneWaited: '1 passage was waiting when the vault locked; it was not released.',
   beforeUnlock: /^Before you unlocked (yesterday )?at \d/,
   nothingSince: /^Nothing has left since you unlocked (yesterday )?at \d/,
   notAnswering: (product) => `${product} is not answering. Is it still running in its terminal? What you see may be out of date.`,
@@ -316,11 +315,11 @@ async function pair(walk) {
   await walk.page.goto(walk.base);
   await walk.page.locator('#pair-code').waitFor({ state: 'visible', timeout: WAIT });
   walk.product = await walk.page.locator('meta[name="application-name"]').getAttribute('content');
+  // The eighth character sends the code: there is no press on "Pair".
   await walk.page.fill('#pair-code', walk.code);
-  await walk.page.locator('.gate-card button[type="submit"]').click();
 }
 
-/** Type the new passphrase twice and press "Create the vault". What opens then is for the caller to wait for. */
+/** Type the new passphrase twice and press "Create my vault". What opens then is for the caller to wait for. */
 async function create(walk) {
   const page = walk.page;
   await page.locator('#new-passphrase').waitFor({ state: 'visible', timeout: WAIT });
@@ -360,7 +359,6 @@ async function restart(walk, { ownerSeconds = walk.ownerSeconds, whileDown = nul
   await page.locator('#pair-code').waitFor({ state: 'visible', timeout: 40000 });
   pageReachedApp();
   await page.fill('#pair-code', walk.code);
-  await page.locator('.gate-card button[type="submit"]').click();
   await page.locator('#unlock-passphrase').waitFor({ state: 'visible', timeout: WAIT });
   // Only now: what the page had already asked with its old session, its lists as much as its state,
   // may be answered a moment after the page asks for the code. From here on the page has a new
@@ -458,7 +456,7 @@ async function waitsAgain(walk, card, what, cause, { press = false } = {}) {
 function judgeCount(walk, app) {
   const { presses, addresses, typed, dialogs } = walk.counter;
   const limit = COUNT[app];
-  console.log(`count ${app}: ${presses.length} presses, ${addresses.length} addresses, ${typed.length} typed fields, ${dialogs} file dialog(s), from "Create the vault" to the first request seen on the page`);
+  console.log(`count ${app}: ${presses.length} presses, ${addresses.length} addresses, ${typed.length} typed fields, ${dialogs} file dialog(s), from "Create my vault" to the first request seen on the page`);
   presses.forEach((press, index) => console.log(`      ${index + 1}. ${press}`));
   check(presses.length <= limit.presses, `the offered path took ${presses.length} presses, more than ${limit.presses}: ${presses.join(' | ')}`);
   check(JSON.stringify(addresses) === JSON.stringify(limit.addresses), `the offered path led through ${JSON.stringify(addresses)}, not through ${JSON.stringify(limit.addresses)}`);
@@ -510,16 +508,17 @@ async function runA(browser, work, files) {
   };
   const foundSays = (words) => says(found, words, 'about the file the step says');
 
-  await step('A: the terminal shows the start-up lines, the page pairs, and "Create the vault" opens the step that adds an app', async () => {
+  await step('A: the terminal shows the start-up lines, the page pairs, and "Create my vault" opens the step that adds an app', async () => {
     await pair(walk);
     if (options.port) check(walk.app.port === options.port, `the app listens on ${walk.app.port}, not on ${options.port}`);
     await page.locator('#new-passphrase').waitFor({ state: 'visible', timeout: WAIT });
-    check(JSON.stringify(await stepperLabels(walk)) === JSON.stringify(TEXT.steps), `the parts of setting up are ${JSON.stringify(await stepperLabels(walk))}`);
+    // The passphrase is one card with no row of steps. The three steps after it name the four parts.
+    check((await walk.count('ol.steps')) === 0, 'the screen that asks for the passphrase shows a row of steps');
     await create(walk);
     await page.locator('form.gate-card[data-key="step-3"]').waitFor({ state: 'visible', timeout: 40000 });
     // From here on everything a person does on the page is counted, until the first request is seen.
     await counter.start();
-    check(walk.address() === '#/setup/app', `after "Create the vault" the address is ${walk.address()}`);
+    check(walk.address() === '#/setup/app', `after "Create my vault" the address is ${walk.address()}`);
     check(JSON.stringify(await stepperLabels(walk)) === JSON.stringify(TEXT.steps) && (await stepperMarks(walk)) === '+>--', `on the step the parts of setting up are ${JSON.stringify(await stepperLabels(walk))}, marked ${await stepperMarks(walk)}`);
     const now = await walk.state();
     check(now.locked === false && now.interface.view === 'basic' && now.interface.setup === 'open' && now.interface.stored === true, `a new vault starts as ${JSON.stringify(now.interface)}`);
@@ -1064,7 +1063,7 @@ async function runA(browser, work, files) {
     // A second file: the line after it says that passages of it can now leave without asking.
     await page.setInputFiles('#files-documents', files.boiler);
     await eventually(async () => (await walk.count('li.upload.upload-done')) === 1, 60000, 'the second file was not sealed');
-    check((await walk.text('p.upload-who')) === TEXT.whoReads(DESKTOP), `after the second file the page says: ${await walk.text('p.upload-who')}`);
+    check((await walk.text('p.upload-who')) === TEXT.whoAsks(DESKTOP), `after the second file the page says: ${await walk.text('p.upload-who')}`);
     check((await walk.count('.upload-outside')) === 1, 'what is true of the chosen file is not said exactly once');
     await says(page.locator('p.basic-count'), TEXT.documents(2), 'the page counts');
 
@@ -1083,8 +1082,8 @@ async function runA(browser, work, files) {
     await stack.locator(`> .approval[data-key="${key(waitingRef)}"]`).waitFor({ state: 'visible', timeout: WAIT });
     await page.click('button.lock-now');
     await page.locator('#unlock-passphrase').waitFor({ state: 'visible', timeout: WAIT });
-    const facts = (await page.locator('dl.seal-facts dt').allTextContents()).map(trimmed);
-    check(JSON.stringify(facts) === JSON.stringify(['Sealed files', 'Size']), `the locked screen shows the facts ${JSON.stringify(facts)}`);
+    // The view that is kept is Basic: no figure of the sealed files or of the record, and the one sentence at the foot.
+    check((await walk.count('dl.seal-facts')) === 0, 'the locked screen of a vault whose view is Basic shows figures');
     check((await walk.text('.gate-foot')) === TEXT.lockedFoot, `the foot of the locked screen reads: ${await walk.text('.gate-foot')}`);
     check((await walk.text('#locked-waiting')) === TEXT.oneWaited, `about what waited the locked screen says: ${await walk.text('#locked-waiting')}`);
     check((await walk.count('input[name="view"]')) === 0 && (await walk.count('#view-basic')) === 0, 'the locked screen has the view control');
@@ -1593,11 +1592,11 @@ async function runD(browser, work, files) {
   let mark = 0; // what the page had sent when the view was switched to Basic
   let limit = 0;
 
-  await step('D: started with "--view pro", "Create the vault" opens Overview, and the vault is set up in Pro: two groups, three apps, a limit, a pause, a word', async () => {
+  await step('D: started with "--view pro", "Create my vault" opens Overview, and the vault is set up in Pro: two groups, three apps, a limit, a pause, a word', async () => {
     await pair(walk);
     await create(walk);
     await page.locator(FRAME.pro).waitFor({ state: 'visible', timeout: 40000 });
-    check(walk.address() === '#/overview', `after "Create the vault" the address is ${walk.address()}`);
+    check(walk.address() === '#/overview', `after "Create my vault" the address is ${walk.address()}`);
     const kept = (await walk.state()).interface;
     check(kept.view === 'pro' && kept.setup === 'open' && kept.stored === true, `a vault made with "--view pro" starts as ${JSON.stringify(kept)}`);
     await page.locator('.card-start').waitFor({ state: 'visible', timeout: WAIT });
@@ -1651,7 +1650,7 @@ async function runD(browser, work, files) {
     await eventually(async () => (await walk.get('/api/settings')).replaced_strings === 1, WAIT, 'the word was not added');
     // The fact about where the view is kept stands on this page.
     const facts = (await page.locator('.card[data-key="location"] .fact').allTextContents()).map(trimmed);
-    check(facts.some((fact) => fact.includes('Kept beside the vault, not sealed') && fact.includes('Which view you use, and whether setup was finished')), `the Vault page does not say where the view is kept: ${JSON.stringify(facts)}`);
+    check(facts.some((fact) => fact.includes('Kept beside the vault, not sealed') && fact.includes('Which view you use, whether setup was finished, and your language once you chose one')), `the Vault page does not say where the view is kept: ${JSON.stringify(facts)}`);
 
     const now = await walk.state();
     const apps = await walk.apps();
@@ -1754,7 +1753,7 @@ async function runD(browser, work, files) {
     const listed = (await page.locator('.drop li.upload').evaluateAll((nodes) => nodes.map((node) => `${node.querySelector('.upload-name').textContent} in ${node.querySelector('.upload-group').textContent}`)));
     check(JSON.stringify(listed) === JSON.stringify(['flat-notes.txt in documents', 'boiler.md in tax']), `under the zone the page lists ${JSON.stringify(listed)}`);
     const whoCanAsk = (await page.locator('.drop p.upload-who').allTextContents()).map(trimmed);
-    check(whoCanAsk.length === 2 && whoCanAsk[0].includes(`${CODE} (Ask me each time; paused)`) && whoCanAsk[0].includes(`${DESKTOP} (Can read: passages of it can leave without asking)`) && whoCanAsk[1].includes(`${LOCAL} (Ask me each time; not answered in this session)`), `after the files of each group the page says: ${JSON.stringify(whoCanAsk)}`);
+    check(whoCanAsk.length === 2 && whoCanAsk[0] === TEXT.whoAsks(CODE, DESKTOP) && whoCanAsk[1] === TEXT.whoAsks(LOCAL), `after the files of each group the page says: ${JSON.stringify(whoCanAsk)}`);
     await page.setInputFiles('#files-basic', files.rules);
     const sheet = walk.sheetWith('input[name="basic-group"]');
     await sheet.waitFor({ state: 'visible', timeout: WAIT });
