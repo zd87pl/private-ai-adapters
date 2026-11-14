@@ -44,6 +44,7 @@ const {
   decideApproval,
   eventually,
   expectHttp,
+  expectOldSessionRefused,
   finish,
   newPage,
   note,
@@ -773,12 +774,13 @@ run(async () => {
     const again = /^pairing code: (\S+)\s/.exec(lines[3]);
     check(again && again[1] !== code, `the second run has no code of its own: ${lines[3]}`);
     // The old session is gone: the page is told so at its next question and asks for the new code.
-    expectHttp(401, '/api/state', { times: 5, optional: true });
+    const refused = expectOldSessionRefused();
     await page.locator('#pair-code').waitFor({ state: 'visible', timeout: 40000 });
     pageReachedApp();
     await page.fill('#pair-code', again[1]);
     await page.locator('.gate-card button[type="submit"]').click();
     await page.locator('#unlock-passphrase').waitFor({ state: 'visible', timeout: WAIT });
+    withdraw(refused);
     await page.fill('#unlock-passphrase', PASSPHRASE);
     await page.locator('.gate-card button[type="submit"]').click();
     await page.locator('aside.sidebar').waitFor({ state: 'visible', timeout: 40000 });

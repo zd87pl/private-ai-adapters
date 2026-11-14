@@ -104,13 +104,23 @@ function problem(text) {
 
 /**
  * Announce an HTTP error that the next actions are meant to cause. `times` answers
- * with that status on that path are then no finding. With `optional` it is no
+ * with that status on that path (a string, or a pattern for several paths) are then no finding. With `optional` it is no
  * finding either when they do not come.
  */
 function expectHttp(status, pathname, { times = 1, optional = false } = {}) {
   const entry = { status, path: pathname, left: times, optional };
   expected.push(entry);
   return entry;
+}
+
+/**
+ * Announce what an app that was started again answers to a page that is still open. The page has
+ * the session of the run before: whatever it had already asked, and whatever it asks before it
+ * has noticed, is refused with 401, its state as much as its lists. Withdraw the announcement
+ * once the page has paired anew; from then on a 401 is a finding.
+ */
+function expectOldSessionRefused() {
+  return expectHttp(401, /^\/api\//, { times: 50, optional: true });
 }
 
 /** Take an announcement back, for an error that turned out not to be due. */
@@ -388,7 +398,7 @@ function watch(page) {
   page.on('response', (response) => {
     if (silent() || response.status() < 400) return;
     const pathname = new URL(response.url()).pathname;
-    const known = expected.find((entry) => entry.left > 0 && entry.status === response.status() && entry.path === pathname);
+    const known = expected.find((entry) => entry.left > 0 && entry.status === response.status() && (typeof entry.path === 'string' ? entry.path === pathname : entry.path.test(pathname)));
     if (known) known.left -= 1;
     else if (response.status() === 404 && ENGINE_ASKS.has(pathname)) note(`the engine itself asked for ${pathname}, which the page names nowhere, and was told 404`);
     else problem(`HTTP ${response.status()} ${response.request().method()} ${pathname}`);
@@ -689,6 +699,7 @@ module.exports = {
   decideApproval,
   eventually,
   expectHttp,
+  expectOldSessionRefused,
   finish,
   focused,
   lockElsewhere,
