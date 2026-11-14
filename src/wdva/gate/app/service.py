@@ -17,7 +17,9 @@ app has beyond the store itself:
   answer both kinds of apps at once, answer an app again that was not being
   answered. After that such a change is refused until the passphrase is
   entered again. Changes that only take away, approvals of single passages,
-  adding and removing documents and locking are never held up by this.
+  adding and removing documents and locking are never held up by this. The
+  owner's trial question has a permission of its own with the same ten
+  minutes; entering the passphrase for it does not open owner mode.
 * **Which apps are answered.** Every registered app is, unless the owner
   paused it in this session. When hosted and local apps are both registered,
   only the hosted ones are answered until the owner has chosen. Which apps
@@ -30,7 +32,15 @@ app has beyond the store itself:
   as a release: it hands out no document text. The exact text of a release
   is read from the record when it is asked for, and nowhere else is document
   text handed to the interface except the passage the owner is asked to
-  approve.
+  approve and the one passage a trial finds, with the passphrase entered
+  within ten minutes.
+* **The trial.** The owner asks a question and is shown the one passage an
+  app would be given for it (:meth:`GateService.try_question`). No app is
+  involved and nothing is written into the record, so the answer is bound in
+  another way: it needs the passphrase entered within the last ten minutes,
+  by a clock of its own, a session gets at most :data:`TRIAL_PER_MINUTE`
+  answers in a minute, and the session counts its questions where the state
+  shows the number.
 * **Which view the owner uses.** Three words about the interface, kept in a
   small file beside the vault that is not sealed (``run/interface.json``):
   which of its two views the owner uses, whether setting up was finished,
@@ -61,6 +71,7 @@ import stat
 import tempfile
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -135,13 +146,21 @@ __all__ = [
     "MIN_PASSPHRASE_CHARS",
     "NOT_REGISTERED",
     "OWNER_MODE",
+    "TRIAL_PER_MINUTE",
     "VIEWS",
     "GateService",
     "connect_problem",
 ]
 
 OWNER_MODE = timedelta(minutes=10)
-"""How long after the passphrase was entered a change that lets more leave is accepted."""
+"""How long after the passphrase was entered a change that lets more leave is accepted.
+
+A trial question is accepted for the same span, by its own clock: see
+:meth:`GateService.reauth`.
+"""
+
+TRIAL_PER_MINUTE = 20
+"""How many trial questions a session is answered in any 60 seconds."""
 
 MIN_PASSPHRASE_CHARS = 12
 """The shortest passphrase a new vault can be created with."""
@@ -167,9 +186,12 @@ LANGUAGES = ("en", "pl")
 """The languages the owner's page can be kept in. None is kept until the owner chose one."""
 
 _SETUP = ("open", "done")
+_TRIAL_SCOPE = "trial"  # the one value of ``scope`` in a request that renews a permission
+_TRIAL_WINDOW = timedelta(seconds=60)
 _INTERFACE_MAX_BYTES = 1024  # a larger file in the place of the interface file counts as none
 _NO_INTERFACE_FILE = {"view": "pro", "setup": "done", "language": None, "stored": False}
 _NOT_A_LANGUAGE = 'The language is "en" or "pl".'
+_ENTER_AGAIN = "Enter your passphrase again."
 _DEFAULT_PAGE = 50
 _MAX_PAGE = 200
 _MAX_NAME_CHARS = 255
@@ -956,6 +978,7 @@ class _Session:
     unlocked_at: datetime
     locks_at: datetime
     owner_until: datetime
+    trial_until: datetime  # the trial's own permission; see GateService.reauth
     verified_at: datetime
     verified: bool = True
     kinds: str | None = None  # the owner's choice of which kinds of apps are answered
@@ -963,6 +986,8 @@ class _Session:
     timer: threading.Timer | None = None
     sdk: Mapping[str, Any] = field(default_factory=dict)
     seen: tuple[Any, ...] = ()  # what the last look at the waiting list found
+    trial_questions: int = 0  # trial questions that were looked up since the unlock
+    trial_times: deque[datetime] = field(default_factory=deque)  # those of the last minute
 
 
 class _AgentSide:
@@ -1119,11 +1144,9 @@ class GateService:
         return session
 
     def _owner(self, session: _Session) -> None:
-        """Refuse a change that lets more leave unless the passphrase was entered recently."""
+        """Refuse what needs owner mode unless the passphrase was entered recently."""
         if self._clock() >= session.owner_until:
-            raise ServiceError(
-                403, "reauth_required", "Enter your passphrase again to make this change."
-            )
+            raise ServiceError(403, "reauth_required", _ENTER_AGAIN)
 
     def _end(self, session: _Session, reason: str) -> None:
         """Lock: stop answering apps, close the gate (which records it), close the store."""
@@ -1200,6 +1223,7 @@ class GateService:
             unlocked_at=now,
             locks_at=locks_at,
             owner_until=now + OWNER_MODE,
+            trial_until=now + OWNER_MODE,
             verified_at=now,
             sdk=hostconfig.sdk_status(),
         )
@@ -1405,6 +1429,7 @@ class GateService:
             "unlocked_at": None,
             "locks_at": None,
             "owner_mode_until": None,
+            "trial": None,
             "encryption": None,
             "record": None,
             "serving": None,
@@ -1480,6 +1505,9 @@ class GateService:
             unlocked_at=_iso(session.unlocked_at),
             locks_at=_iso(session.locks_at),
             owner_mode_until=_iso(session.owner_until),
+            # Until when a trial question is answered, and how many this session asked
+            # since the vault was unlocked: the one trace a trial leaves.
+            trial={"until": _iso(session.trial_until), "questions": session.trial_questions},
             encryption={
                 "cipher": "XChaCha20-Poly1305",
                 "kdf": _kdf(info.scrypt_n),
@@ -1647,7 +1675,7 @@ class GateService:
         """Unlock the store, for ``hours`` or the app's default, and return the state.
 
         Unlocking a vault that is unlocked already checks the passphrase and
-        renews owner mode; nothing else changes.
+        renews owner mode and the trial's permission; nothing else changes.
         """
         wanted = self._hours(hours)
         if self._current() is not None:
@@ -1679,8 +1707,19 @@ class GateService:
         return self.state()
 
     @_translated
-    def reauth(self, *, passphrase: str) -> JSONObject:
-        """Check the passphrase again; changes that let more leave are then accepted for a while."""
+    def reauth(self, *, passphrase: str, scope: str | None = None) -> JSONObject:
+        """Check the passphrase again; what needs it is then accepted for a while.
+
+        Without ``scope`` this begins owner mode anew, and with it the trial's
+        permission: changes that let more leave and trial questions are
+        accepted for ten minutes. With ``scope="trial"`` only the trial's
+        permission begins anew and owner mode stays where it was, so that the
+        passphrase entered for a question does not open ten minutes in which
+        a widening change goes through. No other scope exists. The answer
+        says until when each of the two holds.
+        """
+        if scope is not None and scope != _TRIAL_SCOPE:
+            raise _invalid('The scope is "trial", or it is left out.')
         session = self._unlocked()
         if not isinstance(passphrase, str):
             raise WrongKeyError("wrong passphrase")
@@ -1691,9 +1730,15 @@ class GateService:
         if not right:
             raise WrongKeyError("wrong passphrase")
         with self._lock:
-            session.owner_until = self._clock() + OWNER_MODE
+            until = self._clock() + OWNER_MODE
+            session.trial_until = until
+            if scope is None:
+                session.owner_until = until
         self._bump()
-        return {"owner_mode_until": _iso(session.owner_until)}
+        return {
+            "owner_mode_until": _iso(session.owner_until),
+            "trial_until": _iso(session.trial_until),
+        }
 
     @_translated
     def set_serving(
@@ -1913,6 +1958,83 @@ class GateService:
         session.gate.dismiss(app, ref)
         self._bump()
         return {}
+
+    # -- the trial ----------------------------------------------------------------------
+
+    def _trial(self, session: _Session) -> None:
+        """Let one trial question through, and count it; refuse it where it may not be asked.
+
+        The permission comes first and the count of the last minute second.
+        Both are decided before the question is looked at, so a caller that is
+        refused learns nothing from the answer or from how long it takes.
+        """
+        with self._lock:
+            now = self._clock()
+            if now >= session.trial_until:
+                raise ServiceError(403, "trial_reauth_required", _ENTER_AGAIN)
+            times = session.trial_times
+            while times and times[0] <= now - _TRIAL_WINDOW:
+                times.popleft()
+            # A clock that was set back must not make room: every time kept counts.
+            if len(times) >= TRIAL_PER_MINUTE:
+                raise ServiceError(429, "too_many", "Wait a moment before the next question.")
+            times.append(now)
+            session.trial_questions += 1
+
+    @_translated
+    def try_question(self, *, question: str) -> JSONObject:
+        """The one passage an app would be given for the owner's own question. Records nothing.
+
+        The search is the one an app set to "ask me each time" gets, over
+        every collection, and the passage is the text an approval for it
+        would show: ``{"found": True, "passage": {...}}``, or ``{"found":
+        False, "reason": ...}`` with ``"no_documents"``, ``"no_words"`` or
+        ``"no_match"``. The passage carries its text, the document's title,
+        which words of the question found it, which registered apps could ask
+        for the document's collection and in which mode, and how many
+        collections the vault has. It carries no ref and no collection name.
+
+        It is a trial: no app is involved, nothing leaves, nothing is written
+        into the record or counted against a limit, and no passage waits or
+        is approved because of it. Neither the question nor the answer is
+        kept. So it has a condition of its own: the passphrase entered within
+        the last ten minutes (:meth:`reauth` with ``scope="trial"`` renews
+        that and nothing else), and at most :data:`TRIAL_PER_MINUTE` questions
+        in a minute. The checks come in a fixed order, and the first that
+        fails answers: the question, an unlocked vault, the permission, the
+        count; only then is the index touched.
+        """
+        asked = question.strip() if isinstance(question, str) else ""
+        if not asked:
+            raise _invalid("Ask a question.")
+        session = self._unlocked()
+        self._trial(session)
+        with self._lock:  # no change of the settings between the search and what is said of them
+            found, reason = session.gate.owner_search(asked)
+            if found is None:
+                return {"found": False, "reason": reason}
+            policy = session.gate.policy()
+            collections = set(policy.collections)
+            collections.update(entry.collection for entry in session.gate.documents())
+        apps = []
+        for name in policy.clients:
+            mode = policy.effective_grant(name, found.collection)
+            if mode is not None:
+                apps.append({"name": name, "mode": mode})
+        return {
+            "found": True,
+            "passage": {
+                "title": found.title,
+                "passage": found.passage,
+                "passages": found.passages,
+                "body": found.body,
+                "characters": len(found.body),
+                "replaced": found.replaced,
+                "words": list(found.words),
+                "apps": apps,
+                "groups": len(collections),
+            },
+        }
 
     # -- documents ----------------------------------------------------------------------
 

@@ -32,6 +32,11 @@ What a call under a client name can get is decided here and nowhere else:
   length is measured like that of any result.
 * The strings the owner listed are replaced in everything that leaves, and
   every piece of document text is checked once more before it is recorded.
+* One method shows the owner a passage that no client asked for:
+  :meth:`Gate.owner_search`, the search by the owner's own words. It uses the
+  index and the rendering of a client's search and read, gives what it finds
+  to the owner's side only, and records and counts nothing, because nothing
+  left.
 
 The limits hold for calls made through the gate while the record is intact.
 Client names are labels: any program running as the owner can call under any
@@ -49,6 +54,7 @@ import math
 import re
 import secrets
 import threading
+import unicodedata
 from collections import Counter, OrderedDict, deque
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -93,6 +99,7 @@ from wdva.gate.textproc import (
     chunk_spans,
     compile_listed,
     find_listed,
+    fold,
     grow,
     query_terms,
     render,
@@ -119,6 +126,7 @@ __all__ = [
     "DocumentUsage",
     "Gate",
     "GrantedApproval",
+    "OwnerPassage",
     "PassageChangedError",
     "PendingApproval",
     "PoolUsage",
@@ -161,6 +169,7 @@ _NUMBER_CHARS = 32
 _TRANSPORTS = ("stdio", "cli", "python")
 _QUOTES = "\"'`"
 _REF = re.compile(r"(d-[0-9a-f]{12})\.([0-9]{1,5})")
+_WORD = re.compile(r"\w+")
 _REPLACEMENT = "\N{REPLACEMENT CHARACTER}"
 
 
@@ -295,6 +304,29 @@ class Usage:
     documents: Mapping[str, DocumentUsage]
     refusals_day: int
     """Refused calls in 24 hours, those under names that are not served included."""
+
+
+@dataclass(frozen=True)
+class OwnerPassage:
+    """The passage a search by the owner's own words found, as an approval would show it.
+
+    It is for the owner's side only. Nothing of it was released, recorded or
+    counted, and it names no client: which clients could ask for the passage
+    is for whoever holds the policy to say.
+    """
+
+    doc_id: str
+    title: str
+    """The stored title, whether or not the collection shows titles to clients."""
+    collection: str
+    passage: int
+    passages: int
+    body: str
+    """The text as a read would release it: the listed strings replaced, cleaned again."""
+    replaced: int
+    """How many listed strings were replaced in ``body``."""
+    words: tuple[str, ...]
+    """The words of the query that found the passage, in the query's order, as written."""
 
 
 # ---------------------------------------------------------------------------
@@ -1757,6 +1789,83 @@ class Gate:
                 elif approval.given_at <= now:
                     granted.append(GrantedApproval(key[0], key[1], until))
             return granted
+
+    # -- the owner's own search ---------------------------------------------------
+
+    def owner_search(self, query: str) -> tuple[OwnerPassage | None, str]:
+        """The passage a search by the owner's own words finds first, and why none. Records nothing.
+
+        Returns ``(passage, "")``, or ``(None, reason)`` with ``reason`` one of
+        ``"no_words"`` (the query is no text, or holds no word that is
+        searched), ``"no_documents"`` (the store lists none) and
+        ``"no_match"`` (no passage holds one of the words, or the document
+        that does has gone bad).
+
+        Every collection is searched, also one that no client was granted,
+        with the index a client's search uses and as a collection held in
+        ``approve`` mode is searched: whole words, and no word with a digit.
+        The passage is cut and rendered as a read renders it, so ``body`` is
+        the text an approval for it would show. ``words`` are the words of
+        the query that the index holds for this passage: those in its text
+        and, where the collection shows titles, those in its title.
+
+        This is the owner looking at the owner's own text. No client is
+        involved; nothing is appended to the record, counted against a limit
+        or an allowance, put on the waiting list or approved. Raises
+        :class:`~wdva.gate.errors.GateError` once the gate is locked, and
+        when the passage cannot be rendered or would not pass the check that
+        every released text passes.
+        """
+        with self._owner_side():
+            text = _plain_text(query)
+            if text is None:
+                return None, "no_words"
+            asked = text[:MAX_QUERY_CHARS]
+            terms = query_terms(asked, digits=False)
+            if not terms:
+                return None, "no_words"
+            state = self._state()
+            if not state.documents:
+                return None, "no_documents"
+            found = merge_hits((index.search(terms, 1) for index in self._indexes.values()), 1)
+            if not found:
+                return None, "no_match"
+            hit = found[0]
+            collection = self._where[hit.doc_id]
+            index = self._indexes[collection]
+            listed = index.listed(hit.doc_id)
+            span = grow(index.span(hit.doc_id, hit.passage), listed)
+            stored = self._text(hit.doc_id)
+            info = state.documents.get(hit.doc_id)
+            if stored is None or info is None:
+                return None, "no_match"
+            try:
+                body = render(stored, span, listed)
+            except ValueError:
+                raise GateError("the passage cannot be shown") from None
+            if check_sanitized(body):
+                raise GateError("the passage cannot be shown")
+            # What the index holds for this passage: its words outside the listed
+            # strings and, where titles are shown, the words of the title.
+            held = set(tokens(stored, hit.start, hit.end, listed))
+            if index.show_titles:
+                held.update(tokens(info.title, matches=find_listed(info.title, self._listed)))
+            written: dict[str, str] = {}
+            for word in _WORD.findall(unicodedata.normalize("NFC", asked)):
+                written.setdefault(fold(word), word)
+            return (
+                OwnerPassage(
+                    doc_id=hit.doc_id,
+                    title=info.title,
+                    collection=collection,
+                    passage=hit.passage,
+                    passages=index.passages(hit.doc_id),
+                    body=body,
+                    replaced=_matches_in(listed, span),
+                    words=tuple(written.get(term, term) for term in terms if term in held),
+                ),
+                "",
+            )
 
     # -- the owner's changes ----------------------------------------------------
 

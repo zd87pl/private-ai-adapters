@@ -234,7 +234,7 @@ _ROUTES: tuple[_Route, ...] = (
     _Route("POST", "store/create", "create_store", fields=(_PASSPHRASE, _text("language"))),
     _Route("POST", "unlock", "unlock", fields=(_PASSPHRASE, _Field("hours", "number"))),
     _Route("POST", "lock", "lock"),
-    _Route("POST", "reauth", "reauth", fields=(_PASSPHRASE,)),
+    _Route("POST", "reauth", "reauth", fields=(_PASSPHRASE, _text("scope"))),
     _Route("POST", "serving", "set_serving", fields=(_text("kinds"), _Field("paused", "texts"))),
     _Route("POST", "verify", "verify"),
     _Route(
@@ -272,6 +272,7 @@ _ROUTES: tuple[_Route, ...] = (
         "dismiss",
         fields=(_text("app", required=True), _text("ref", required=True)),
     ),
+    _Route("POST", "try", "try_question", fields=(_text("question", required=True),)),
     _Route("GET", "documents", "documents"),
     _Route(
         "POST",

@@ -78,8 +78,12 @@ class Service(Protocol):
         """Lock the store and return the state."""
         ...
 
-    def reauth(self, *, passphrase: str) -> JSONObject:
-        """Check the passphrase again; actions that widen access are then allowed for a while."""
+    def reauth(self, *, passphrase: str, scope: str | None = None) -> JSONObject:
+        """Check the passphrase again; what needs it is then allowed for a while.
+
+        Without ``scope``: actions that widen access, and trial questions.
+        With ``scope="trial"``: trial questions only.
+        """
         ...
 
     def set_serving(
@@ -135,6 +139,12 @@ class Service(Protocol):
 
     def dismiss(self, *, app: str, ref: str) -> JSONObject:
         """Take one waiting passage off the list without approving it."""
+        ...
+
+    # -- the trial --------------------------------------------------------------
+
+    def try_question(self, *, question: str) -> JSONObject:
+        """The one passage an app would be given for the owner's question; records nothing."""
         ...
 
     # -- documents --------------------------------------------------------------

@@ -37,6 +37,7 @@ from wdva.gate.policy import Policy
 from wdva.gate.types import Caller
 
 from . import gate_support as gs
+from .conftest import FakeClock
 
 # The product's name comes from one place; the tests take it from there too.
 PRODUCT, SLUG = brand.PRODUCT, brand.SLUG
@@ -1120,6 +1121,167 @@ def test_the_language_over_http(app: App) -> None:
         again.close()
     # No answer of all this held the passphrase.
     assert not [body for body in browser.bodies if gs.PASSPHRASE in body]
+
+
+def test_the_trial_over_http(short_store_dir: Path) -> None:
+    clock = FakeClock()
+    service = GateService(short_store_dir, clock=clock, scrypt_n=gs.FAST_SCRYPT)
+    server = AppServer(service, port=0, pairing=True, version=__version__)
+    server.start()
+    browser = Browser(server.port)
+    question = {"question": "When is the rent due?"}
+    try:
+        # Like every call it needs the session, whatever the body holds.
+        for body in (question, {}, {"question": 7}):
+            assert browser.error("POST", "/api/try", body) == (401, "pairing_required")
+        scoped = {"passphrase": gs.PASSPHRASE, "scope": "trial"}
+        assert browser.error("POST", "/api/reauth", scoped) == (401, "pairing_required")
+        browser.ok("POST", "/api/session/pair", {"code": server.pairing_code})
+
+        # No vault, and then a vault without a document.
+        assert browser.error("POST", "/api/try", question) == (409, "locked")
+        state = browser.ok("POST", "/api/store/create", {"passphrase": gs.PASSPHRASE})
+        assert state["trial"] == {"until": "2026-11-12T09:10:00Z", "questions": 0}
+        assert browser.ok("POST", "/api/try", question) == {
+            "found": False,
+            "reason": "no_documents",
+        }
+        browser.ok(
+            "POST", upload_path("documents", "lease-2025.txt"), upload=gs.LEASE_TEXT.encode()
+        )
+        browser.ok("POST", "/api/replaced-strings", {"text": gs.LISTED_NAME})
+        before = record_and_files(browser)
+        listed = browser.ok("GET", "/api/activity?limit=200")
+        cursor = browser.ok("GET", "/api/state")["cursor"]
+
+        answer = browser.ok("POST", "/api/try", question)
+        assert set(answer) == {"found", "passage"}
+        passage = answer["passage"]
+        body = passage.pop("body")
+        assert passage == {
+            "title": "lease-2025",
+            "passage": 2,
+            "passages": 4,
+            "characters": len(body),
+            "replaced": 0,
+            "words": ["is", "the", "rent", "due"],
+            "apps": [],
+            "groups": 1,
+        }
+        assert body.startswith(
+            "2. Rent. The monthly rent is 1450 EUR, due on the third working day"
+        )
+        first = browser.ok("POST", "/api/try", {"question": "landlord tenant cooperative"})
+        assert first["passage"]["replaced"] == 1
+        assert "[REDACTED]" in first["passage"]["body"]
+        assert gs.LISTED_NAME not in first["passage"]["body"]
+        assert browser.ok("POST", "/api/try", {"question": "1450"}) == {
+            "found": False,
+            "reason": "no_words",
+        }
+        assert browser.ok("POST", "/api/try", {"question": "invoices"}) == {
+            "found": False,
+            "reason": "no_match",
+        }
+        # What is no question is refused, and so is everything that is more than a question.
+        for body_sent in (
+            {},
+            {"question": ""},
+            {"question": "  \n"},
+            {"question": 7},
+            {"question": ["rent"]},
+            {"question": "rent", "app": "claude-desktop"},
+            {"question": "rent", "ref": "d-000000000000.1"},
+        ):
+            assert browser.error("POST", "/api/try", body_sent) == (400, "invalid"), body_sent
+        assert browser.error("POST", "/api/try?question=rent", {}) == (400, "invalid")
+        assert browser.error("GET", "/api/try") == (404, "not_found")
+        assert browser.error("GET", "/api/try?question=rent") == (404, "not_found")
+
+        # Nothing of it is in the record, in the activity list or in a sealed file, and the
+        # page is told of nothing to load anew. The questions that were looked up are counted.
+        assert record_and_files(browser) == before
+        assert browser.ok("GET", "/api/activity?limit=200") == listed
+        state = browser.ok("GET", "/api/state")
+        assert (state["cursor"], state["trial"]["questions"]) == (cursor, 5)
+        assert browser.ok("GET", "/api/approvals") == {"waiting": [], "granted": []}
+
+        # Ten minutes after the passphrase the question is refused before it is looked at.
+        clock.advance(minutes=10)
+        for asked in (question, {"question": "1450"}, {"question": "invoices"}):
+            status, refusal = browser.call("POST", "/api/try", asked)
+            assert (status, refusal) == (
+                403,
+                {
+                    "error": {
+                        "code": "trial_reauth_required",
+                        "message": "Enter your passphrase again.",
+                    }
+                },
+            )
+        app_body = {"name": "claude-desktop", "hosted": True, "destination": "Anthropic"}
+        assert browser.error("POST", "/api/apps", app_body) == (403, "reauth_required")
+        # The passphrase with the scope "trial" opens the trial and nothing else.
+        for bad in ("owner", "", "Trial"):
+            body_sent = {"passphrase": gs.PASSPHRASE, "scope": bad}
+            assert browser.error("POST", "/api/reauth", body_sent) == (400, "invalid"), bad
+        assert browser.error("POST", "/api/reauth", {"passphrase": gs.PASSPHRASE, "scope": 7}) == (
+            400,
+            "invalid",
+        )
+        assert browser.error("POST", "/api/try", question) == (403, "trial_reauth_required")
+        wrong = {"passphrase": gs.PASSPHRASE + "x", "scope": "trial"}
+        assert browser.error("POST", "/api/reauth", wrong) == (403, "wrong_passphrase")
+        assert browser.ok("POST", "/api/reauth", scoped) == {
+            "owner_mode_until": "2026-11-12T09:10:00Z",
+            "trial_until": "2026-11-12T09:20:00Z",
+        }
+        assert browser.ok("POST", "/api/try", question)["found"] is True
+        assert browser.error("POST", "/api/apps", app_body) == (403, "reauth_required")
+        state = browser.ok("GET", "/api/state")
+        assert state["owner_mode_until"] == "2026-11-12T09:10:00Z"
+        assert state["trial"] == {"until": "2026-11-12T09:20:00Z", "questions": 6}
+        # Without a scope it opens both, as before.
+        assert browser.ok("POST", "/api/reauth", {"passphrase": gs.PASSPHRASE}) == {
+            "owner_mode_until": "2026-11-12T09:20:00Z",
+            "trial_until": "2026-11-12T09:20:00Z",
+        }
+        app = browser.ok("POST", "/api/apps", app_body)["app"]
+        assert app["grants"] == {}
+        # An app that asks each time is named in the answer; the passage is the same.
+        browser.ok("POST", "/api/collections", {"name": "documents", "allow_hosted": True})
+        grant = {"app": "claude-desktop", "collection": "documents", "mode": "approve"}
+        browser.ok("POST", "/api/grants", grant)
+        clock.advance(seconds=61)
+        again = browser.ok("POST", "/api/try", question)["passage"]
+        assert again["apps"] == [{"name": "claude-desktop", "mode": "approve"}]
+        assert again["body"] == body
+
+        # Twenty a minute, and the twenty-first is told to wait.
+        for _ in range(19):
+            assert browser.ok("POST", "/api/try", question)["found"] is True
+        status, refusal = browser.call("POST", "/api/try", question)
+        assert (status, refusal["error"]["code"]) == (429, "too_many")
+        assert refusal["error"]["message"] == "Wait a moment before the next question."
+        assert browser.ok("GET", "/api/state")["trial"]["questions"] == 26
+
+        # A locked vault says that it is locked, and the state says nothing of a trial.
+        state = browser.ok("POST", "/api/lock", {})
+        assert (state["locked"], state["trial"]) == (True, None)
+        assert browser.error("POST", "/api/try", question) == (409, "locked")
+        assert browser.error("POST", "/api/reauth", scoped) == (409, "locked")
+        assert browser.ok("POST", "/api/unlock", {"passphrase": gs.PASSPHRASE})["trial"] == {
+            "until": "2026-11-12T09:21:01Z",
+            "questions": 0,
+        }
+        # No answer of all this held the passphrase, a ref or the id of the document.
+        assert not [text for text in browser.bodies if gs.PASSPHRASE in text]
+        trial_answers = [text for text in browser.bodies if '"found"' in text]
+        assert len(trial_answers) == 26  # one for each question that was counted
+        assert not [text for text in trial_answers if re.search(r"d-[0-9a-f]{12}", text)]
+    finally:
+        server.stop()
+        service.close()
 
 
 def test_asking_the_played_app_again_over_http(short_store_dir: Path) -> None:

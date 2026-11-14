@@ -79,8 +79,8 @@ class FakeService:
     def lock(self) -> Any:
         return self._did("lock")
 
-    def reauth(self, *, passphrase: str) -> Any:
-        return self._did("reauth", passphrase=passphrase)
+    def reauth(self, *, passphrase: str, scope: str | None = None) -> Any:
+        return self._did("reauth", passphrase=passphrase, scope=scope)
 
     def set_serving(self, *, kinds: str | None = None, paused: list[str] | None = None) -> Any:
         return self._did("set_serving", kinds=kinds, paused=paused)
@@ -120,6 +120,9 @@ class FakeService:
 
     def dismiss(self, *, app: str, ref: str) -> Any:
         return self._did("dismiss", app=app, ref=ref)
+
+    def try_question(self, *, question: str) -> Any:
+        return self._did("try_question", question=question)
 
     def documents(self) -> Any:
         return self._did("documents")
@@ -720,7 +723,28 @@ ENDPOINTS: list[tuple[str, str, Any, str, dict[str, Any]]] = [
     ),
     ("POST", "/api/lock", {}, "lock", {}),
     ("POST", "/api/lock", None, "lock", {}),
-    ("POST", "/api/reauth", {"passphrase": "pass phrase"}, "reauth", {"passphrase": "pass phrase"}),
+    (
+        "POST",
+        "/api/reauth",
+        {"passphrase": "pass phrase"},
+        "reauth",
+        {"passphrase": "pass phrase", "scope": None},
+    ),
+    (
+        "POST",
+        "/api/reauth",
+        {"passphrase": "pass phrase", "scope": "trial"},
+        "reauth",
+        {"passphrase": "pass phrase", "scope": "trial"},
+    ),
+    # A scope the app does not know arrives at the service, which is the one to refuse it.
+    (
+        "POST",
+        "/api/reauth",
+        {"passphrase": "pass phrase", "scope": "owner"},
+        "reauth",
+        {"passphrase": "pass phrase", "scope": "owner"},
+    ),
     (
         "POST",
         "/api/serving",
@@ -819,6 +843,22 @@ ENDPOINTS: list[tuple[str, str, Any, str, dict[str, Any]]] = [
         "dismiss",
         {"app": "lm-studio", "ref": "d-88b0e1aa9c11.1"},
     ),
+    (
+        "POST",
+        "/api/try",
+        {"question": "When is the rent due?"},
+        "try_question",
+        {"question": "When is the rent due?"},
+    ),
+    (
+        "POST",
+        "/api/try",
+        {"question": "Kiedy ko\u0144czy si\u0119 umowa najmu?"},
+        "try_question",
+        {"question": "Kiedy ko\u0144czy si\u0119 umowa najmu?"},
+    ),
+    # Blanks alone are text for the server; the service says that this is no question.
+    ("POST", "/api/try", {"question": "  "}, "try_question", {"question": "  "}),
     ("GET", "/api/documents", None, "documents", {}),
     (
         "POST",
@@ -1468,6 +1508,16 @@ def test_changing_methods_on_static_paths_change_nothing(paired: Browser) -> Non
         ("GET", "/api/demo/again"),
         ("POST", "/api/demo"),
         ("POST", "/api/demo/again/now"),
+        # The trial is asked with a POST at one address. A GET would put the question
+        # into the address, and nothing below the address names a passage.
+        ("GET", "/api/try"),
+        ("DELETE", "/api/try"),
+        ("POST", "/api/try/"),
+        ("POST", "/api/try/rent"),
+        ("POST", "/api/try/d-88b0e1aa9c11.1"),
+        ("POST", "/api/trial"),
+        ("GET", "/api/reauth"),
+        ("POST", "/api/reauth/trial"),
     ],
 )
 def test_unknown_paths_are_not_found(
@@ -1510,12 +1560,15 @@ def test_query_strings_that_do_not_fit_are_invalid(
         "/api/apps/claude-desktop/connect/check?host=codex",
         "/api/apps/claude-desktop/connect/check?path=%2Fetc%2Fpasswd",
         "/api/demo/again?app=claude-desktop",
+        "/api/try?question=rent",
+        "/api/try?ref=d-88b0e1aa9c11.1",
+        "/api/reauth?scope=trial",
     ],
 )
 def test_the_newer_addresses_take_nothing_from_the_address(
     target: str, paired: Browser, service: FakeService
 ) -> None:
-    # What these three take, they take from the body: a query is refused, not ignored.
+    # What these take, they take from the body: a query is refused, not ignored.
     answer = paired.call("POST", target, json_body={})
     assert (answer.status, answer.error()) == (400, "invalid")
     assert service.calls == []
@@ -1599,6 +1652,27 @@ def test_an_upload_needs_its_collection_and_name(
         # Asking the played app again takes nothing at all.
         ("/api/demo/again", {"app": "claude-desktop"}),
         ("/api/demo/again", {"times": 3}),
+        # A trial takes a question, as text, and nothing that could name an app, a group
+        # or a passage.
+        ("/api/try", {}),
+        ("/api/try", {"question": None}),
+        ("/api/try", {"question": 123456789012}),
+        ("/api/try", {"question": ["rent"]}),
+        ("/api/try", {"question": {"text": "rent"}}),
+        ("/api/try", {"question": True}),
+        ("/api/try", {"query": "rent"}),
+        ("/api/try", {"question": "rent", "app": "claude-desktop"}),
+        ("/api/try", {"question": "rent", "collection": "home"}),
+        ("/api/try", {"question": "rent", "ref": "d-88b0e1aa9c11.1"}),
+        ("/api/try", {"question": "rent", "limit": 10}),
+        ("/api/try", {"question": "rent", "passphrase": "pass phrase"}),
+        # The scope of a passphrase is text, and it comes with a passphrase.
+        ("/api/reauth", {"scope": "trial"}),
+        ("/api/reauth", {"passphrase": "pass phrase", "scope": 1}),
+        ("/api/reauth", {"passphrase": "pass phrase", "scope": ["trial"]}),
+        ("/api/reauth", {"passphrase": "pass phrase", "scope": True}),
+        ("/api/reauth", {"passphrase": "pass phrase", "scope": "trial", "minutes": 600}),
+        ("/api/reauth", {"passphrase": "pass phrase", "trial": True}),
     ],
 )
 def test_fields_that_do_not_fit_are_invalid(
@@ -1833,11 +1907,13 @@ def test_a_body_that_ends_early_is_invalid(paired: Browser, service: FakeService
     [
         (400, "invalid"),
         (403, "reauth_required"),
+        (403, "trial_reauth_required"),
         (404, "not_found"),
         (409, "locked"),
         (409, "changed"),
         (409, "duplicate"),
         (413, "too_large"),
+        (429, "too_many"),
         (503, "unavailable"),
     ],
 )
@@ -1975,6 +2051,34 @@ def test_a_wrong_passphrase_is_answered_after_a_second(
     assert time.monotonic() - started < 0.7
     service.error = None
     assert paired.call("POST", target, json_body={"passphrase": "the right one"}).status == 200
+
+
+def test_a_passphrase_for_the_trial_takes_its_turn_and_a_question_takes_none(
+    paired: Browser, service: FakeService
+) -> None:
+    # The scope changes what a right passphrase opens, not how fast a wrong one can be tried.
+    service.error = ServiceError(403, "wrong_passphrase", "that is not the passphrase")
+    started = time.monotonic()
+    body = {"passphrase": "a wrong guess", "scope": "trial"}
+    answer = paired.call("POST", "/api/reauth", json_body=body)
+    assert (answer.status, answer.error()) == (403, "wrong_passphrase")
+    assert time.monotonic() - started >= 1.0
+    assert service.calls == [("reauth", body)]
+    # A question carries no passphrase. Its two own refusals are answered at once, the one
+    # that asks for the passphrase included, and with the status and code the service gave.
+    for status, code in ((403, "trial_reauth_required"), (429, "too_many")):
+        service.error = ServiceError(status, code, "one sentence for a person")
+        started = time.monotonic()
+        answer = paired.call("POST", "/api/try", json_body={"question": "rent"})
+        assert (answer.status, answer.error()) == (status, code)
+        assert time.monotonic() - started < 0.7
+        assert_headers(answer)
+    # And a question is not kept waiting while a passphrase has its turn.
+    service.error = None
+    with paired.server._app.passphrase_turn:
+        started = time.monotonic()
+        assert paired.call("POST", "/api/try", json_body={"question": "rent"}).status == 200
+        assert time.monotonic() - started < 0.7
 
 
 def test_wrong_passphrases_take_turns_however_many_connections_try(
@@ -2216,6 +2320,8 @@ def test_nothing_is_written_while_requests_are_served(
     browser.call("GET", "/api/activity?app=claude-desktop&kind=release")
     browser.call("POST", "/api/unlock", json_body={"passphrase": "correct horse battery"})
     browser.call("POST", "/api/documents?collection=home&name=lease.txt", body=b"the lease")
+    browser.call("POST", "/api/try", json_body={"question": "When is the rent due?"})
+    browser.call("POST", "/api/try", json_body={"question": 7})  # 400
     browser.call("POST", "/api/unlock", body=b"{")  # 400
     browser.call("GET", "/nothing")  # 404
     browser.call("GET", "/", headers={"Host": "evil.example"})  # 403

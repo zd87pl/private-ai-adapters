@@ -3907,3 +3907,374 @@ def test_hostile_caller_core(worlds: WorldMaker) -> None:
         UNREGISTERED,
     }
     assert_released_matches_record(world, replies)
+
+
+# ---------------------------------------------------------------------------
+# The owner's own search
+# ---------------------------------------------------------------------------
+
+RECORDS_OR_COUNTS = (
+    "_append",
+    "_release",
+    "_refuse",
+    "_ask_owner",
+    "_wait_for_owner",
+    "_note_refusal",
+    "set_policy",
+)
+
+# The queries the tests of an app's search use, and some that find nothing.
+SEARCHED = (
+    "rent",
+    "knee",
+    "rent lease tenant deposit income knee account",
+    "knee physiotherapy patient",
+    "landlord notice",
+    "income employment",
+    "income tax",
+    "tenant zzzunknown",
+    "zzzabsent",
+    "rent deposit",
+    "income",
+    "northgate",
+    "northgate housing",
+    "cooperative",
+    "overdraft",
+    "agreement",
+    "  rent\tand\ndeposit \x07 ",
+    "zzz " * 123 + "account",
+    "zzz " * 125 + "account",
+    "1450",
+    "2900 EUR",
+    "rent 1450",
+    "kowalski",
+    support.LISTED_NAME,
+    support.TAX_MARKER,
+    "tax-note-2025",
+    "RENT",
+    "Łódź",
+    "",
+    "?!",
+)
+
+
+def method_of_the_gate(name: str) -> ast.FunctionDef:
+    tree = ast.parse(Path(gate_core.__file__).read_text(encoding="utf-8"))
+    (gate,) = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Gate"]
+    (method,) = [n for n in gate.body if isinstance(n, ast.FunctionDef) and n.name == name]
+    return method
+
+
+def names_used(node: ast.AST) -> set[str]:
+    """Every name and attribute that the code under ``node`` mentions."""
+    found: set[str] = set()
+    for child in ast.walk(node):
+        if isinstance(child, ast.Attribute):
+            found.add(child.attr)
+        elif isinstance(child, ast.Name):
+            found.add(child.id)
+    return found
+
+
+def test_owner_search_calls_nothing_that_records() -> None:
+    used = names_used(method_of_the_gate("owner_search"))
+    assert not used & set(RECORDS_OR_COUNTS)
+    # It touches neither the waiting list nor the approvals, and counts no call.
+    assert not used & {"_pending", "_approvals", "_buckets", "_all_calls", "_last_calls"}
+    assert not used & {"_refusals", "_refused_searches", "_folded", "_ledger", "_store"}
+    # The names are the ones the gate has: a rename must not empty this test.
+    gate_names = set(vars(Gate))
+    assert set(RECORDS_OR_COUNTS) <= gate_names
+    assert {"_owner_side", "_state", "_text"} <= used & gate_names
+    # The two helpers it reads through record nothing either.
+    for helper in ("_state", "_text"):
+        assert not names_used(method_of_the_gate(helper)) & set(RECORDS_OR_COUNTS), helper
+
+
+def asks_each_time(*collections: str) -> dict[str, Any]:
+    """The sample policy with the local app set to ask each time for these collections."""
+    grants = {name: {"mode": "approve"} for name in collections}
+    return edited({"clients.lm-studio.grants": grants})
+
+
+def test_owner_search_is_the_search_of_an_app(worlds: WorldMaker) -> None:
+    world = worlds(policy=asks_each_time("home", "tax", "medical"))
+    gate, clock = world.gate, world.clock
+    found_some = found_none = 0
+    for query in SEARCHED:
+        clock.advance(seconds=10)
+        reply = gate.search(STUDIO, query)
+        assert reply.code == "OK", query
+        first = refs(reply)[:1]
+        passage, reason = gate.owner_search(query)
+        if not first:
+            assert passage is None, query
+            assert reason in ("no_match", "no_words"), query
+            found_none += 1
+            continue
+        assert passage is not None, query
+        assert reason == ""
+        assert [f"{passage.doc_id}.{passage.passage}"] == first, query
+        # And it is shown as the approval for that app and passage would show it.
+        shown = gate.preview("lm-studio", first[0])
+        assert (passage.body, passage.title) == (shown.body, shown.title), query
+        assert (passage.passages, passage.collection) == (shown.passages, shown.collection)
+        found_some += 1
+    assert found_some >= 15
+    assert found_none >= 8
+
+
+def test_owner_search_goes_over_every_collection_whoever_was_granted_it(
+    worlds: WorldMaker,
+) -> None:
+    # No app at all, and one collection that no policy entry names.
+    world = worlds(policy=gate_store.default_policy_json())
+    gate = world.gate
+    found = {
+        query: gate.owner_search(query)[0]
+        for query in ("overdraft", "physiotherapy", "commuting", "cellar")
+    }
+    titles = {query: passage.title for query, passage in found.items() if passage is not None}
+    assert titles == {
+        "overdraft": "bank-letter",
+        "physiotherapy": "referral-2026",
+        "commuting": "tax-note-2025",
+        "cellar": "lease-2025",
+    }
+    assert {passage.collection for passage in found.values() if passage is not None} == {
+        "home",
+        "tax",
+        "medical",
+    }
+
+
+def test_owner_search_records_and_counts_nothing(worlds: WorldMaker) -> None:
+    world = worlds(policy=asks_each_time("home", "tax", "medical"))
+    gate, clock = world.gate, world.clock
+    # Something of every kind is there before: a release, a waiting passage, an approval.
+    assert gate.search(STUDIO, "rent").code == "OK"
+    waits, approved = world.ref("tax-note-2025"), world.ref("referral-2026")
+    assert gate.read(STUDIO, waits).code == "NEEDS_APPROVAL"
+    assert gate.read(STUDIO, approved).code == "NEEDS_APPROVAL"
+    gate.approve("lm-studio", approved, gate.preview("lm-studio", approved).body_sha256)
+
+    def picture() -> tuple[Any, ...]:
+        usage = gate.usage()
+        return (
+            gate.head(),
+            len(world.records),
+            kinds_on_disk(world),
+            usage.clients,
+            usage.pools,
+            usage.documents,
+            usage.refusals_day,
+            gate.pending(),
+            gate.approvals(),
+            gate.served(),
+            gate.policy(),
+            support.snapshot(world.path),
+        )
+
+    before = picture()
+    answers = Counter()
+    for round_number in range(3):
+        for query in SEARCHED:
+            passage, reason = gate.owner_search(query)
+            answers["found" if passage is not None else reason] += 1
+        clock.advance(seconds=1)
+        assert picture() == before, round_number
+    assert answers["found"] >= 45
+    assert answers["no_match"] >= 9
+    assert answers["no_words"] >= 9
+    # The passage that waited still waits, the approval is still there to be used, and the
+    # passage that was only looked at in the owner's search needs the owner as before.
+    assert gate.read(STUDIO, waits).code == "NEEDS_APPROVAL"
+    assert gate.read(STUDIO, approved).code == "OK"
+    looked_at, _ = gate.owner_search("overdraft")
+    assert looked_at is not None
+    ref = f"{looked_at.doc_id}.{looked_at.passage}"
+    assert (STUDIO.client, ref) not in {(entry.client, entry.ref) for entry in gate.pending()}
+    assert gate.read(STUDIO, ref).code == "NEEDS_APPROVAL"
+
+
+def test_owner_search_says_why_it_found_nothing(worlds: WorldMaker) -> None:
+    world = worlds()
+    gate = world.gate
+    for query in ("", "   ", "?!", "1450", "2900 1450 14", "3rd 4x4", "half a pair \ud800"):
+        assert gate.owner_search(query) == (None, "no_words"), query
+    for not_text in (None, 7, ["rent"], b"rent", {"query": "rent"}):
+        assert gate.owner_search(not_text) == (None, "no_words")  # type: ignore[arg-type]
+    for query in ("zzzabsent", "invoices", "rents", "kowalski", support.LISTED_NAME):
+        assert gate.owner_search(query) == (None, "no_match"), query
+    # A number is not searched, as in a collection where every passage needs approval.
+    passage, _ = gate.owner_search("rent 1450")
+    assert passage is not None
+    assert passage.words == ("rent",)
+    assert "1450" in passage.body
+
+    empty = worlds(documents=())
+    assert empty.gate.owner_search("rent") == (None, "no_documents")
+    assert empty.gate.owner_search("1450") == (None, "no_words")  # asked before the documents
+
+    # A document whose file went bad is no match, and is set aside as a read sets it aside.
+    bank = world.ids["bank-letter"]
+    (world.path / "docs" / f"{bank}.wdva").unlink()
+    head = gate.head()
+    assert gate.owner_search("overdraft") == (None, "no_match")
+    assert gate.usage().documents[bank].available is False
+    assert gate.head() == head
+
+    gate.close()
+    with pytest.raises(GateError, match="locked"):
+        gate.owner_search("rent")
+
+
+def test_owner_search_shows_the_text_a_read_would_release(worlds: WorldMaker) -> None:
+    world = worlds(policy=asks_each_time("home", "tax", "medical"))
+    gate = world.gate
+    passage, _ = gate.owner_search("tenant landlord cooperative")
+    assert passage is not None
+    assert (passage.title, passage.collection) == ("lease-2025", "home")
+    assert (passage.passage, passage.passages) == (1, 4)
+    # The two listed strings of the first passage are replaced, and counted.
+    assert passage.replaced == 2
+    assert passage.body.count(textproc.REDACTED) == 2
+    assert not contains_listed(passage.body)
+    assert support.LEASE_MARKER in passage.body
+    assert textproc.check_sanitized(passage.body) == []
+    # Approved for an app, exactly this text is what the app receives.
+    ref = world.ref("lease-2025")
+    assert gate.read(STUDIO, ref).code == "NEEDS_APPROVAL"
+    gate.approve("lm-studio", ref, hashlib.sha256(passage.body.encode()).hexdigest())
+    assert body(gate.read(STUDIO, ref)) == passage.body
+    # It follows the listed strings of the policy in force at the moment it is asked.
+    world.set({"redact_literals": [*LISTED, "Northgate Housing"]})
+    again, _ = gate.owner_search("tenant landlord cooperative")
+    assert again is not None
+    assert again.replaced == 3
+    assert "Northgate" not in again.body
+
+
+def test_owner_search_that_cannot_show_a_passage_says_so(
+    worlds: WorldMaker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = worlds()
+    gate = world.gate
+    head = gate.head()
+
+    def unsettled(*args: Any, **kwargs: Any) -> str:
+        raise ValueError("text does not settle")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(gate_core, "render", unsettled)
+        with pytest.raises(GateError, match="cannot be shown") as error:
+            gate.owner_search("rent")
+        assert type(error.value) is GateError
+        assert gate.owner_search("zzzabsent") == (None, "no_match")
+    # Text that the cleaning should have changed is shown to nobody, the owner included.
+    with monkeypatch.context() as patch:
+        patch.setattr(gate_core, "check_sanitized", lambda text: ["a link"])
+        with pytest.raises(GateError, match="cannot be shown"):
+            gate.owner_search("rent")
+    assert gate.owner_search("rent")[0] is not None
+    assert gate.head() == head
+    assert world.of_kind("denial") == []
+
+
+def test_owner_search_names_the_words_that_found_the_passage(worlds: WorldMaker) -> None:
+    world = worlds()
+    gate = world.gate
+
+    def words(query: str) -> tuple[str, ...]:
+        passage, _ = gate.owner_search(query)
+        assert passage is not None, query
+        return passage.words
+
+    # In the order of the question, as written, each once; no number, no word it lacks.
+    asked = "What about the Knee, and PHYSIOTHERAPY sessions (knee!) in 2026 or 88?"
+    assert words(asked) == ("about", "the", "Knee", "PHYSIOTHERAPY", "sessions", "in")
+    assert words("Łódź or the OVERDRAFT limit") == ("the", "OVERDRAFT", "limit")
+    assert words("\uff52\uff45\uff4e\uff54") == (
+        "\uff52\uff45\uff4e\uff54",
+    )  # full-width: folds to "rent"
+    assert words("re\u200bnt") == ("rent",)  # an invisible character: read as the search reads it
+    # Only the first 500 characters are looked at, and of them 16 different words.
+    assert words("zzz " * 124 + "rent overdraft") == ("rent",)
+    many = " ".join(f"w{'x' * n}" for n in range(15))
+    assert words(f"{many} rent overdraft") == ("rent",)
+
+    # They are the words of the question that the index holds for this passage, no more and
+    # no fewer: a search for one of them alone reaches the passage, a search for another
+    # word of the question does not.
+    for query in (asked, "is the monthly rent due on a working day", "tax return refund folder"):
+        passage, _ = gate.owner_search(query)
+        assert passage is not None
+        named = {textproc.fold(word) for word in passage.words}
+        assert named
+        index = gate._indexes[passage.collection]
+        for term in textproc.query_terms(query, digits=False):
+            reached = {
+                (hit.doc_id, hit.passage)
+                for hit in index.search([term], 10_000, per_document=10_000)
+            }
+            assert (term in named) == ((passage.doc_id, passage.passage) in reached), term
+
+
+def test_owner_search_names_a_word_of_the_title_where_titles_are_searched(
+    worlds: WorldMaker,
+) -> None:
+    documents = (
+        ("tax", "zebra crossing 2025", "z.txt", "Stripes on the road, painted in May.\n"),
+        ("home", "giraffe", "g.txt", "A long neck and a quiet walk.\n"),
+    )
+    world = worlds(documents=documents)
+    gate = world.gate
+    # "tax" shows titles to apps, so an app's search finds the passage by a word of the
+    # title. The owner's search does too, and names the word although the text lacks it.
+    passage, _ = gate.owner_search("Which zebra has stripes in 2025?")
+    assert passage is not None
+    assert (passage.title, passage.words) == ("zebra crossing 2025", ("zebra", "stripes", "in"))
+    assert "zebra" not in textproc.tokens(passage.body)
+    only_title, _ = gate.owner_search("crossing")
+    assert only_title is not None
+    assert only_title.words == ("crossing",)
+    assert refs(gate.search(DESKTOP, "crossing", "tax")) == [world.ref("zebra crossing 2025")]
+    # "home" does not show titles: there a title is no way to a passage, for nobody.
+    assert gate.owner_search("giraffe") == (None, "no_match")
+    assert gate.search(STUDIO, "giraffe").text.startswith("OK: no matches.")
+    # Both follow the policy at once.
+    world.set({"collections.tax.show_titles": False, "collections.home.show_titles": True})
+    assert gate.owner_search("zebra crossing") == (None, "no_match")
+    found, _ = gate.owner_search("giraffe neck")
+    assert found is not None
+    assert found.words == ("giraffe", "neck")
+    # A listed string in a title is not searchable, and so is never named as found.
+    world.set({"redact_literals": ["giraffe"]})
+    assert gate.owner_search("giraffe") == (None, "no_match")
+    hidden, _ = gate.owner_search("giraffe neck")
+    assert hidden is not None
+    assert hidden.words == ("neck",)
+    assert hidden.title == "giraffe"  # the owner is shown the stored title
+
+
+def test_owner_search_cuts_through_no_listed_string(worlds: WorldMaker) -> None:
+    # A listed string that lies across the border of two passages: "Jan " ends the first,
+    # "Kowalski" begins the second.
+    text = "orchard " * 99 + support.LISTED_NAME + " meadow" * 60 + "\n"
+    world = worlds(documents=(("medical", "walks", "walks.txt", text),))
+    gate = world.gate
+    assert world.store.documents()[0].passages == 2
+    first, _ = gate.owner_search("orchard")
+    second, _ = gate.owner_search("meadow")
+    assert first is not None
+    assert second is not None
+    assert (first.passage, second.passage) == (1, 2)
+    # Each of the two shows the whole string replaced, and no part of it.
+    assert first.body.endswith("orchard " + textproc.REDACTED)
+    assert second.body.startswith(textproc.REDACTED + " meadow")
+    for passage in (first, second):
+        assert passage.replaced == 1
+        assert "Jan" not in passage.body
+        assert "Kowalski" not in passage.body
+        shown = gate.preview("lm-studio", f"{passage.doc_id}.{passage.passage}")
+        assert passage.body == shown.body

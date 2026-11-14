@@ -378,7 +378,9 @@ too, and no review has attacked them either:
 [a part of this section](#the-two-views-and-what-came-with-them) says what
 they add. The third word of that file, a language for the page, and the
 answer that tells it to a page before pairing came later still, and no review
-has attacked them. Where a sentence says "in a run for this page", the figure comes
+has attacked them. The same holds for the route that answers the owner's
+trial question, which was built after all of these ("The trial" in that
+part). Where a sentence says "in a run for this page", the figure comes
 from a run made on Linux with Python 3.11 while this page was held against the
 code. One machine, one run: an observation, not a proof.
 
@@ -386,7 +388,7 @@ code. One machine, one run: an observation, not a proof.
 
 | Asset | Where it is | What protects it |
 | --- | --- | --- |
-| **Document text in the vault** | Sealed in the store directory. In the memory of Locktender while the vault is unlocked. | The lock. |
+| **Document text in the vault** | Sealed in the store directory. In the memory of Locktender while the vault is unlocked. On the owner's trial question, one passage of it in the answer to the page. | The lock. For that passage: session, and the passphrase typed within ten minutes. |
 | **The store key and the passphrase** | The key: sealed with the passphrase in `keyslot.wdva`, and in Locktender's memory while the vault is unlocked. The passphrase: typed into Locktender's page, sent to Locktender on the loopback address, never stored. | scrypt, and the key being in memory only. |
 | **The settings**: which apps exist, what each may read, the limits, the words to replace | In the record, sealed. Changed through Locktender's page. | Pairing code, session, owner mode. |
 | **Two or three words about the page**: which of its two views is in use, whether setting up was finished, and a language for the page once one is kept | In `run/interface.json` in the store directory, in plain text. | File modes only. They are not sealed, and changing them never asks for the passphrase. They decide which page opens first and whether the page still offers to finish setting up, and nothing about what may leave. The language is protected by less than the other two: the page's port tells it to whoever asks, before pairing. |
@@ -433,6 +435,9 @@ code. One machine, one run: an observation, not a proof.
 - **Owner mode.** For ten minutes after the passphrase was typed, the page
   accepts changes that let more text leave. After that such a change asks for
   the passphrase again.
+- **The trial's permission.** The route that answers the owner's trial
+  question needs the passphrase typed within ten minutes too, and keeps its
+  own time: typing the passphrase for a question does not open owner mode.
 - **Turns and places.** Requests that carry a passphrase are checked one at a
   time, whichever connection they come on, and a wrong one is answered a second
   after its turn began at the earliest. The page's server serves at most 64
@@ -610,6 +615,48 @@ with it what an AI app starts under the name `locktender`. And how long the
 answer takes grows with the size of the file (five milliseconds for a file of
 1 MiB against one for a small file in the run); nobody measured what that
 tells.
+
+**The trial.** One route of the page's API, `POST /api/try`, hands the page
+one passage of the vault for the owner's own words, with no app involved, no
+entry in the record and no limit counted. It is there so that the owner can
+see what a question would bring before any app is connected; no page of this
+version calls it yet. Like every route it needs the session: in a run for
+this page all 30 routes answered 401 without it. It also needs the passphrase
+typed within ten minutes, a permission apart from owner mode, and answers 20
+questions a minute at most. Inside those ten minutes, whoever holds the
+session can read up to 200 passages this way, and nothing shows it afterwards
+but a number in the state (`trial.questions`) that is gone at the next lock.
+Outside them the route
+answers `trial_reauth_required` before it searches: in a run for this page,
+ten minutes after the passphrase, 200 questions with words that were in the
+vault, words that were not, numbers and punctuation all got that answer, and
+the search was not called once. In the same run 50 questions left the head of
+the record, the sealed files, the activity list and the list of waiting
+passages as they were, and of 23 questions sent in one minute three were
+refused. The run moved a clock it had given to Locktender; it did not wait
+ten minutes.
+
+What the permission is made of: the passphrase typed for the trial
+(`POST /api/reauth` with the scope `trial`) opens the trial and leaves owner
+mode where it was. In the run, after it, a question was answered while
+registering an app and raising a limit were still refused. The other way
+round is not kept apart: creating the vault, unlocking it and typing the
+passphrase for a change open the trial too. So for ten minutes after every
+unlock, and after every change that needed the passphrase, the route answers
+whoever holds the session.
+
+One more thing the trial gives. The text it shows is the text an approval is
+bound to. `POST /api/approvals/release` takes an app, a passage and the hash
+of the text, asks for no owner mode, and does not ask whether the passage is
+waiting. So whoever holds the session and has seen a passage in a trial can
+approve it later, without the passphrase, for an app that has access to its
+group, although no app asked for it. The trial does not hand out the
+reference such a call needs; the list of documents is enough to make one. The
+approval is recorded like any other, and nothing leaves until a call under
+the app's name asks for the passage, which a program of the owner's account
+can make itself (position 3). Closing this needs an approval that is only
+given for a passage that waits, which is a change to the decision logic that
+was not made.
 
 **The command the page shows.** Every answer about the state now carries the
 command line that starts Locktender again, with the full paths of the Python
@@ -974,23 +1021,32 @@ review had reached 4.5 guesses a second by asking on many connections at once,
 each holding the memory that one check takes. In a run for this page four wrong
 passphrases sent at the same moment were answered after 1, 2, 3 and 4 seconds.
 
-No answer of the page's server holds text that was not released: in 956
-responses over ten states of a vault, a review found, of 42 markers planted in
-documents, only the five that had been released or were shown for approval, and
-nowhere the passphrase, the words to replace or the pairing code. That review
-was made before the two views. Of the routes added since, the look at a
-settings file is the one that reads something that must not be passed on: in a
-run for this page a marker written into settings files was in none of its 38
-answers.
+No answer of the page's server holds text that was not released or shown for
+approval, with one exception made on purpose: the passage that the trial
+question finds, for which the passphrase must have been typed within ten
+minutes ("The trial" above). In 956 responses over ten states of a vault, a
+review found, of 42 markers planted in documents, only the five that had been
+released or were shown for approval, and nowhere the passphrase, the words to
+replace or the pairing code. That review was made before the two views and
+before the trial. Of the routes added since, the look at a settings file is
+the one that reads something that must not be passed on: in a run for this
+page a marker written into settings files was in none of its 38 answers. The
+trial question is the one that passes text on: its answer holds the passage
+with the words to replace already replaced, and no other answer repeats it.
 
-Four things are in an answer by design. The session is the answer to the right
+The trial question is refused once ten minutes have passed since the
+passphrase was typed, like a change that lets more leave, but by its own
+clock: the passphrase typed for a question opens no change. It is refused
+before the question is looked at.
+
+Five things are in an answer by design. The session is the answer to the right
 pairing code, and in the demo to the page's first question. The passphrase of
 the demo is in every answer about the demo's state, because the demo's page
 shows it. The command that starts Locktender again is in every answer about
 the state, with the full paths of the Python that runs it and of the vault's
-folder, because the Basic page shows it. And the look at a settings file
-answers with a word about a file of another program, and with the place of
-that file.
+folder, because the Basic page shows it. The look at a settings file answers
+with a word about a file of another program, and with the place of that file.
+And the trial question is answered with one passage of the vault.
 
 **Does not hold.** Without the passphrase that person can read every text that
 was ever released, on the Activity page of Pro and under "What left the vault"
@@ -1000,7 +1056,9 @@ no limit and is recorded. They can add documents, remove documents (which
 deletes them from the vault), lower limits, take grants away and lock the
 vault. They can choose on which page the vault opens and put the card "Finish
 setting up" away, which leaves no entry in the record. During the ten minutes of owner
-mode they can do everything. There is no lock-out after wrong passphrases.
+mode they can do everything. During the ten minutes of the trial's permission
+they can read passages that were never released, 20 a minute, and no entry
+says so ("The trial"). There is no lock-out after wrong passphrases.
 
 **Left over.** Owner mode is a pause for thought, not a wall. Lock the vault
 when you leave the computer.
@@ -1249,7 +1307,8 @@ Tested:
 - The runs this page quotes as made for it, on Linux with Python 3.11 and,
   where a browser was needed, Chromium. The runs for the two views, the
   interface file and the three routes used no browser: they called the page's
-  API directly.
+  API directly. So did the run for the trial question, with a clock it could
+  move.
 
 Not tested:
 
@@ -1267,6 +1326,8 @@ Not tested:
   page's own behaviour there (which view opens, what Basic shows, where the
   command to start again comes from) was read from the page's code and not
   tried in a browser for this page.
+- The trial question under a hostile review, and from a page: no page calls
+  it yet.
 
 **Not audited.** Nobody outside the project has reviewed Locktender, its format
 or this page.

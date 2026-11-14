@@ -979,9 +979,11 @@ The pairing code has eight characters from `ABCDEFGHJKMNPQRSTVWXYZ23456789` and 
 
 **Answers.** Every answer of the API is a JSON object. An error is
 `{"error": {"code": …, "message": …}}` with one of these: 400 `invalid`; 401 `pairing_required`;
-403 `forbidden`, `wrong_code`, `wrong_passphrase` or `reauth_required` (the change lets more
-leave and owner mode has run out); 404 `not_found`; 405 `invalid`; 409 `locked`, `conflict`,
-`busy`, `changed` or `duplicate`; 413 `too_large`; 429 `pairing_disabled`; 500 `internal`; 503
+403 `forbidden`, `wrong_code`, `wrong_passphrase`, `reauth_required` (the change lets more
+leave and owner mode has run out) or `trial_reauth_required` (the request is the owner's
+[trial question](#the-trial-question), and the passphrase was last entered more than ten
+minutes ago); 404 `not_found`; 405 `invalid`; 409 `locked`, `conflict`, `busy`, `changed` or
+`duplicate`; 413 `too_large`; 429 `pairing_disabled` or `too_many`; 500 `internal`; 503
 `unavailable`. An error may carry a third member, `reason`: one word of lower-case letters,
 digits and `_`, at most 32 characters, for a page that words the error itself. One route sends
 it today: `POST /api/documents` with 400 `invalid`, when a file is not added. The words are
@@ -1001,14 +1003,14 @@ Cache-Control: no-store
 Connection: close
 ```
 
-**The routes.** There are 29. `POST` bodies are JSON objects; a field that the route does not
+**The routes.** There are 30. `POST` bodies are JSON objects; a field that the route does not
 know is an error. "Owner mode" marks what is refused with `reauth_required` once ten minutes have
-passed since the passphrase was last given; an empty cell means that the route never asks for
-it. While the store is locked, `GET /api/state`, `POST /api/unlock`, `POST /api/lock` and
+passed since the passphrase was last given for it; an empty cell means that the route never asks
+for it. While the store is locked, `GET /api/state`, `POST /api/unlock`, `POST /api/lock` and
 `POST /api/interface` do their work and every other route answers 409 `locked`, with two
 exceptions that are answered before that question is asked: `POST /api/store/create` answers 409
 `conflict` because the store exists, and `POST /api/demo/again` answers 404 outside a demo. In a
-run for this page all 29 were called against a locked store.
+run for this page all 30 were called against a locked store.
 
 | Route | Does | Owner mode |
 | --- | --- | --- |
@@ -1016,7 +1018,7 @@ run for this page all 29 were called against a locked store.
 | `POST /api/store/create` `{passphrase, language?}` | Creates the store, unlocks it, answers the state. `language` (`en` or `pl`) is checked before anything is created and then kept in [the interface file](#the-interface-file) | |
 | `POST /api/unlock` `{passphrase, hours?}` | Unlocks, for `hours` (0.02 to 168) or the span the app was started with; answers the state | |
 | `POST /api/lock` | Locks; answers the state | |
-| `POST /api/reauth` `{passphrase}` | Checks the passphrase and begins owner mode anew: `{"owner_mode_until": …}` | |
+| `POST /api/reauth` `{passphrase, scope?}` | Checks the passphrase and begins owner mode anew, and with it the permission of [the trial question](#the-trial-question): `{"owner_mode_until": …, "trial_until": …}`. With `"scope": "trial"` only the trial's permission begins anew and owner mode stays where it was. Any other `scope` is 400, before the passphrase is looked at | |
 | `POST /api/serving` `{kinds?, paused?}` | Chooses which kinds of clients are answered (`hosted`, `local`, `both`) and which clients are paused | For `both`, and for every choice after which a client is answered that was not answered before |
 | `POST /api/verify` | Verifies the record again: `{"verified", "head_seq", "head_hash", "records", "seconds"}` | |
 | `POST /api/interface` `{view?, setup?, language?}` | Keeps the view of the page, its language, or that setting up is finished, in [the interface file](#the-interface-file); answers the state. Nothing of the store changes | |
@@ -1025,6 +1027,7 @@ run for this page all 29 were called against a locked store.
 | `GET /api/approvals` | The passages that wait, each with the text that would be released, and the approvals not yet used | |
 | `POST /api/approvals/release` `{app, ref, body_sha256}` | Approves one passage for one client, once; 409 `changed` when its text is no longer the one with that hash | |
 | `POST /api/approvals/dismiss` `{app, ref}` | Takes a passage off the waiting list, or withdraws an approval that was not used | |
+| `POST /api/try` `{question}` | Answers the owner's own question with the one passage a search by its words finds first, as an approval would show it ([below](#the-trial-question)). Nothing is released, recorded or counted | Never. It has a permission of its own: the passphrase entered within ten minutes, else 403 `trial_reauth_required` |
 | `GET /api/documents` | The collections with their documents, and what can be uploaded: `upload` holds the suffixes, the greatest size, whether PDFs can be read, and `install`, the command line that adds what reads PDFs to this installation | |
 | `POST /api/documents?collection=&name=` | Adds one document. The body is the file's bytes, not JSON | |
 | `DELETE /api/documents/<id>` | Removes a document | |
@@ -1043,7 +1046,9 @@ run for this page all 29 were called against a locked store.
 | `POST /api/demo/again` | In a demo: tells the played app to ask once more for the passage it waits for ([below](#the-played-app-of-a-demo)). 404 outside a demo | |
 
 No route returns a listed string, the store key, an original file, or stored text other than the
-passage that waits for approval and the text of results that were released. Only the state of a
+passage that waits for approval, the text of results that were released, and the one passage
+that `POST /api/try` finds for the owner's own question, which needs the passphrase entered
+within ten minutes (a permission apart from owner mode) and leaves no entry. Only the state of a
 demo carries a passphrase, that of the demo (`demo_passphrase`). Three answers hold something
 that is not of the store: `launch` in the state is the command that starts the app, with the
 paths of the Python interpreter and of the store; a configuration holds the same two paths in
@@ -1055,12 +1060,14 @@ program, and with no byte from it.
 | A JSON body | at most 64 KiB; a longer one is refused from its stated length (413) |
 | An uploaded file | at most 20 MiB, refused in the same way |
 | Requests that carry a passphrase (`store/create`, `unlock`, `reauth`) | checked one at a time, whichever connection they come on; a wrong passphrase is answered no sooner than one second after its turn began |
+| Trial questions (`try`) | at most 20 are looked up in any 60 seconds of one unlocked session; the next is answered 429 `too_many` |
 | Connections served at once | 64. When all are taken, the connection that has waited longest without showing the session is closed and the new one takes its place. The new one is closed at once only when every place is held by a connection that showed the session, or when 16 connections that were told to go have not gone yet |
 | A connection that sends nothing | closed after 30 seconds |
 
 ### What the answers say about the interface
 
-Some fields of five answers are there for the page and say nothing about the documents.
+Some fields of five answers are there for the page and say nothing about the documents. (One
+more field of the state, `trial`, belongs to [the trial question](#the-trial-question).)
 
 | Answer | Field | Value |
 | --- | --- | --- |
@@ -1081,6 +1088,89 @@ The other fields of a configuration are `host`, `label`, `local_program`, `block
 products that cannot be connected, `blocks` is empty, `explanation` says why, and `plain_note`
 and `after` are `null`. `host` in the query is one of the ten ids; without it the client's name
 is taken when it is such an id, and `generic` otherwise.
+
+### The trial question
+
+`POST /api/try` answers the owner's own question with one passage: the one that a search by the
+question's words finds first, as the text an approval for it would show. No client is involved.
+Nothing is released, nothing is appended to the record, and nothing is counted against a limit.
+It is the one route that returns stored text which was neither released nor asked for by a
+client, so it has a condition of its own, apart from owner mode. The page of this version does
+not call the route yet.
+
+**The request** is `{"question": text}` and nothing else. After the checks that every request
+has to pass, the session among them, these come in a fixed order, and the first that fails
+answers:
+
+1. The question: 400 `invalid` ("Ask a question.") when it is missing, is not text, or holds
+   nothing but blanks.
+2. The store is unlocked: else 409 `locked`.
+3. The trial's permission holds (below): else 403 `trial_reauth_required` ("Enter your
+   passphrase again.").
+4. Fewer than 20 questions of this unlocked session were looked up in the last 60 seconds: else
+   429 `too_many` ("Wait a moment before the next question.").
+
+Only then is the index asked. A request that fails at 3 or 4 is answered before the question is
+looked at, so the answer does not say whether the store holds documents or whether they hold the
+words. In a run for this page 200 requests that failed at 3, with words that were in the store,
+words that were not, numbers and punctuation, were all answered 403 `trial_reauth_required`, and
+the search was not called once.
+
+**How the passage is found.** By the search a client gets in a collection held in `approve` mode
+([Words and the search index](#words-and-the-search-index)): the first 500 characters of the
+question, its first 16 different words, whole words as they stand, and no word that contains a
+digit. Every collection of the store is searched, also one that no client was granted; of the
+best passage of each collection, the one with the highest score is taken. It is then rendered
+as [a read](#passages-and-refs) renders it: the span widened so that it cuts through no listed
+string, each listed string replaced by `[REDACTED]`, the result cleaned again. So the text is
+character for character the `body` that `GET /api/approvals` shows when a client asks for that
+passage, and its SHA-256 is that `body_sha256`.
+
+| Answer | When |
+| --- | --- |
+| 200 `{"found": true, "passage": {…}}` | A passage was found |
+| 200 `{"found": false, "reason": "no_words"}` | The question holds no word that is searched: it is only numbers or punctuation |
+| 200 `{"found": false, "reason": "no_documents"}` | The store lists no document. (A question without words is answered `no_words` here too) |
+| 200 `{"found": false, "reason": "no_match"}` | No passage holds one of the words as it stands, or the document that does can no longer be read. Such a document is then left out of every search, as after a client's read that found it so |
+| 503 `unavailable` | The passage was found and cannot be shown: its text does not settle when it is cleaned, or it does not pass the check that every released text passes |
+
+| Member of `passage` | Value |
+| --- | --- |
+| `body` | The text of the passage, as above |
+| `characters`, `replaced` | The length of `body`, and how many listed strings were replaced in it |
+| `title`, `passage`, `passages` | The stored title, also where the collection does not show titles to clients; the number of the passage, counted from 1; how many passages the document has |
+| `words` | The words of the question that found the passage, in the order of the question, each once, written as the question wrote them (folded, where the question wrote a word with a character that the search drops). They are the words that the index holds for this passage: those of its text outside listed strings and, in a collection that shows titles, those of the title. Never a word with a digit |
+| `apps` | The clients that the policy in force lets use the document's collection, each as `{"name", "mode"}` with `mode` `approve` or `read`, in the order of the policy; `[]` when there is none. A hosted client is left out where the collection is not marked for hosted clients, whatever grant is stored. A client that is registered and not answered in this session is named: the list says what the settings say |
+| `groups` | How many collections the store has: those of the policy and those that only hold a document |
+
+The answer holds neither the passage's ref, nor the id of its document, nor the name of its
+collection.
+
+**The trial's permission.** An unlocked session keeps two times: until when owner mode holds,
+and until when a trial question is answered. Creating the store and unlocking it set both to
+ten minutes later, and so does `POST /api/reauth` without a `scope` (and `POST /api/unlock` on
+a store that is unlocked already). `POST /api/reauth` with `"scope": "trial"` sets the second
+and leaves the first alone: the passphrase entered for a question opens no ten minutes in which
+a change that lets more leave goes through. In a run for this page, ten minutes after the
+passphrase, a question and registering a client were both refused; after `reauth` with the
+scope `trial` the question was answered, `owner_mode_until` was what it had been, and
+registering a client and raising a limit were still refused with `reauth_required`.
+
+**What a trial leaves.** No entry in the record and no change to a sealed file; no count against
+a limit of a client, of a pool or of a document; no passage on the waiting list and no approval;
+and `cursor` in the state does not move. Neither the question nor the answer is kept once the
+response is sent. The session keeps two things: the times of the questions of the last minute,
+for the limit, and how many questions were looked up since the store was unlocked. The state
+shows the second, in `trial`:
+
+| Field of `GET /api/state` | Value |
+| --- | --- |
+| `trial` | `null` while the store is locked, else `{"until", "questions"}`: until when a trial question is answered, and how many were looked up since the store was unlocked, whichever tab or program asked them. A question that was refused before it was looked up (400, 403, 429) is not counted; one that found nothing, or whose passage could not be shown, is |
+
+In the run, 50 questions (34 that found a passage, 9 that matched nothing, 7 without a word)
+left the head of the record, the number and the size of the sealed files, `cursor`, `today`,
+the activity list and the list of approvals as they were, and `trial.questions` was 50 higher.
+Of 23 questions sent in one minute, 20 were answered and three were refused with `too_many`.
 
 ### The look at a settings file
 

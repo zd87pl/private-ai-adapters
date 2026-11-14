@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import importlib.util
 import itertools
 import json
@@ -10,12 +11,16 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import stat
 import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterator
+import types
+from array import array
+from collections import Counter, deque
+from collections.abc import Callable, Iterator, Mapping
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -29,7 +34,7 @@ from wdva.gate import store as gate_store
 from wdva.gate.app import main as app_main
 from wdva.gate.app import service as service_module
 from wdva.gate.app.api import Service, ServiceError
-from wdva.gate.app.service import NOT_REGISTERED, OWNER_MODE, GateService
+from wdva.gate.app.service import NOT_REGISTERED, OWNER_MODE, TRIAL_PER_MINUTE, GateService
 from wdva.gate.core import Gate
 from wdva.gate.errors import LedgerError
 from wdva.gate.store import init_store
@@ -50,7 +55,15 @@ LM = Caller("lm-studio", "lm-studio", "0.4", "2025-06-18", "stdio")
 STRANGER = Caller("somebody-else", "curl", "8", None, "stdio")
 REF = re.compile(r"ref=(d-[0-9a-f]{12}\.[0-9]+)")
 ISO = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
-UNLOCKED_ONLY = ("unlocked_at", "locks_at", "owner_mode_until", "encryption", "serving", "today")
+UNLOCKED_ONLY = (
+    "unlocked_at",
+    "locks_at",
+    "owner_mode_until",
+    "trial",
+    "encryption",
+    "serving",
+    "today",
+)
 
 
 @contextlib.contextmanager
@@ -176,6 +189,8 @@ def test_state_locked_and_unlocked(vault: GateService, gate_clock: FakeClock) ->
     assert state["unlocked_at"] == "2026-11-12T09:00:00Z"
     assert state["locks_at"] == "2026-11-12T17:00:00Z"
     assert state["owner_mode_until"] == "2026-11-12T09:10:00Z"
+    # The trial's permission begins with the unlock too, and no question was asked yet.
+    assert state["trial"] == {"until": "2026-11-12T09:10:00Z", "questions": 0}
     assert state["encryption"] == {
         "cipher": "XChaCha20-Poly1305",
         "kdf": "scrypt (N=2^14, r=8, p=1)",
@@ -331,6 +346,7 @@ def test_lock_twice_and_unlock_twice(unlocked: GateService, gate_clock: FakeCloc
     assert again["unlocked_at"] == first["unlocked_at"]
     assert again["locks_at"] == first["locks_at"]
     assert again["owner_mode_until"] == "2026-11-12T09:13:00Z"
+    assert again["trial"] == {"until": "2026-11-12T09:13:00Z", "questions": 0}
     assert again["record"]["head_seq"] == first["record"]["head_seq"]
 
     assert unlocked.lock()["locked"] is True
@@ -363,6 +379,7 @@ LOCKED_CALLS: dict[str, Callable[[GateService], Any]] = {
     "approvals": lambda s: s.approvals(),
     "release": lambda s: s.release(app="claude-desktop", ref="d-000000000000.1", body_sha256=""),
     "dismiss": lambda s: s.dismiss(app="claude-desktop", ref="d-000000000000.1"),
+    "try_question": lambda s: s.try_question(question="rent"),
     "documents": lambda s: s.documents(),
     "add_document": lambda s: s.add_document(collection="home", name="a.txt", data=b"text"),
     "remove_document": lambda s: s.remove_document(id="d-000000000000"),
@@ -508,7 +525,10 @@ def test_widening_needs_owner_mode(unlocked: GateService, gate_clock: FakeClock,
     with refused(403, "reauth_required"):
         act(unlocked)
     answer = unlocked.reauth(passphrase=gs.PASSPHRASE)
-    assert answer == {"owner_mode_until": "2026-11-12T10:20:00Z"}
+    assert answer == {
+        "owner_mode_until": "2026-11-12T10:20:00Z",
+        "trial_until": "2026-11-12T10:20:00Z",
+    }
     assert unlocked.state()["owner_mode_until"] == "2026-11-12T10:20:00Z"
     act(unlocked)
     assert picture(unlocked) != before
@@ -692,6 +712,707 @@ def test_one_passphrase_is_checked_at_a_time(
     assert len(most) == 8
     assert max(most) == 1, "several passphrases were being stretched at the same moment"
     assert sorted(outcomes) == ["accepted"] + ["wrong_passphrase"] * 7
+
+
+# -- the trial -----------------------------------------------------------------------------
+
+PASSAGE_FIELDS = {
+    "title",
+    "passage",
+    "passages",
+    "body",
+    "characters",
+    "replaced",
+    "words",
+    "apps",
+    "groups",
+}
+ENTER_AGAIN = "Enter your passphrase again."
+
+
+def count_owner_searches(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Every query that reaches the gate's search for the owner from now on."""
+    asked: list[str] = []
+    real = Gate.owner_search
+
+    def counted(self: Gate, query: str) -> Any:
+        asked.append(query)
+        return real(self, query)
+
+    monkeypatch.setattr(Gate, "owner_search", counted)
+    return asked
+
+
+def texts_kept(*roots: Any) -> Iterator[str]:
+    """Every text that can be reached from ``roots`` through containers and attributes."""
+    seen: set[int] = set()
+    stack: list[Any] = list(roots)
+    skipped = (int, float, type(None), type, array, types.ModuleType, types.FunctionType)
+    while stack:
+        item = stack.pop()
+        if id(item) in seen or isinstance(item, skipped):
+            continue
+        seen.add(id(item))
+        if isinstance(item, str):
+            yield item
+        elif isinstance(item, (bytes, bytearray)):
+            yield bytes(item).decode("utf-8", "replace")
+        elif isinstance(item, Mapping):
+            stack.extend(item.keys())
+            stack.extend(item.values())
+        elif isinstance(item, (list, tuple, set, frozenset, deque)):
+            stack.extend(item)
+        else:
+            stack.extend(getattr(item, "__dict__", {}).values())
+            for name in getattr(type(item), "__slots__", ()):
+                stack.append(getattr(item, name, None))
+
+
+def everything_the_app_holds(service: GateService) -> list[str]:
+    loaded = list(sys.modules.items())  # a copy: another thread may import meanwhile
+    modules = [vars(module) for name, module in loaded if name.startswith("wdva.")]
+    return list(texts_kept(service, *modules))
+
+
+def test_a_trial_leaves_no_trace(
+    unlocked: GateService, gate_clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = unlocked._session
+    assert session is not None
+    gate = session.gate
+    # Something of every kind is there before: releases, a refusal, a passage that waits,
+    # an approval that was not used.
+    unlocked.backend.search(CLAUDE, "rent deposit")
+    unlocked.backend.status(STRANGER)
+    unlocked.set_serving(kinds="both")
+    waits = first_ref(unlocked, CLAUDE, "income tax", "tax")
+    assert unlocked.backend.read(CLAUDE, waits).code == "NEEDS_APPROVAL"
+    approved = first_ref(unlocked, LM, "knee", "medical")
+    assert unlocked.backend.read(LM, approved).code == "NEEDS_APPROVAL"
+    (card,) = [w for w in unlocked.approvals()["waiting"] if w["app"] == "lm-studio"]
+    unlocked.release(app="lm-studio", ref=approved, body_sha256=card["body_sha256"])
+    assert [w["ref"] for w in unlocked.approvals()["waiting"]] == [waits]
+    assert [g["ref"] for g in unlocked.approvals()["granted"]] == [approved]
+    markers = {gs.LEASE_MARKER, gs.BANK_MARKER, gs.TAX_MARKER, gs.MEDICAL_MARKER}
+    # Of the documents' own words, the app's answers hold those of the card that waits.
+    assert [m for m in sorted(markers) if m in every_answer(unlocked)] == [gs.TAX_MARKER]
+
+    def picture() -> dict[str, Any]:
+        usage = gate.usage()
+        state = unlocked.state()
+        return {
+            "head": gate.head(),
+            "activity": unlocked.activity(limit=200),
+            "clients": usage.clients,
+            "pools": usage.pools,
+            "documents": usage.documents,
+            "refusals": usage.refusals_day,
+            "pending": gate.pending(),
+            "approvals": gate.approvals(),
+            "cards": unlocked.approvals(),
+            "today": state["today"],
+            "cursor": state["cursor"],
+            "record": state["record"],
+            "serving": state["serving"],
+            "owner_mode_until": state["owner_mode_until"],
+            "apps": unlocked.apps()["apps"],
+            "collections": unlocked.documents()["collections"],
+            "settings": unlocked.settings(),
+            "files": gs.snapshot(unlocked.path),
+            "session": {
+                name: value
+                for name, value in vars(session).items()
+                if name not in ("trial_questions", "trial_times")
+            },
+        }
+
+    before = picture()
+    assert unlocked.state()["trial"] == {"until": "2026-11-12T09:10:00Z", "questions": 0}
+
+    # No connection is opened for a trial: not to the socket for AI apps, not to anything.
+    opened: list[socket.socket] = []
+
+    class Watched(socket.socket):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            opened.append(self)
+
+    monkeypatch.setattr(socket, "socket", Watched)
+
+    only_asked = "qqzvaskedonlyxw"  # a word that is in no document and in no record
+    questions = [
+        "When is the rent due?",
+        "income tax employment",
+        "knee physiotherapy",
+        f"overdraft {only_asked}",
+        f"{only_asked}",
+        "1450 2900",
+        "tenant landlord cooperative",
+        "Kowalski",
+        "zzzabsent",
+        "notice",
+    ]
+    answers: Counter[str] = Counter()
+    shown: list[str] = []
+    for number in range(50):
+        if number and number % TRIAL_PER_MINUTE == 0:
+            gate_clock.advance(seconds=61)
+        answer = unlocked.try_question(question=questions[number % len(questions)])
+        answers["found" if answer["found"] else answer["reason"]] += 1
+        if answer["found"]:
+            shown.append(answer["passage"]["body"])
+    assert answers == {"found": 30, "no_match": 15, "no_words": 5}
+    assert opened == []
+    monkeypatch.undo()
+
+    # The one number the app keeps: how many questions were asked since the unlock.
+    assert unlocked.state()["trial"] == {"until": "2026-11-12T09:10:00Z", "questions": 50}
+    assert (session.trial_questions, len(session.trial_times)) == (50, 10)
+    assert all(not isinstance(when, str) for when in session.trial_times)
+    # Everything else is what it was: the record and its head, the activity list entry for
+    # entry, what was counted for every app, both kinds of app and every document, what
+    # waits and what is approved, what the page is told, and every sealed file byte for byte.
+    assert picture() == before
+
+    # Neither a question nor an answer is kept: the word that only a question held is in
+    # nothing the app holds. (A title, which the app does keep, is found by the same look.)
+    held = everything_the_app_holds(unlocked)
+    assert any("tax-note-2025" in text for text in held)
+    assert not [text for text in held if only_asked in text]
+    # A trial showed text of every document, and no other answer of the app repeats any
+    # of it: they hold what they held before, the card that waits.
+    assert {m for m in markers if any(m in body for body in shown)} == markers
+    everything = every_answer(unlocked)
+    assert only_asked not in everything
+    assert [m for m in sorted(markers) if m in everything] == [gs.TAX_MARKER]
+
+    # What waited still waits and what was approved can still be used, once.
+    assert unlocked.backend.read(CLAUDE, waits).code == "NEEDS_APPROVAL"
+    assert unlocked.backend.read(LM, approved).code == "OK"
+    # A passage a trial showed is not approved by that: an app that asks for it waits.
+    lease = unlocked.try_question(question="tenant landlord cooperative")["passage"]
+    assert (lease["title"], lease["passage"]) == ("lease-2025", 1)
+    unlocked.set_grant(app="lm-studio", collection="home", mode="approve")  # from "can read"
+    lease_ref = first_ref(unlocked, LM, "tenant landlord cooperative", "home")
+    assert unlocked.backend.read(LM, lease_ref).code == "NEEDS_APPROVAL"
+    assert unlocked.verify()["verified"] is True
+
+
+def test_a_trial_needs_its_permission_before_it_searches(
+    unlocked: GateService,
+    short_store_dir: Path,
+    gate_clock: FakeClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asked = count_owner_searches(monkeypatch)
+    assert unlocked.try_question(question="rent")["found"] is True
+    gate_clock.advance(seconds=OWNER_MODE.total_seconds() - 1)
+    assert unlocked.try_question(question="rent")["found"] is True  # until the last second
+    assert asked == ["rent", "rent"]
+    gate_clock.advance(seconds=1)  # ten minutes after the passphrase: no longer
+
+    # A second vault, which holds no document, unlocked at the same moment as the first.
+    # (Beside the first one: a vault needs a short path for its socket.)
+    empty = GateService(short_store_dir.parent / "empty", clock=gate_clock, scrypt_n=gs.FAST_SCRYPT)
+    try:
+        gate_clock.advance(seconds=-OWNER_MODE.total_seconds())
+        empty.create_store(passphrase=gs.PASSPHRASE)
+        assert empty.try_question(question="rent") == {"found": False, "reason": "no_documents"}
+        assert empty.try_question(question="1450") == {"found": False, "reason": "no_words"}
+        gate_clock.advance(seconds=OWNER_MODE.total_seconds())
+        del asked[:]
+
+        # With documents and without, for words that are there, words that are not, numbers
+        # and no word at all: one answer, and the index was asked nothing.
+        said = set()
+        head = unlocked.state()["record"]["head_seq"]
+        for vault in (unlocked, empty):
+            for question in ("rent", "zzzabsent", "1450", "?!", gs.LEASE_MARKER, "x" * 600):
+                with refused(403, "trial_reauth_required") as caught:
+                    vault.try_question(question=question)
+                said.add((caught[0].status, caught[0].code, caught[0].message))
+        assert said == {(403, "trial_reauth_required", ENTER_AGAIN)}
+        assert asked == []
+        assert unlocked.state()["record"]["head_seq"] == head
+        # A question that was refused is not counted either.
+        assert unlocked.state()["trial"]["questions"] == 2
+        assert empty.state()["trial"]["questions"] == 2
+
+        # The question itself comes first: nothing to ask is 400, whatever else holds.
+        for nothing in ("", "   ", "\n\t "):
+            for vault in (unlocked, empty):
+                with refused(400, "invalid") as caught:
+                    vault.try_question(question=nothing)
+                assert caught[0].message == "Ask a question."
+        for not_text in (None, 7, ["rent"], {"question": "rent"}):
+            with refused(400, "invalid"):
+                unlocked.try_question(question=not_text)  # type: ignore[arg-type]
+
+        # A locked vault answers that it is locked, before it says anything of a permission.
+        unlocked.lock()
+        with refused(409, "locked"):
+            unlocked.try_question(question="rent")
+        with refused(400, "invalid"):
+            unlocked.try_question(question=" ")
+        assert asked == []
+        # Unlocking opens the trial again, and the count begins anew.
+        assert unlocked.unlock(passphrase=gs.PASSPHRASE)["trial"]["questions"] == 0
+        assert unlocked.try_question(question="rent")["found"] is True
+        assert asked == ["rent"]
+    finally:
+        empty.close()
+
+
+def test_the_passphrase_for_a_trial_opens_nothing_else(
+    unlocked: GateService, gate_clock: FakeClock
+) -> None:
+    expire_owner_mode(gate_clock)
+    gate_clock.advance(minutes=20)
+    before, look = unlocked.state(), picture(unlocked)
+    assert before["owner_mode_until"] == before["trial"]["until"] == "2026-11-12T09:10:00Z"
+    with refused(403, "trial_reauth_required"):
+        unlocked.try_question(question="rent")
+    with refused(403, "wrong_passphrase"):
+        unlocked.reauth(passphrase="wrong passphrase", scope="trial")
+    with refused(403, "trial_reauth_required"):
+        unlocked.try_question(question="rent")
+
+    answer = unlocked.reauth(passphrase=gs.PASSPHRASE, scope="trial")
+    assert answer == {
+        "owner_mode_until": "2026-11-12T09:10:00Z",  # where it was: over
+        "trial_until": "2026-11-12T09:40:00Z",
+    }
+    state = unlocked.state()
+    assert state["owner_mode_until"] == before["owner_mode_until"]
+    assert state["trial"] == {"until": "2026-11-12T09:40:00Z", "questions": 0}
+    assert unlocked.try_question(question="rent")["found"] is True
+    # Every change that lets more leave is refused as before.
+    for name, act in sorted(WIDENING.items()):
+        with refused(403, "reauth_required") as caught:
+            act(unlocked)
+        assert caught[0].message == ENTER_AGAIN, name
+    assert picture(unlocked) == look
+    assert state["record"]["head_seq"] == before["record"]["head_seq"]  # and nothing is recorded
+
+    # Without a scope the passphrase opens both, as it always opened owner mode.
+    gate_clock.advance(minutes=3)
+    answer = unlocked.reauth(passphrase=gs.PASSPHRASE)
+    assert answer == {
+        "owner_mode_until": "2026-11-12T09:43:00Z",
+        "trial_until": "2026-11-12T09:43:00Z",
+    }
+    unlocked.add_app(name="codex", hosted=True, destination="OpenAI")
+    assert unlocked.try_question(question="rent")["found"] is True
+    # Asked for the trial while owner mode is on, it leaves owner mode where it is: no
+    # shorter and no longer.
+    gate_clock.advance(minutes=4)
+    answer = unlocked.reauth(passphrase=gs.PASSPHRASE, scope="trial")
+    assert answer == {
+        "owner_mode_until": "2026-11-12T09:43:00Z",
+        "trial_until": "2026-11-12T09:47:00Z",
+    }
+    gate_clock.advance(minutes=6)  # owner mode is over, the trial has four minutes left
+    with refused(403, "reauth_required"):
+        unlocked.add_app(name="another-app", hosted=False)
+    assert unlocked.try_question(question="rent")["found"] is True
+    # Unlocking the unlocked vault checks the passphrase and opens both, too.
+    assert unlocked.unlock(passphrase=gs.PASSPHRASE)["trial"]["until"] == "2026-11-12T09:53:00Z"
+    unlocked.add_app(name="another-app", hosted=False)
+
+
+@pytest.mark.parametrize("scope", ["owner", "", "Trial", "trial ", "all", "widen"])
+def test_reauth_knows_one_scope(unlocked: GateService, gate_clock: FakeClock, scope: str) -> None:
+    expire_owner_mode(gate_clock)
+    before = unlocked.state()
+    session = unlocked._session
+    assert session is not None
+    monkey = pytest.MonkeyPatch()
+    checked: list[str] = []
+    monkey.setattr(session.store, "check_passphrase", lambda p: checked.append(p) or True)
+    try:
+        with refused(400, "invalid") as caught:
+            unlocked.reauth(passphrase=gs.PASSPHRASE, scope=scope)
+        assert "trial" in caught[0].message
+        assert gs.PASSPHRASE not in caught[0].message
+        assert checked == [], "a passphrase was stretched for a request that asks for nothing"
+    finally:
+        monkey.undo()
+    after = unlocked.state()
+    assert (after["owner_mode_until"], after["trial"]) == (
+        before["owner_mode_until"],
+        before["trial"],
+    )
+    with refused(403, "trial_reauth_required"):
+        unlocked.try_question(question="rent")
+    # Locked, the same request is refused for its scope first: it is the body's fault.
+    unlocked.lock()
+    with refused(400, "invalid"):
+        unlocked.reauth(passphrase=gs.PASSPHRASE, scope=scope)
+    with refused(409, "locked"):
+        unlocked.reauth(passphrase=gs.PASSPHRASE, scope="trial")
+
+
+def test_a_trial_answers_twenty_a_minute(
+    unlocked: GateService, gate_clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert TRIAL_PER_MINUTE == 20
+    asked = count_owner_searches(monkeypatch)
+
+    def too_many() -> None:
+        with refused(429, "too_many") as caught:
+            unlocked.try_question(question="rent")
+        assert caught[0].message == "Wait a moment before the next question."
+
+    for number in range(20):
+        # Every question counts, also one that finds nothing and one that asks with numbers.
+        question = ("rent", "zzzabsent", "1450")[number % 3]
+        assert "found" in unlocked.try_question(question=question)
+    assert len(asked) == 20
+    too_many()  # the 21st within a minute
+    assert len(asked) == 20, "the index was searched for a question that was refused"
+    assert unlocked.state()["trial"]["questions"] == 20
+    # The passphrase does not buy more: the count is the session's, not the permission's.
+    unlocked.reauth(passphrase=gs.PASSPHRASE, scope="trial")
+    unlocked.reauth(passphrase=gs.PASSPHRASE)
+    too_many()
+    gate_clock.advance(seconds=59)
+    too_many()
+    gate_clock.advance(seconds=1)  # a minute after the twenty: room for twenty more
+    for _ in range(20):
+        assert unlocked.try_question(question="rent")["found"] is True
+    too_many()
+    assert (len(asked), unlocked.state()["trial"]["questions"]) == (40, 40)
+
+    # Spread over the minute, it is any 60 seconds that count.
+    gate_clock.advance(seconds=60)
+    for _ in range(10):
+        unlocked.try_question(question="rent")
+    gate_clock.advance(seconds=30)
+    for _ in range(10):
+        unlocked.try_question(question="rent")
+    too_many()
+    gate_clock.advance(seconds=29)
+    too_many()
+    gate_clock.advance(seconds=1)  # the first ten are a minute old
+    for _ in range(10):
+        unlocked.try_question(question="rent")
+    too_many()
+    assert len(asked) == 70
+    # A clock that is set back makes no room.
+    gate_clock.advance(seconds=-45)
+    too_many()
+    gate_clock.advance(seconds=45)
+
+    # Twenty within ten minutes each minute: at most 200 passages for one passphrase.
+    gate_clock.advance(seconds=60)
+    unlocked.reauth(passphrase=gs.PASSPHRASE, scope="trial")
+    start = len(asked)
+    for _ in range(0, 660, 5):
+        with contextlib.suppress(ServiceError):
+            unlocked.try_question(question="rent")
+            unlocked.try_question(question="deposit")
+            unlocked.try_question(question="notice")
+        gate_clock.advance(seconds=5)
+    assert len(asked) - start == 200
+
+
+def test_trial_questions_asked_at_the_same_moment_are_counted_one_by_one(
+    unlocked: GateService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asked = count_owner_searches(monkeypatch)
+    outcomes: list[str] = []
+    together = threading.Barrier(48)
+
+    def ask() -> None:
+        together.wait(timeout=30)
+        try:
+            unlocked.try_question(question="rent")
+            outcomes.append("answered")
+        except ServiceError as error:
+            outcomes.append(error.code)
+
+    askers = [threading.Thread(target=ask) for _ in range(48)]
+    for asker in askers:
+        asker.start()
+    for asker in askers:
+        asker.join()
+    assert Counter(outcomes) == {"answered": 20, "too_many": 28}
+    assert len(asked) == 20
+    assert unlocked.state()["trial"]["questions"] == 20
+
+
+def test_a_trial_finds_what_an_app_set_to_ask_each_time_would_be_shown(
+    unlocked: GateService, gate_clock: FakeClock
+) -> None:
+    # One app that asks each time for every group of the vault, and is answered.
+    unlocked.set_serving(kinds="local")
+    for group in ("home", "tax"):
+        unlocked.set_grant(app="lm-studio", collection=group, mode="approve")
+    assert unlocked.apps()["apps"][1]["grants"] == {
+        "home": "approve",
+        "medical": "approve",
+        "tax": "approve",
+    }
+    questions = [
+        "When is the rent due?",
+        "Who is the landlord, and who the tenant?",
+        "How much is the deposit, and when do I get it back?",
+        "What does the account cost each month?",
+        "overdraft limit",
+        "How much income tax did the employer withhold?",
+        "When is the return due",
+        "knee physiotherapy sessions",
+        "What are the quiet hours in the house",
+        "May the landlord enter the flat for repairs?",
+    ]
+    titles: Counter[str] = Counter()
+    doc_ids = [
+        doc["id"] for group in unlocked.documents()["collections"] for doc in group["documents"]
+    ]
+    for question in questions:
+        gate_clock.advance(seconds=20)
+        answer = unlocked.try_question(question=question)
+        assert answer["found"] is True, question
+        assert set(answer) == {"found", "passage"}
+        passage = answer["passage"]
+        assert set(passage) == PASSAGE_FIELDS
+        # The app searches with the same words and asks for its first result ...
+        ref = first_ref(unlocked, LM, question)
+        assert unlocked.backend.read(LM, ref).code == "NEEDS_APPROVAL"
+        (card,) = [w for w in unlocked.approvals()["waiting"] if w["ref"] == ref]
+        # ... and the card that asks the owner shows the text the trial showed.
+        assert passage["body"] == card["body"], question
+        assert hashlib.sha256(passage["body"].encode()).hexdigest() == card["body_sha256"]
+        for field in ("title", "passage", "passages", "characters"):
+            assert passage[field] == card[field], (question, field)
+        assert passage["characters"] == len(passage["body"])
+        assert passage["groups"] == 3
+        assert (
+            passage["apps"] == [{"name": "lm-studio", "mode": "approve"}]
+            or (
+                card["collection"] == "tax"
+                and passage["apps"]
+                == [
+                    {"name": "claude-desktop", "mode": "approve"},
+                    {"name": "lm-studio", "mode": "approve"},
+                ]
+            )
+            or (
+                card["collection"] == "home"
+                and passage["apps"]
+                == [
+                    {"name": "claude-desktop", "mode": "read"},
+                    {"name": "lm-studio", "mode": "approve"},
+                ]
+            )
+        )
+        # It holds no ref and no name of a group: an approval is made of a ref and this text.
+        said = json.dumps({k: v for k, v in passage.items() if k not in ("body", "title")})
+        assert not REF.search("ref=" + said)
+        assert not re.search(r"d-[0-9a-f]{12}", json.dumps(answer))
+        assert not [doc_id for doc_id in doc_ids if doc_id in json.dumps(answer)]
+        titles[passage["title"]] += 1
+        unlocked.dismiss(app="lm-studio", ref=ref)
+    assert set(titles) == {"lease-2025", "bank-letter", "tax-note-2025", "referral-2026"}
+
+    # Numbers are not searched where every passage needs approval; alone they are no words.
+    for numbers in ("1450", "2900 1450", "85010112345", "31 July 2026".replace("July", "07")):
+        assert unlocked.try_question(question=numbers) == {"found": False, "reason": "no_words"}
+        assert unlocked.backend.search(LM, numbers).text.startswith("OK: no matches.")
+    assert unlocked.try_question(question="zzzabsent") == {"found": False, "reason": "no_match"}
+
+    # The words the owner listed are replaced in what a trial shows, and cannot be found.
+    first = unlocked.try_question(question="tenant landlord cooperative")["passage"]
+    assert (first["title"], first["passage"], first["replaced"]) == ("lease-2025", 1, 2)
+    assert first["body"].count("[REDACTED]") == 2
+    assert "Kowalski" not in first["body"]
+    assert gs.LISTED_NUMBER not in first["body"]
+    for listed in ("Kowalski", "jan kowalski", gs.LISTED_NAME.upper()):
+        assert unlocked.try_question(question=listed) == {"found": False, "reason": "no_match"}
+    everything = json.dumps(
+        [unlocked.try_question(question=q) for q in ("tenant", "dear customer letter", "Jan")]
+    )
+    assert "owalski" not in everything
+    assert gs.LISTED_NUMBER not in everything
+
+    # A question is cut to 500 characters, as an app's query is.
+    long_question = "zzz " * 124 + "rent overdraft"
+    cut = unlocked.try_question(question=long_question)["passage"]
+    assert cut["words"] == ["rent"]
+    assert REF.findall(unlocked.backend.search(LM, long_question).text)[0] == first_ref(
+        unlocked, LM, "rent"
+    )
+    assert unlocked.try_question(question="   rent\n")["passage"]["body"] == cut["body"]
+
+
+def test_what_a_trial_shows_can_be_approved_for_an_app_that_did_not_ask(
+    unlocked: GateService, gate_clock: FakeClock
+) -> None:
+    # A limit that the threat model states ("The trial"), pinned here so that the sentence
+    # stays true or is changed with the code: an approval is bound to an app, a passage and
+    # the hash of its text, and is not asked whether the passage waits.
+    shown = unlocked.try_question(question="income tax employment")["passage"]
+    assert shown["apps"] == [{"name": "claude-desktop", "mode": "approve"}]
+    assert unlocked.approvals() == {"waiting": [], "granted": []}
+    expire_owner_mode(gate_clock)  # no passphrase is at hand any more
+    # The answer names no passage. The list of documents does: its id, and the number.
+    (document,) = [
+        doc
+        for group in unlocked.documents()["collections"]
+        for doc in group["documents"]
+        if doc["title"] == shown["title"]
+    ]
+    ref = f"{document['id']}.{shown['passage']}"
+    proof = hashlib.sha256(shown["body"].encode()).hexdigest()
+    head = unlocked.state()["record"]["head_seq"]
+    # Not for an app that has no access to the group, and not with another text.
+    with refused(404, "not_found"):
+        unlocked.release(app="lm-studio", ref=ref, body_sha256=proof)
+    with refused(409, "changed"):
+        unlocked.release(app="claude-desktop", ref=ref, body_sha256=proof[::-1])
+    assert unlocked.state()["record"]["head_seq"] == head
+    # For the app that could ask: approved, without owner mode, although nothing waited.
+    unlocked.release(app="claude-desktop", ref=ref, body_sha256=proof)
+    assert [g["ref"] for g in unlocked.approvals()["granted"]] == [ref]
+    # It is in the record like every approval, and nothing has left yet.
+    newest = unlocked.activity(limit=1)["items"][0]
+    assert newest["kind"] == "approval", newest
+    assert "claude-desktop" in newest["summary"], newest
+    assert unlocked.state()["today"]["releases"] == 0
+    reply = unlocked.backend.read(CLAUDE, ref)
+    assert (reply.code, reply.released) == ("OK", True)
+    assert gs.TAX_MARKER in reply.text
+    assert unlocked.backend.read(CLAUDE, ref).code == "NEEDS_APPROVAL"  # used once
+
+
+def test_a_trial_says_who_could_ask_for_the_document(
+    short_store_dir: Path, gate_clock: FakeClock
+) -> None:
+    # The sample vault, with two things more: a group that no app was given, and for the
+    # hosted app a stored grant of a group that is closed to hosted apps.
+    policy = gs.sample_policy()
+    policy["collections"][NOBODYS] = {"note": "", "allow_hosted": True, "show_titles": False}
+    policy["clients"]["claude-desktop"]["grants"]["medical"] = {"mode": "read"}
+    store = gs.make_store(short_store_dir, clock=gate_clock, policy=False)
+    store.set_policy_json(policy, by="test")
+    gs.add_text(store, NOBODYS, "roster", "The zebrafinch roster for the night shift in March.\n")
+    store.close()
+    service = GateService(short_store_dir, clock=gate_clock, scrypt_n=gs.FAST_SCRYPT)
+    try:
+        service.unlock(passphrase=gs.PASSPHRASE)
+
+        def asked(question: str) -> dict[str, Any]:
+            gate_clock.advance(seconds=5)  # twelve a minute: inside what a session is answered
+            answer = service.try_question(question=question)
+            assert answer["found"] is True, question
+            return dict(answer["passage"])
+
+        claude = {"name": "claude-desktop", "mode": "read"}
+        lm = {"name": "lm-studio", "mode": "read"}
+        # Nobody was given the group: no app can ask for this document.
+        roster = asked("zebrafinch roster")
+        assert (roster["title"], roster["apps"], roster["groups"]) == ("roster", [], 4)
+        # The answer does not name the group, here or anywhere.
+        for question in ("zebrafinch roster", "rent", "income tax employment", "knee"):
+            said = json.dumps(asked(question))
+            assert not [name for name in (NOBODYS, "medical") if name in said], question
+        # "Can read" for both apps, in the order the apps are listed in.
+        lease = asked("rent")
+        assert (lease["title"], lease["apps"]) == ("lease-2025", [claude, lm])
+        # "Ask me each time" for one app.
+        tax = asked("income tax employment")
+        assert tax["apps"] == [{"name": "claude-desktop", "mode": "approve"}]
+        # The group is closed to apps that send text to a provider: the hosted app is left
+        # out although a grant of it is stored, and the local app is named.
+        referral = asked("knee physiotherapy")
+        assert referral["title"] == "referral-2026"
+        assert referral["apps"] == [{"name": "lm-studio", "mode": "approve"}]
+        assert service.backend.read(CLAUDE, f"{referral_id(service)}.1").code == "NOT_FOUND"
+
+        # It follows the settings in force: a grant given, changed, taken away; a group
+        # opened; an app that is registered and paused (the settings say it can ask).
+        service.set_grant(app="lm-studio", collection=NOBODYS, mode="approve")
+        assert asked("roster")["apps"] == [{"name": "lm-studio", "mode": "approve"}]
+        service.set_grant(app="lm-studio", collection=NOBODYS, mode="read")
+        service.set_grant(app="claude-desktop", collection=NOBODYS, mode="approve")
+        assert asked("roster")["apps"] == [{"name": "claude-desktop", "mode": "approve"}, lm]
+        service.set_serving(paused=["claude-desktop"])
+        assert asked("roster")["apps"] == [{"name": "claude-desktop", "mode": "approve"}, lm]
+        service.set_grant(app="lm-studio", collection=NOBODYS, mode="none")
+        service.remove_app(name="claude-desktop")
+        assert asked("roster")["apps"] == []
+        assert asked("rent")["apps"] == [lm]
+
+        # The words of the question that the passage holds, as typed and in its order.
+        knee = asked("What about the Knee, and PHYSIOTHERAPY sessions (knee!) in 2026 or 88?")
+        assert knee["words"] == ["about", "the", "Knee", "PHYSIOTHERAPY", "sessions", "in"]
+        assert asked("is")["words"] == ["is"]  # found by "is" alone, and said so
+        assert asked("Is the RENT 1450 EUR?")["words"] == ["Is", "the", "RENT", "EUR"]
+        # How many groups the vault has, also one that holds a document and has no settings.
+        service.add_document(collection="letters", name="card.txt", data=b"A postcard from Gdynia.")
+        assert asked("postcard")["groups"] == 5
+        assert asked("postcard")["apps"] == []
+    finally:
+        service.close()
+
+
+NOBODYS = "grp-qzx7"  # a group of the vault that no app was given
+
+
+def referral_id(service: GateService) -> str:
+    (group,) = [g for g in service.documents()["collections"] if g["name"] == "medical"]
+    (document,) = group["documents"]
+    return str(document["id"])
+
+
+def test_a_trial_that_cannot_show_a_passage_is_unavailable(
+    unlocked: GateService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wdva.gate import core as gate_core
+
+    def unsettled(*args: Any, **kwargs: Any) -> str:
+        raise ValueError("text does not settle")
+
+    head = unlocked.state()["record"]["head_seq"]
+    with monkeypatch.context() as patch:
+        patch.setattr(gate_core, "render", unsettled)
+        with refused(503, "unavailable") as caught:
+            unlocked.try_question(question="rent")
+        assert caught[0].message == "The passage cannot be shown."
+        assert unlocked.try_question(question="zzzabsent") == {
+            "found": False,
+            "reason": "no_match",
+        }
+    assert unlocked.try_question(question="rent")["found"] is True
+    state = unlocked.state()
+    assert (state["record"]["head_seq"], state["trial"]["questions"]) == (head, 3)
+    # A vault that locked itself in the meantime says so, and nothing else.
+    session = unlocked._session
+    assert session is not None
+    session.gate.close("timer")
+    with refused(409, "locked"):
+        unlocked.try_question(question="rent")
+
+
+def test_a_demo_answers_a_trial_like_any_vault(
+    short_store_dir: Path, gate_clock: FakeClock
+) -> None:
+    shown = "a-passphrase-everybody-may-see"
+    gs.make_store(short_store_dir, passphrase=shown, clock=gate_clock).close()
+    service = GateService(
+        short_store_dir, demo=True, demo_passphrase=shown, clock=gate_clock, scrypt_n=gs.FAST_SCRYPT
+    )
+    try:
+        service.unlock(passphrase=shown)
+        assert service.try_question(question="rent")["passage"]["title"] == "lease-2025"
+        gate_clock.advance(minutes=10)
+        with refused(403, "trial_reauth_required"):
+            service.try_question(question="rent")
+        service.reauth(passphrase=shown, scope="trial")
+        assert service.try_question(question="rent")["found"] is True
+        assert shown not in json.dumps(service.try_question(question="passphrase everybody rent"))
+    finally:
+        service.close()
 
 
 # -- which apps are answered ---------------------------------------------------------------
@@ -1335,6 +2056,8 @@ def test_the_cursor_grows_with_everything_the_interface_shows(
         return seen[-1] > seen[-2]
 
     assert not grew()  # nothing happened: nothing to reload
+    assert unlocked.try_question(question="rent")["found"] is True
+    assert not grew()  # a trial is nothing that happened: no list has anything new
     unlocked.backend.search(CLAUDE, "rent")
     assert grew()
     ref = first_ref(unlocked, CLAUDE, "income tax", "tax")
@@ -1351,6 +2074,8 @@ def test_the_cursor_grows_with_everything_the_interface_shows(
     assert grew()
     unlocked.reauth(passphrase=gs.PASSPHRASE)
     assert grew()
+    unlocked.reauth(passphrase=gs.PASSPHRASE, scope="trial")
+    assert grew()  # the state says until when a trial question is answered
     unlocked.lock()
     assert grew()
 
@@ -1577,11 +2302,14 @@ def test_listed_strings_are_never_returned(unlocked: GateService) -> None:
 def test_the_passphrase_is_in_no_answer_and_no_error(vault: GateService) -> None:
     said = [json.dumps(vault.unlock(passphrase=gs.PASSPHRASE))]
     said.append(json.dumps(vault.reauth(passphrase=gs.PASSPHRASE)))
+    said.append(json.dumps(vault.reauth(passphrase=gs.PASSPHRASE, scope="trial")))
     said.append(every_answer(vault))
+    said.append(json.dumps(vault.try_question(question="When is the rent due?")))
     for wrong in (gs.PASSPHRASE[:-1], gs.PASSPHRASE.upper()):
-        with refused(403, "wrong_passphrase") as caught:
-            vault.reauth(passphrase=wrong)
-        said.append(caught[0].message)
+        for scope in (None, "trial"):
+            with refused(403, "wrong_passphrase") as caught:
+                vault.reauth(passphrase=wrong, scope=scope)
+            said.append(caught[0].message)
     said.append(json.dumps(vault.lock()))
     with refused(403, "wrong_passphrase") as caught:
         vault.unlock(passphrase=gs.PASSPHRASE[:-1])
