@@ -6,7 +6,11 @@ import contextlib
 import importlib.util
 import itertools
 import json
+import os
 import re
+import shlex
+import shutil
+import stat
 import subprocess
 import sys
 import threading
@@ -20,7 +24,9 @@ import pytest
 
 from wdva._version import __version__
 from wdva.errors import WDVAError
-from wdva.gate import brand, extract, messages
+from wdva.gate import brand, extract, hostcheck, hostconfig, messages
+from wdva.gate import store as gate_store
+from wdva.gate.app import main as app_main
 from wdva.gate.app import service as service_module
 from wdva.gate.app.api import Service, ServiceError
 from wdva.gate.app.service import NOT_REGISTERED, OWNER_MODE, GateService
@@ -80,6 +86,19 @@ def unlocked(vault: GateService) -> GateService:
     return vault
 
 
+@pytest.fixture
+def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A home directory that belongs to the test, which does not exist yet.
+
+    Whatever looks for the settings file of another program looks here: no test
+    reads or writes what such a program keeps in the real home directory.
+    """
+    place = tmp_path / "home of the test"
+    monkeypatch.setenv("HOME", str(place))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    return place
+
+
 def first_ref(service: GateService, caller: Caller, query: str, collection: str = "") -> str:
     reply = service.backend.search(caller, query, collection)
     assert reply.code == "OK", reply.text
@@ -122,6 +141,9 @@ def test_state_without_a_store(service: GateService, short_store_dir: Path) -> N
     assert state["demo"] is False
     for key in (*UNLOCKED_ONLY, "record", "warnings"):
         assert state[key] is None, key
+    # No vault, so no view of it; the command to start again is there in every form.
+    assert state["interface"] is None
+    assert state["launch"] == {"command": None, "port_fixed": False}
     assert not short_store_dir.exists(), "asking for the state created something"
 
 
@@ -143,10 +165,14 @@ def test_state_locked_and_unlocked(vault: GateService, gate_clock: FakeClock) ->
     assert locked["warnings"] == []
     for key in UNLOCKED_ONLY:
         assert locked[key] is None, key
+    # A vault from before the two views: Pro, set up, and nothing kept about it.
+    assert locked["interface"] == {"view": "pro", "setup": "done", "stored": False}
+    assert locked["launch"] == {"command": None, "port_fixed": False}
 
     start = gate_clock.now
     state = vault.unlock(passphrase=gs.PASSPHRASE)
     assert state["locked"] is False
+    assert (state["interface"], state["launch"]) == (locked["interface"], locked["launch"])
     assert state["unlocked_at"] == "2026-11-12T09:00:00Z"
     assert state["locks_at"] == "2026-11-12T17:00:00Z"
     assert state["owner_mode_until"] == "2026-11-12T09:10:00Z"
@@ -348,6 +374,7 @@ LOCKED_CALLS: dict[str, Callable[[GateService], Any]] = {
     "set_grant": lambda s: s.set_grant(app="claude-desktop", collection="home", mode="none"),
     "set_app_limits": lambda s: s.set_app_limits(name="claude-desktop", limits={}),
     "connect": lambda s: s.connect(name="claude-desktop"),
+    "connect_check": lambda s: s.connect_check(name="claude-desktop"),
     "settings": lambda s: s.settings(),
     "set_settings": lambda s: s.set_settings(defaults={"chars_per_day": 1}),
     "add_replaced_string": lambda s: s.add_replaced_string(text="Okafor"),
@@ -355,12 +382,18 @@ LOCKED_CALLS: dict[str, Callable[[GateService], Any]] = {
 
 
 def test_the_locked_calls_cover_the_service() -> None:
-    always = {"state", "create_store", "unlock", "lock"}
-    assert set(LOCKED_CALLS) | always == {n for n in vars(Service) if not n.startswith("_")}
+    # Which view the owner uses is not sealed and can be kept while the vault is locked.
+    always = {"state", "create_store", "unlock", "lock", "set_interface"}
+    # Asking the played app again exists in a demo only: a real vault has no such address,
+    # locked or not (test_demo_again_is_not_there_outside_a_demo).
+    demo_only = {"demo_again"}
+    every = {n for n in vars(Service) if not n.startswith("_")}
+    assert set(LOCKED_CALLS) | always | demo_only == every
+    assert not set(LOCKED_CALLS) & (always | demo_only)
 
 
 @pytest.mark.parametrize("name", sorted(LOCKED_CALLS))
-def test_a_locked_vault_answers_409_locked(vault: GateService, name: str) -> None:
+def test_a_locked_vault_answers_409_locked(vault: GateService, name: str, home: Path) -> None:
     before = gs.snapshot(vault.path)
     with refused(409, "locked"):
         LOCKED_CALLS[name](vault)
@@ -527,11 +560,137 @@ def test_narrowing_needs_no_owner_mode(unlocked: GateService, gate_clock: FakeCl
     added = unlocked.add_document(collection="archive", name="old.txt", data=b"An old letter.")
     unlocked.remove_document(id=added["document"]["id"])
     unlocked.remove_collection(name="archive")
-    unlocked.set_serving(kinds="local")
-    unlocked.set_serving(kinds="hosted", paused=["claude-desktop"])
+    unlocked.set_serving(kinds="hosted")  # what is in force already, now as the owner's choice
+    unlocked.set_serving(paused=["claude-desktop"])
+    unlocked.set_serving(kinds="local", paused=["claude-desktop", "lm-studio"])
     unlocked.remove_app(name="lm-studio")
     assert unlocked.verify()["verified"] is True
     assert unlocked.lock()["locked"] is True
+
+
+def _pause(*names: str) -> Callable[[GateService], Any]:
+    return lambda s: s.set_serving(paused=list(names))
+
+
+# What makes the session answer an app that it did not answer: how the session is set
+# up while owner mode lasts, what is tried after it ended, and who is answered then.
+ANSWERING_MORE: dict[
+    str, tuple[Callable[[GateService], Any], Callable[[GateService], Any], tuple[str, str]]
+] = {
+    "an app is no longer paused": (_pause("claude-desktop"), _pause(), ("OK", "NOT_ALLOWED")),
+    "one app is paused in place of another": (
+        lambda s: s.set_serving(kinds="both", paused=["lm-studio"]),
+        _pause("claude-desktop"),
+        ("NOT_ALLOWED", "OK"),
+    ),
+    "local apps in place of hosted ones": (
+        lambda s: None,
+        lambda s: s.set_serving(kinds="local"),
+        ("NOT_ALLOWED", "OK"),
+    ),
+    "hosted apps in place of local ones": (
+        lambda s: s.set_serving(kinds="local"),
+        lambda s: s.set_serving(kinds="hosted"),
+        ("OK", "NOT_ALLOWED"),
+    ),
+    "the other kind, and a pause that hides it": (
+        lambda s: None,
+        lambda s: s.set_serving(kinds="local", paused=["claude-desktop"]),
+        ("NOT_ALLOWED", "OK"),
+    ),
+    "the last hosted app is removed": (
+        lambda s: None,
+        lambda s: s.remove_app(name="claude-desktop"),
+        ("NOT_ALLOWED", "OK"),
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(ANSWERING_MORE))
+def test_answering_an_app_again_needs_owner_mode(
+    unlocked: GateService, gate_clock: FakeClock, name: str
+) -> None:
+    prepare, act, then = ANSWERING_MORE[name]
+
+    def answered() -> tuple[str, str]:
+        return unlocked.backend.status(CLAUDE).code, unlocked.backend.status(LM).code
+
+    prepare(unlocked)
+    answered_before = answered()  # asking leaves a record, so the picture is taken after it
+    before = picture(unlocked)
+    assert answered_before != then
+    expire_owner_mode(gate_clock)
+    with refused(403, "reauth_required"):
+        act(unlocked)
+    assert picture(unlocked) == before, "a refused change changed something"
+    assert answered() == answered_before, "an app is answered that the owner had stopped"
+
+    unlocked.reauth(passphrase=gs.PASSPHRASE)
+    act(unlocked)
+    assert answered() == then
+
+
+def test_an_app_that_is_not_answered_gets_no_text_without_the_passphrase(
+    unlocked: GateService, gate_clock: FakeClock
+) -> None:
+    ref = first_ref(unlocked, CLAUDE, "lease")
+    unlocked.set_serving(paused=["claude-desktop"])
+    expire_owner_mode(gate_clock)
+    for attempt in ({"paused": []}, {"kinds": "local"}, {"kinds": "hosted", "paused": []}):
+        with refused(403, "reauth_required"):
+            unlocked.set_serving(**attempt)
+        for caller in (CLAUDE, LM):
+            reply = unlocked.backend.read(caller, ref)
+            assert (reply.code, reply.released) == ("NOT_ALLOWED", False)
+            assert gs.LEASE_MARKER not in reply.text
+
+
+def test_one_passphrase_is_checked_at_a_time(
+    unlocked: GateService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Checking a passphrase stretches it, which takes a lot of memory on purpose. Checks
+    # that arrive together must wait for one another, or their memory adds up.
+    session = unlocked._session
+    assert session is not None
+    real = session.store.check_passphrase
+    watch = threading.Lock()
+    inside: list[int] = []
+    most: list[int] = []
+
+    def check(passphrase: str) -> bool:
+        with watch:
+            inside.append(1)
+            most.append(len(inside))
+        try:
+            time.sleep(0.02)
+            return real(passphrase)
+        finally:
+            with watch:
+                inside.pop()
+
+    monkeypatch.setattr(session.store, "check_passphrase", check)
+    outcomes: list[str] = []
+
+    def ask(number: int) -> None:
+        try:
+            if number == 0:
+                unlocked.reauth(passphrase=gs.PASSPHRASE)
+            elif number % 2:
+                unlocked.reauth(passphrase=f"wrong passphrase {number}")
+            else:  # unlocking an unlocked vault checks the passphrase as well
+                unlocked.unlock(passphrase=f"wrong passphrase {number}")
+            outcomes.append("accepted")
+        except ServiceError as error:
+            outcomes.append(error.code)
+
+    askers = [threading.Thread(target=ask, args=(number,)) for number in range(8)]
+    for asker in askers:
+        asker.start()
+    for asker in askers:
+        asker.join()
+    assert len(most) == 8
+    assert max(most) == 1, "several passphrases were being stretched at the same moment"
+    assert sorted(outcomes) == ["accepted"] + ["wrong_passphrase"] * 7
 
 
 # -- which apps are answered ---------------------------------------------------------------
@@ -579,6 +738,11 @@ def test_serving_choice(unlocked: GateService, gate_clock: FakeClock) -> None:
     assert answered() == ("OK", "NOT_ALLOWED")
     apps = {app["name"]: app for app in unlocked.apps()["apps"]}
     assert (apps["lm-studio"]["paused"], apps["lm-studio"]["served"]) == (True, False)
+    # Pausing took no passphrase. Answering the app again lets more leave, and does.
+    with refused(403, "reauth_required"):
+        unlocked.set_serving(paused=[])
+    assert answered() == ("OK", "NOT_ALLOWED")
+    unlocked.reauth(passphrase=gs.PASSPHRASE)
     assert unlocked.set_serving(paused=[])["serving"]["local"] == ["lm-studio"]
 
     # A new session starts without the choice.
@@ -1421,7 +1585,15 @@ def test_apps_with_their_use(unlocked: GateService, gate_clock: FakeClock) -> No
         {"name": "tax", "allow_hosted": True},
     ]
     ids = [host["id"] for host in answer["known"]]
-    assert ids[:5] == ["claude-desktop", "claude-code", "codex", "openclaw", "generic"]
+    assert len(ids) == 10
+    assert ids[:6] == [
+        "claude-desktop",
+        "claude-code",
+        "chatgpt-desktop",
+        "codex",
+        "openclaw",
+        "generic",
+    ]
     assert set(answer["known"][0]) == {
         "id",
         "label",
@@ -1526,7 +1698,13 @@ def test_settings(unlocked: GateService) -> None:
         "per_document": {"max_chars": 8000, "max_fraction": 0.5},
         "approval": {"ttl_minutes": 10},
         "replaced_strings": 2,
-        "ceilings": {"chars_per_call": 8000, "ttl_minutes": 60, "replaced_strings": 200},
+        "ceilings": {
+            "chars_per_call": 8000,
+            "ttl_minutes": 60,
+            "replaced_strings": 200,
+            "passage_chars": 800,
+        },
+        "changed_from_new": [],
     }
     changed = unlocked.set_settings(
         defaults={"chars_per_day": 30000},
@@ -1541,6 +1719,7 @@ def test_settings(unlocked: GateService) -> None:
     assert changed["groups"]["local"] == settings["groups"]["local"]
     assert changed["per_document"] == {"max_chars": 8000, "max_fraction": 1.0}
     assert changed["approval"] == {"ttl_minutes": 60}
+    assert changed["changed_from_new"] == ["defaults", "groups", "per_document", "approval"]
     assert unlocked.settings() == changed
     assert unlocked.set_settings() == changed  # nothing given: nothing changes, no new record
     for bad in (
@@ -1967,6 +2146,36 @@ def test_a_passage_past_the_free_allowance_waits_although_the_app_may_read(
     assert waiting["document"]["after"] > waiting["document"]["free"]
 
 
+@pytest.mark.parametrize("limit", [500, 2000, 2282])
+def test_a_small_daily_limit_does_not_switch_asking_off(unlocked: GateService, limit: int) -> None:
+    # "Ask me each time" must ask, whatever the app's limit is. Whether the passage
+    # would fit is said to the owner on its card, not decided before the owner sees it.
+    unlocked.set_app_limits(name="claude-desktop", limits={"chars_per_day": limit})
+    ref = first_ref(unlocked, CLAUDE, "income tax", "tax")
+    app = unlocked.apps()["apps"][0]
+    assert app["name"] == "claude-desktop"
+    assert 0 < app["usage"]["chars_day"] < limit  # the search left room, and the app is told so
+    reply = unlocked.backend.read(CLAUDE, ref)
+    assert reply.code == "NEEDS_APPROVAL", reply.text
+    assert gs.TAX_MARKER not in reply.text
+    (waiting,) = unlocked.approvals()["waiting"]
+    assert (waiting["app"], waiting["ref"], waiting["mode"]) == ("claude-desktop", ref, "approve")
+    left = limit - app["usage"]["chars_day"]
+    assert waiting["fits_limits"] is (waiting["result_characters"] <= left)
+    newest = unlocked.activity(limit=1)["items"][0]
+    assert (newest["kind"], newest["code"]) == ("refusal", "NEEDS_APPROVAL")
+
+    unlocked.release(app="claude-desktop", ref=ref, body_sha256=waiting["body_sha256"])
+    reply = unlocked.backend.read(CLAUDE, ref)
+    if waiting["fits_limits"]:
+        assert (reply.code, reply.released) == ("OK", True)
+        assert gs.TAX_MARKER in reply.text
+    else:
+        # Approved, but longer than what is left: the limit holds for approved text too.
+        assert (reply.code, reply.released) == ("OVER_LIMIT", False)
+        assert gs.TAX_MARKER not in reply.text
+
+
 def test_connect_says_when_the_command_cannot_start(
     unlocked: GateService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1995,3 +2204,1151 @@ def test_connect_says_when_the_command_cannot_start(
     # A product that starts nothing has nothing to try.
     web = unlocked.connect(name="claude-desktop", host="chatgpt-web")
     assert web["ready"]["message"] is None
+
+
+# -- which view the owner uses: a small file beside the vault, not sealed --------------------
+
+NO_FILE = {"view": "pro", "setup": "done", "stored": False}
+GOOD_FILE = b'{"view": "basic", "setup": "open"}'
+
+
+def interface_file(store: Path) -> Path:
+    return store / "run" / "interface.json"
+
+
+def record_and_files(service: GateService) -> tuple[Any, ...]:
+    """The head of the record and what the folder holds of sealed files, as the state says."""
+    state = service.state()
+    return (
+        state["record"]["head_seq"],
+        state["record"]["head_hash"],
+        state["store"]["sealed_files"],
+        state["store"]["sealed_bytes"],
+    )
+
+
+def test_creating_a_vault_writes_the_interface_file(
+    service: GateService, short_store_dir: Path, gate_clock: FakeClock
+) -> None:
+    assert service.state()["interface"] is None  # no vault yet
+    state = service.create_store(passphrase=gs.PASSPHRASE)
+    path = interface_file(short_store_dir)
+    assert path.read_bytes() == GOOD_FILE + b"\n"
+    assert json.loads(path.read_bytes()) == {"view": "basic", "setup": "open"}
+    assert stat.S_ISREG(path.lstat().st_mode)
+    assert stat.S_IMODE(path.lstat().st_mode) == 0o600
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert state["interface"] == {"view": "basic", "setup": "open", "stored": True}
+    # Nothing was left beside it: the lock, the socket of the unlocked vault, and the file.
+    assert sorted(item.name for item in path.parent.iterdir()) == [
+        "gate.sock",
+        "interface.json",
+        "lock",
+    ]
+    # It is not a sealed file and is not counted as one.
+    assert state["store"]["sealed_files"] == len(gs.sealed_files(short_store_dir))
+    assert "run" not in {
+        item.relative_to(short_store_dir).parts[0] for item in gs.sealed_files(short_store_dir)
+    }
+    # Locked, the page is told the same: it has to know the view before the passphrase.
+    assert service.lock()["interface"] == state["interface"]
+    assert service.unlock(passphrase=gs.PASSPHRASE)["interface"] == state["interface"]
+
+    # A vault created by an app that was started with a view starts in that view.
+    other = short_store_dir.parent / "other"
+    started_in_pro = GateService(other, clock=gate_clock, scrypt_n=gs.FAST_SCRYPT, view="pro")
+    try:
+        assert not other.exists(), "a start wrote something where no vault is"
+        created = started_in_pro.create_store(passphrase=gs.PASSPHRASE)
+        assert created["interface"] == {"view": "pro", "setup": "open", "stored": True}
+        assert json.loads(interface_file(other).read_bytes()) == {"view": "pro", "setup": "open"}
+    finally:
+        started_in_pro.close()
+    with pytest.raises(ValueError, match="view"):
+        GateService(other, view="expert")
+
+
+def test_a_vault_without_the_file_is_pro_done_and_not_stored(
+    vault: GateService, short_store_dir: Path, home: Path
+) -> None:
+    path = interface_file(short_store_dir)
+    assert not path.exists()  # a vault made by the engine alone
+    assert vault.state()["interface"] == NO_FILE
+    assert vault.unlock(passphrase=gs.PASSPHRASE)["interface"] == NO_FILE
+    # Nothing writes it: not unlocking, not the state, not any call that only reads.
+    every_answer(vault)
+    vault.connect_check(name="claude-desktop")
+    vault.reauth(passphrase=gs.PASSPHRASE)
+    vault.lock()
+    vault.state()
+    vault.unlock(passphrase=gs.PASSPHRASE)
+    assert vault.state()["interface"] == NO_FILE
+    assert sorted(item.name for item in path.parent.iterdir()) == ["gate.sock", "lock"]
+    # Until the owner presses the switch. Then the vault counts as set up, which it is.
+    state = vault.set_interface(view="basic")
+    assert state["interface"] == {"view": "basic", "setup": "done", "stored": True}
+    assert json.loads(path.read_bytes()) == {"view": "basic", "setup": "done"}
+
+
+def _padded(size: int) -> bytes:
+    return GOOD_FILE + b" " * (size - len(GOOD_FILE))
+
+
+BROKEN_FILES: dict[str, bytes] = {
+    "not JSON": b"view=basic\nsetup=open\n",
+    "an empty file": b"",
+    "a list": b'["basic", "open"]',
+    "a text": b'"basic"',
+    "a third key": b'{"view": "basic", "setup": "open", "note": "mine"}',
+    "one key only": b'{"view": "basic"}',
+    "another view": b'{"view": "expert", "setup": "open"}',
+    "another word for setup": b'{"view": "basic", "setup": "later"}',
+    "a view that is not text": b'{"view": ["basic"], "setup": "open"}',
+    "a key twice": b'{"view": "basic", "view": "pro", "setup": "open"}',
+    "not UTF-8": GOOD_FILE + b"\xff",
+    "larger than 1 KiB": _padded(2048),
+    "one byte more than 1 KiB": _padded(1025),
+}
+NOT_FILES = ["a folder", "a link to a good file", "a link to nothing", "a named pipe"]
+
+
+@pytest.mark.parametrize("what", [*BROKEN_FILES, *NOT_FILES])
+def test_a_broken_interface_file_counts_as_none(
+    what: str, short_store_dir: Path, gate_clock: FakeClock, tmp_path: Path
+) -> None:
+    gs.make_store(short_store_dir, clock=gate_clock).close()
+    path = interface_file(short_store_dir)
+    elsewhere = tmp_path / "elsewhere.json"
+    if what in BROKEN_FILES:
+        path.write_bytes(BROKEN_FILES[what])
+    elif what == "a folder":
+        path.mkdir()
+        (path / "kept.txt").write_text("in the way", encoding="utf-8")
+    elif what == "a link to a good file":
+        elsewhere.write_bytes(GOOD_FILE)
+        path.symlink_to(elsewhere)
+    elif what == "a link to nothing":
+        path.symlink_to(tmp_path / "nothing-here.json")
+    else:
+        os.mkfifo(path)
+    in_place = path.lstat()
+
+    answers: list[Any] = []
+
+    def start_and_unlock() -> None:
+        service = GateService(short_store_dir, clock=gate_clock, scrypt_n=gs.FAST_SCRYPT)
+        try:
+            answers.append(service.state()["interface"])
+            state = service.unlock(passphrase=gs.PASSPHRASE)  # never a reason not to unlock
+            answers.append((state["locked"], state["interface"]))
+            answers.append(service.lock()["interface"])
+        finally:
+            service.close()
+
+    # In a thread, so that a read which waits for a writer of the pipe fails the test
+    # instead of holding it up.
+    thread = threading.Thread(target=start_and_unlock, daemon=True)
+    thread.start()
+    thread.join(timeout=60)
+    assert not thread.is_alive(), "the service waited for whatever lies in the file's place"
+    assert answers == [NO_FILE, (False, NO_FILE), NO_FILE]
+    # What lay there was looked at and left as it was.
+    after = path.lstat()
+    assert (after.st_mode, after.st_size, after.st_mtime_ns) == (
+        in_place.st_mode,
+        in_place.st_size,
+        in_place.st_mtime_ns,
+    )
+
+    # The owner presses the switch: a good file takes its place, by one rename ...
+    service = GateService(short_store_dir, clock=gate_clock, scrypt_n=gs.FAST_SCRYPT)
+    try:
+        if what == "a folder":
+            # ... except over a folder, which is not replaced. The page is told so in a
+            # sentence, and the vault goes on working.
+            with refused(503, "unavailable") as caught:
+                service.set_interface(view="basic")
+            assert caught[0].message.startswith("The choice could not be kept: ")
+            assert caught[0].message.endswith(".")
+            assert str(short_store_dir) not in caught[0].message
+            assert (path / "kept.txt").read_text(encoding="utf-8") == "in the way"
+            assert sorted(item.name for item in path.parent.iterdir()) == ["interface.json", "lock"]
+            assert service.state()["interface"] == NO_FILE
+            assert service.unlock(passphrase=gs.PASSPHRASE)["locked"] is False
+            return
+        state = service.set_interface(view="basic")
+        assert state["interface"] == {"view": "basic", "setup": "done", "stored": True}
+        assert stat.S_ISREG(path.lstat().st_mode)
+        assert stat.S_IMODE(path.lstat().st_mode) == 0o600
+        assert json.loads(path.read_bytes()) == {"view": "basic", "setup": "done"}
+        if what == "a link to a good file":
+            # The link was replaced, not followed: nothing outside the vault's folder changed.
+            assert elsewhere.read_bytes() == GOOD_FILE
+        assert not (tmp_path / "nothing-here.json").exists()
+    finally:
+        service.close()
+
+
+def test_a_folder_that_holds_only_the_interface_file_is_still_empty_for_a_new_vault(
+    service: GateService, short_store_dir: Path
+) -> None:
+    # What a creation that was broken off, or a hand, can leave: the file and no vault.
+    (short_store_dir / "run").mkdir(parents=True)
+    for folder in (short_store_dir, short_store_dir / "run"):
+        folder.chmod(0o700)  # as the app makes them
+    interface_file(short_store_dir).write_bytes(b'{"view": "pro", "setup": "done"}')
+    assert service.state()["interface"] is None  # no vault, so no view of it
+    with refused(404, "not_found"):
+        service.set_interface(view="basic")
+    state = service.create_store(passphrase=gs.PASSPHRASE)
+    # The file was no reason to refuse the place, and the new vault starts as a new vault.
+    assert state["interface"] == {"view": "basic", "setup": "open", "stored": True}
+    assert interface_file(short_store_dir).read_bytes() == GOOD_FILE + b"\n"
+
+
+def test_a_file_of_exactly_one_kibibyte_still_counts(
+    short_store_dir: Path, gate_clock: FakeClock
+) -> None:
+    gs.make_store(short_store_dir, clock=gate_clock).close()
+    interface_file(short_store_dir).write_bytes(_padded(1024))
+    service = GateService(short_store_dir, clock=gate_clock, scrypt_n=gs.FAST_SCRYPT)
+    assert service.state()["interface"] == {"view": "basic", "setup": "open", "stored": True}
+
+
+def test_the_interface_file_is_read_at_start_at_each_unlock_and_after_a_write(
+    vault: GateService, short_store_dir: Path, gate_clock: FakeClock
+) -> None:
+    path = interface_file(short_store_dir)
+    path.write_bytes(GOOD_FILE)  # by hand, after the service started
+    assert vault.state()["interface"] == NO_FILE
+    unlocked = vault.unlock(passphrase=gs.PASSPHRASE)
+    assert unlocked["interface"] == {"view": "basic", "setup": "open", "stored": True}
+    path.write_bytes(b'{"view": "pro", "setup": "done"}')
+    assert vault.state()["interface"]["view"] == "basic"  # no timer reads it, and no request
+    assert vault.lock()["interface"]["view"] == "basic"
+    # A start reads it.
+    again = GateService(short_store_dir, clock=gate_clock, scrypt_n=gs.FAST_SCRYPT)
+    assert again.state()["interface"] == {"view": "pro", "setup": "done", "stored": True}
+    # The service's own write is read back: what the state says is what the file holds.
+    path.write_bytes(b"something else")
+    assert vault.set_interface(view="basic")["interface"] == {
+        "view": "basic",
+        "setup": "open",  # as this service knew it; only "done" is ever set, and nothing reopens
+        "stored": True,
+    }
+    assert json.loads(path.read_bytes()) == {"view": "basic", "setup": "open"}
+
+
+def test_a_start_with_a_view_stores_it_and_a_start_without_writes_nothing(
+    short_store_dir: Path, gate_clock: FakeClock
+) -> None:
+    gs.make_store(short_store_dir, clock=gate_clock).close()
+    path = interface_file(short_store_dir)
+
+    def start(**options: Any) -> dict[str, Any]:
+        service = GateService(short_store_dir, clock=gate_clock, scrypt_n=gs.FAST_SCRYPT, **options)
+        interface: dict[str, Any] = service.state()["interface"]
+        return interface
+
+    assert start() == NO_FILE
+    assert not path.exists()
+    # An existing vault opens in the view that was named, and the choice is stored.
+    assert start(view="basic") == {"view": "basic", "setup": "done", "stored": True}
+    assert json.loads(path.read_bytes()) == {"view": "basic", "setup": "done"}
+    written = path.stat().st_mtime_ns
+    assert start() == {"view": "basic", "setup": "done", "stored": True}
+    assert path.stat().st_mtime_ns == written, "a start without a view wrote the file"
+    # Whether setting up was finished stays as it was.
+    path.write_bytes(GOOD_FILE)
+    assert start(view="pro") == {"view": "pro", "setup": "open", "stored": True}
+    assert json.loads(path.read_bytes()) == {"view": "pro", "setup": "open"}
+
+
+def test_switching_the_view_leaves_the_record_alone(
+    unlocked: GateService, gate_clock: FakeClock
+) -> None:
+    before = unlocked.state()
+    items = unlocked.activity(limit=200)["items"]
+    sealed = gs.snapshot(unlocked.path)
+    settings = unlocked.settings()
+    cursor = before["cursor"]
+    for change in (
+        {"view": "basic"},
+        {"view": "pro"},
+        {"setup": "done"},
+        {"view": "basic", "setup": "done"},
+    ):
+        gate_clock.advance(seconds=1)
+        state = unlocked.set_interface(**change)
+        assert state["record"] == before["record"]  # head_seq and head_hash among it
+        assert state["store"] == before["store"]  # the number of sealed files and their size
+        assert state["cursor"] > cursor, "the page would not learn that the view changed"
+        cursor = state["cursor"]
+    assert state["interface"] == {"view": "basic", "setup": "done", "stored": True}
+    assert unlocked.activity(limit=200)["items"] == items  # no entry was added
+    assert gs.snapshot(unlocked.path) == sealed  # and no sealed file was touched
+    assert unlocked.settings() == settings  # it is no setting of the vault
+    # The same while the vault is locked.
+    locked = unlocked.lock()
+    head = record_and_files(unlocked)
+    assert unlocked.set_interface(view="pro")["interface"]["view"] == "pro"
+    assert record_and_files(unlocked) == head
+    assert locked["locked"] is True
+
+
+def test_the_interface_can_be_set_while_locked_and_only_to_known_values(
+    vault: GateService, short_store_dir: Path, gate_clock: FakeClock
+) -> None:
+    state = vault.set_interface(view="basic")
+    assert state["locked"] is True
+    assert state["interface"] == {"view": "basic", "setup": "done", "stored": True}
+    assert vault.set_interface(view="pro")["interface"]["view"] == "pro"
+    path = interface_file(short_store_dir)
+    held = path.read_bytes()
+    for bad in (
+        {"view": "x"},
+        {"view": "Basic"},
+        {"view": ""},
+        {"view": "pro "},
+        {"setup": "open"},  # nothing reopens it
+        {"setup": "x"},
+        {"setup": ""},
+        {"view": "basic", "setup": "open"},
+        {"view": "x", "setup": "done"},
+        {},
+        {"view": None, "setup": None},
+    ):
+        with refused(400, "invalid") as caught:
+            vault.set_interface(**bad)
+        assert caught[0].message.endswith(".")
+        assert path.read_bytes() == held
+    assert vault.state()["interface"] == {"view": "pro", "setup": "done", "stored": True}
+
+    # Without a vault there is nothing to keep a view for, and nothing is made.
+    nowhere = short_store_dir.parent / "nowhere"
+    empty = GateService(nowhere, clock=gate_clock, scrypt_n=gs.FAST_SCRYPT)
+    with refused(404, "not_found"):
+        empty.set_interface(view="basic")
+    with refused(400, "invalid"):
+        empty.set_interface(view="x")
+    assert not nowhere.exists()
+    # In a new vault setting up is open, can be marked done, and then stays done.
+    created = empty.create_store(passphrase=gs.PASSPHRASE)
+    try:
+        assert created["interface"]["setup"] == "open"
+        assert empty.set_interface(view="pro")["interface"] == {
+            "view": "pro",
+            "setup": "open",
+            "stored": True,
+        }
+        assert empty.set_interface(setup="done")["interface"]["setup"] == "done"
+        assert empty.set_interface(view="basic")["interface"] == {
+            "view": "basic",
+            "setup": "done",
+            "stored": True,
+        }
+        with refused(400, "invalid"):
+            empty.set_interface(setup="open")
+    finally:
+        empty.close()
+
+
+def test_setting_the_interface_needs_no_owner_mode(
+    unlocked: GateService, gate_clock: FakeClock
+) -> None:
+    expire_owner_mode(gate_clock)
+    with refused(403, "reauth_required"):
+        unlocked.add_app(name="another-app", hosted=False)  # owner mode has run out
+    state = unlocked.set_interface(view="basic")
+    assert state["interface"] == {"view": "basic", "setup": "done", "stored": True}
+    assert unlocked.set_interface(setup="done")["interface"]["setup"] == "done"
+    assert unlocked.set_interface(view="pro")["interface"]["view"] == "pro"
+    # And it did not renew owner mode either.
+    assert state["owner_mode_until"] == unlocked.state()["owner_mode_until"]
+    with refused(403, "reauth_required"):
+        unlocked.add_app(name="another-app", hosted=False)
+
+
+def test_a_file_that_cannot_be_written_is_said_in_a_sentence(
+    unlocked: GateService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def full(*args: Any, **kwargs: Any) -> None:
+        raise OSError(28, "No space left on device", "/a/path/that/must/not/be/shown")
+
+    before = unlocked.state()
+    monkeypatch.setattr(service_module.os, "replace", full)
+    with refused(503, "unavailable") as caught:
+        unlocked.set_interface(view="basic")
+    assert caught[0].message == "The choice could not be kept: no space left on device."
+    monkeypatch.undo()
+    after = unlocked.state()
+    assert after["interface"] == before["interface"] == NO_FILE
+    assert after["record"] == before["record"]
+    # No temporary file was left behind.
+    assert sorted(item.name for item in (unlocked.path / "run").iterdir()) == ["gate.sock", "lock"]
+
+
+# -- the two fields of the settings ---------------------------------------------------------
+
+
+def test_changed_from_new_names_each_group_that_was_changed(service: GateService) -> None:
+    service.create_store(passphrase=gs.PASSPHRASE)
+
+    def changed() -> list[str]:
+        names: list[str] = service.settings()["changed_from_new"]
+        return names
+
+    assert changed() == []  # a new vault
+    new = service.settings()
+    for name, change, back in (
+        ("defaults", {"chars_per_day": 30000}, {"chars_per_day": 20000}),
+        ("defaults", {"calls_per_minute": 29}, {"calls_per_minute": 30}),
+        ("groups", {"local": {"chars_per_day": 39999}}, {"local": {"chars_per_day": 40000}}),
+        ("groups", {"hosted": {"chars_per_30_days": 1}}, {"hosted": {"chars_per_30_days": 300000}}),
+        ("per_document", {"max_fraction": 0.25}, {"max_fraction": 0.5}),
+        ("per_document", {"max_chars": 0}, {"max_chars": 8000}),
+        ("approval", {"ttl_minutes": 5}, {"ttl_minutes": 10}),
+    ):
+        answer = service.set_settings(**{name: change})
+        assert answer["changed_from_new"] == [name], (name, change)
+        assert changed() == [name]
+        assert service.set_settings(**{name: back})["changed_from_new"] == []
+    # Several at once, in the order of the answer's own keys.
+    service.set_settings(approval={"ttl_minutes": 5}, defaults={"searches_per_day": 50})
+    assert changed() == ["defaults", "approval"]
+    service.set_settings(approval={"ttl_minutes": 10}, defaults={"searches_per_day": 100})
+    assert changed() == []
+    # What is not one of the four groups of figures is not named: an app with limits of
+    # its own, a collection, a word to replace.
+    service.add_document(collection="home", name="note.txt", data=b"A note about the boiler.")
+    service.add_app(name="lm-studio", hosted=False)
+    service.set_grant(app="lm-studio", collection="home", mode="approve")
+    service.set_app_limits(name="lm-studio", limits={"chars_per_day": 500})
+    service.add_replaced_string(text="Kowalski")
+    assert changed() == []
+    figures = ("defaults", "groups", "per_document", "approval", "ceilings")
+    assert {key: service.settings()[key] for key in figures} == {key: new[key] for key in figures}
+
+
+def test_the_settings_say_how_long_a_passage_is(unlocked: GateService) -> None:
+    ceilings = unlocked.settings()["ceilings"]
+    assert ceilings["passage_chars"] == gate_store.CHUNK_CHARS == 800
+    # It is what the engine cuts by: no passage it shows the owner is longer.
+    ref = first_ref(unlocked, CLAUDE, "income tax", "tax")
+    assert unlocked.backend.read(CLAUDE, ref).code == "NEEDS_APPROVAL"
+    (waiting,) = unlocked.approvals()["waiting"]
+    assert 0 < waiting["characters"] <= ceilings["passage_chars"]
+    # It is a fact about the engine, not a setting: no request changes it.
+    with refused(400, "invalid"):
+        unlocked.set_settings(defaults={"passage_chars": 400})
+
+
+# -- the command that starts the app again ---------------------------------------------------
+
+
+def test_the_launch_command_starts_this_installation_on_this_vault(
+    short_store_dir: Path, gate_clock: FakeClock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wdva.cli import build_parser
+
+    start = [sys.executable, "-m", "wdva", "gate", "app"]
+    command = app_main.launch_command(store=short_store_dir)
+    assert command is not None
+    assert command == shlex.join([*start, "--store", str(short_store_dir)])
+    assert os.path.isabs(shlex.split(command)[0])  # the interpreter by its full path
+
+    # The flags the run was started with follow; the defaults are left out.
+    flagged = app_main.launch_command(
+        store=short_store_dir, port=8765, lock_after_hours=1, open_browser=False, window=True
+    )
+    assert flagged is not None
+    assert shlex.split(flagged) == [
+        *start,
+        "--store",
+        str(short_store_dir),
+        "--port",
+        "8765",
+        "--lock-after",
+        "1",
+        "--no-browser",
+        "--window",
+    ]
+    half = app_main.launch_command(store=short_store_dir, lock_after_hours=0.5)
+    assert half is not None
+    assert shlex.split(half)[-2:] == ["--lock-after", "0.5"]
+
+    # A place with a space and a quote in its name comes through a shell as one word, and a
+    # place given relative to here is written in full: Terminal starts somewhere else.
+    awkward = short_store_dir.parent / "my vault's place"
+    quoted = app_main.launch_command(store=awkward)
+    assert quoted is not None
+    assert shlex.split(quoted) == [*start, "--store", str(awkward)]
+    monkeypatch.chdir(tmp_path)
+    relative = app_main.launch_command(store="vault")
+    assert relative is not None
+    assert shlex.split(relative)[-1] == str(tmp_path / "vault")
+
+    # For a demo: a vault of one's own, so neither the demo nor its temporary folder.
+    own = app_main.launch_command(store=None, port=8765)
+    assert own is not None
+    assert shlex.split(own) == [*start, "--port", "8765"]
+
+    # Whatever it is given, it never holds --demo or --view, and the command line of the
+    # app takes every one of them.
+    parser = build_parser()
+    for line in (command, flagged, half, quoted, relative, own):
+        words = shlex.split(line)
+        assert "--demo" not in words
+        assert "--view" not in words
+        parsed = parser.parse_args(words[3:])
+        assert (parsed.demo, parsed.view) == (False, None)
+
+    # The service passes it on with the state, in each of its three forms.
+    service = GateService(
+        short_store_dir,
+        clock=gate_clock,
+        scrypt_n=gs.FAST_SCRYPT,
+        launch_command=command,
+        port_fixed=True,
+    )
+    try:
+        told = {"command": command, "port_fixed": True}
+        assert service.state()["launch"] == told  # no vault
+        assert service.create_store(passphrase=gs.PASSPHRASE)["launch"] == told  # unlocked
+        assert service.lock()["launch"] == told  # locked
+    finally:
+        service.close()
+
+    # A Python that cannot say where it is has no command to give.
+    monkeypatch.setattr(sys, "executable", "")
+    assert app_main.launch_command(store=short_store_dir) is None
+
+
+# -- connecting: the list, the fields, the look at the settings file -------------------------
+
+
+def test_the_chatgpt_desktop_app_is_an_entry_of_its_own(unlocked: GateService, home: Path) -> None:
+    known = {entry["id"]: entry for entry in unlocked.apps()["known"]}
+    assert len(known) == 10
+    assert (known["chatgpt-desktop"]["label"], known["chatgpt-desktop"]["name"]) == (
+        "ChatGPT desktop app",
+        "chatgpt-desktop",
+    )
+    assert (known["codex"]["label"], known["codex"]["name"]) == ("Codex", "codex")
+    for entry in (known["chatgpt-desktop"], known["codex"]):
+        assert (entry["destination"], entry["hosted"], entry["local_program"]) == (
+            "OpenAI",
+            True,
+            True,
+        )
+    # An app registered under either name gets that application's form by itself.
+    unlocked.add_app(name="chatgpt-desktop", hosted=True, destination="OpenAI")
+    unlocked.add_app(name="codex", hosted=True, destination="OpenAI")
+    desktop = unlocked.connect(name="chatgpt-desktop")
+    assert (desktop["host"], desktop["label"]) == ("chatgpt-desktop", "ChatGPT desktop app")
+    (block,) = desktop["blocks"]
+    assert (block["language"], block["where"]) == ("toml", ["~/.codex/config.toml"])
+    assert block["title"] == "Add this to ~/.codex/config.toml"
+    assert block["text"].startswith(f"[mcp_servers.{SLUG}]\ncommand = ")
+    assert "--client" in block["text"]
+    assert '"chatgpt-desktop"' in block["text"]
+    assert not [b for b in desktop["blocks"] if b["language"] == "shell"]  # no command to run
+    codex = unlocked.connect(name="codex")
+    assert [b["language"] for b in codex["blocks"]] == ["shell", "toml"]
+    assert codex["blocks"][0]["title"] == "Run this in a terminal"
+    assert codex["blocks"][0]["text"].startswith(f"codex mcp add {SLUG} -- ")
+    assert codex["blocks"][1]["title"] == "Or add this to ~/.codex/config.toml"
+    # The two write the same lines but for the name the app is listed under.
+    assert codex["blocks"][1]["text"] == block["text"].replace("chatgpt-desktop", "codex")
+
+
+def test_connect_gives_one_place_for_this_computer_and_a_note_without_an_address(
+    unlocked: GateService, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connectable = [entry for entry in unlocked.apps()["known"] if entry["local_program"]]
+    assert [entry["id"] for entry in connectable] == [
+        "claude-desktop",
+        "claude-code",
+        "chatgpt-desktop",
+        "codex",
+        "openclaw",
+        "generic",
+    ]
+    here = "macos" if sys.platform == "darwin" else "linux"
+    for entry in connectable:
+        answer = unlocked.connect(name="claude-desktop", host=entry["id"])
+        assert answer["platform"] == here
+        # The note for a person: what the form follows, that it was not tried, no address.
+        note = answer["plain_note"]
+        assert "://" not in note
+        assert "Model Context Protocol" not in note
+        assert "MCP" not in note
+        assert "It has not been tried with" in note
+        if entry["id"] != "generic":
+            assert f"for {entry['label']}, as read on 2026-11-12." in note
+        # The note with the address is still there for the sheet that shows it today.
+        assert "://" in answer["notes"][-1]
+        # What to do in the application afterwards.
+        after = answer["after"]
+        assert set(after) == {"title", "text", "desktop"}
+        assert after["title"].endswith(("paste the question", "into a new chat"))
+        assert after["text"].endswith(".")
+        assert after["desktop"] is (entry["id"] in ("claude-desktop", "chatgpt-desktop"))
+        for block in answer["blocks"]:
+            # One place, the one for this computer, and never the one for Windows.
+            where_here = block["where_here"]
+            if not block["where"]:
+                assert where_here is None
+            else:
+                assert where_here in block["where"]
+                assert "%APPDATA%" not in where_here
+                assert "\\" not in where_here
+            # For a file that has other settings: the entry alone, and its section alone.
+            inner = block["inner"]
+            if block["language"] != "json":
+                assert inner is None
+                continue
+            whole = json.loads(block["text"])
+            assert set(inner) == {"entry", "section"}
+            assert json.loads("{" + inner["entry"] + "}") == whole["mcpServers"]
+            assert json.loads("{" + inner["section"] + "}") == whole
+            assert inner["entry"].startswith(f'"{SLUG}": {{')
+            assert inner["section"].startswith('"mcpServers": {')
+            assert not inner["entry"].endswith(",")
+    desktop = unlocked.connect(name="claude-desktop")
+    assert desktop["plain_note"] == (
+        "This follows the published instructions for Claude Desktop, as read on 2026-11-12. "
+        "It has not been tried with Claude Desktop itself."
+    )
+    assert desktop["after"] == {
+        "title": "Quit Claude Desktop, open it again, and paste the question into a new chat",
+        "text": "It reads its settings when it starts.",
+        "desktop": True,
+    }
+    expected = (
+        "~/Library/Application Support/Claude/claude_desktop_config.json"
+        if here == "macos"
+        else "~/.config/Claude/claude_desktop_config.json"
+    )
+    assert desktop["blocks"][0]["where_here"] == expected
+    assert unlocked.connect(name="lm-studio")["plain_note"] == (
+        "This follows the form most apps of this kind read. It has not been tried with your app."
+    )
+    # A product that cannot be connected has neither note nor next step.
+    web = unlocked.connect(name="claude-desktop", host="claude-web")
+    assert (web["plain_note"], web["after"], web["platform"]) == (None, None, here)
+    # The fields that were there before are as they were.
+    assert list(desktop)[:6] == ["host", "label", "local_program", "blocks", "notes", "explanation"]
+    assert list(desktop["blocks"][0])[:4] == ["title", "language", "text", "where"]
+    assert "ready" in desktop
+    # Asking for the form reads no file: there is still no home directory to read from.
+    assert not home.exists()
+
+
+def settings_place(home: Path, host: str = "claude-desktop", platform: str | None = None) -> Path:
+    """Where the settings file of an application lies in the test's home directory."""
+    if host != "claude-desktop":
+        return home / ".codex" / "config.toml"
+    system = platform or ("macos" if sys.platform == "darwin" else "linux")
+    folder = "Library/Application Support/Claude" if system == "macos" else ".config/Claude"
+    return home / folder / "claude_desktop_config.json"
+
+
+def tree(root: Path) -> dict[str, tuple[Any, ...]]:
+    """Every entry below ``root``: what it is, its size, when it was changed, what it holds."""
+    found: dict[str, tuple[Any, ...]] = {}
+    for item in sorted(root.rglob("*")):
+        status = item.lstat()
+        content: bytes | str | None = None
+        if stat.S_ISLNK(status.st_mode):
+            content = os.readlink(item)
+        elif stat.S_ISREG(status.st_mode):
+            content = item.read_bytes()
+        found[str(item.relative_to(root))] = (
+            status.st_mode,
+            status.st_size,
+            status.st_mtime_ns,
+            content,
+        )
+    return found
+
+
+MARKERS = (
+    "SECRET-KEY-OF-ANOTHER-TOOL-7731",
+    "sk-live-51Hxq9",
+    "ghp_4vR7mQ2pLx0tTz",
+    "hunter2-and-more",
+)
+
+
+def the_entry(unlocked: GateService, host: str = "claude-desktop") -> dict[str, Any]:
+    """The entry the gate's own text puts into a settings file for this app and this vault."""
+    command = hostconfig.host_command(host, unlocked.path)
+    return {"command": command[0], "args": command[1:]}
+
+
+def test_the_check_answers_one_word_and_nothing_from_the_file(
+    unlocked: GateService, home: Path
+) -> None:
+    place = settings_place(home)
+    shown = "~/" + str(place.relative_to(home))
+    folder = "~/" + str(place.parent.relative_to(home))
+    here = "macos" if sys.platform == "darwin" else "linux"
+    block = unlocked.connect(name="claude-desktop")["blocks"][0]
+    ours = the_entry(unlocked)
+    assert json.loads(block["text"]) == {"mcpServers": {SLUG: ours}}
+    secret, key, token, password = MARKERS
+    record = record_and_files(unlocked)
+
+    def look(expected: str, section: str | None = None) -> dict[str, Any]:
+        """One check: its answer is a function of the state, the place and the gate's own text."""
+        before = tree(home) if home.exists() else {}
+        answer = unlocked.connect_check(name="claude-desktop")
+        assert (tree(home) if home.exists() else {}) == before, "the check changed the home folder"
+        assert list(answer) == ["state", "path", "folder", "open_line", "section"]
+        assert answer["state"] in hostcheck.STATES
+        assert (answer["state"], answer["section"]) == (expected, section)
+        assert (answer["path"], answer["folder"]) == (shown, folder)
+        assert answer["open_line"] == hostconfig.open_line(
+            place, state=expected, platform=here, language="json", text=block["text"]
+        )
+        for marker in MARKERS:
+            assert marker not in json.dumps(answer), f"{marker} reached the answer"
+        return answer
+
+    def holds(value: Any) -> None:
+        place.write_text(json.dumps(value, indent=2), encoding="utf-8")
+
+    # No folder: the application was never opened here. Nothing is made.
+    assert look("no_folder")["open_line"] is None
+    assert not home.exists()
+    # The folder, and no file.
+    place.parent.mkdir(parents=True)
+    assert "echo '{}'" in look("no_file")["open_line"]
+    # A file with nothing in it, with white space only, or with no settings.
+    for nothing in (b"", b" \n\t\r\n", b"{}", b"{ }\n", b'{"mcpServers": {}}'):
+        place.write_bytes(nothing)
+        look("empty")
+    # Other settings, without the section, with an empty one, and with entries of other tools.
+    holds({"theme": "dark", "apiKey": key, secret: True})
+    look("other", "none")
+    holds({"theme": secret, "mcpServers": {}})
+    look("other", "empty")
+    holds({"mcpServers": {"another-tool": {"command": "tool", "env": {"TOKEN": token}}}})
+    look("other", "filled")
+    holds({"globalShortcut": password, "mcpServers": {secret: {"command": key, "args": [token]}}})
+    look("other", "filled")
+    # The right entry: alone, among others, and with more beside the two things compared.
+    holds({"mcpServers": {SLUG: ours}})
+    assert look("present")["open_line"] is None
+    holds({"key": key, "mcpServers": {"another-tool": {"command": secret}, SLUG: ours}})
+    look("present")
+    holds({"mcpServers": {SLUG: {**ours, "env": {"TOKEN": token}}}})
+    look("present")
+    # An entry under the gate's name that points somewhere else: another vault, another
+    # name, another program, or nothing an application could start.
+    elsewhere = [*ours["args"][:-1], str(home / "another vault")]
+    for other in (
+        {**ours, "args": elsewhere},
+        {**ours, "args": [*ours["args"][:-3], "another-name", *ours["args"][-2:]]},
+        {**ours, "command": f"/opt/{secret}/python"},
+        {"command": ours["command"]},
+        {"args": ours["args"]},
+        {"command": [ours["command"]], "args": ours["args"]},
+        {"command": ours["command"], "args": " ".join(ours["args"])},
+        {},
+        secret,
+        None,
+        [ours],
+    ):
+        holds({"mcpServers": {SLUG: other, "another-tool": {"env": {"KEY": key}}}})
+        look("differs")
+    # A file that cannot be read as JSON, or is not the object such a file has to be.
+    for broken in (
+        b'{"mcpServers": {"another-tool": {"command": "tool",}}}',  # a comma too many
+        f'{{"apiKey": "{key}"'.encode(),  # cut off
+        f'{{"apiKey": "{key}", "apiKey": "{token}"}}'.encode(),  # a key twice
+        b'{"limit": NaN}',
+        f"// {secret}\n{{}}".encode(),  # a comment, which JSON does not have
+        json.dumps([{"mcpServers": {SLUG: ours}}]).encode(),  # a list at the top
+        f'"{password}"'.encode(),
+        b"null",
+        json.dumps({"mcpServers": [SLUG, token]}).encode(),  # the section is not an object
+        json.dumps({"mcpServers": secret}).encode(),
+        json.dumps({"mcpServers": None}).encode(),
+        b"\xef\xbb\xbf{}",  # a byte-order mark
+        json.dumps({"mcpServers": {SLUG: ours}}).encode("utf-16"),
+        secret.encode() + b"\xff\xfe\x00",  # not text at all
+        b"[" * 200_000,  # nested deeper than a reader goes
+    ):
+        place.write_bytes(broken)
+        look("unreadable")
+    # Larger than 1 MiB: not opened, although it is the right entry with white space after it.
+    right = json.dumps({"mcpServers": {SLUG: ours}}).encode()
+    place.write_bytes(right + b" " * (2 * 1024 * 1024))
+    look("not_read")
+    place.write_bytes(right + b" " * (hostcheck.MAX_BYTES - len(right)))
+    look("present")  # exactly 1 MiB is read
+    place.write_bytes(right + b" " * (hostcheck.MAX_BYTES + 1 - len(right)))
+    look("not_read")
+    # A link is not followed, wherever it leads: not to the right entry either.
+    target = home / "kept elsewhere.json"
+    target.write_bytes(right)
+    place.unlink()
+    place.symlink_to(target)
+    look("not_read")
+    place.unlink()
+    place.symlink_to(home / "nothing there.json")
+    look("not_read")
+    # A folder in the file's place.
+    place.unlink()
+    place.mkdir()
+    look("not_read")
+    place.rmdir()
+    # The folder itself a file: there is no settings folder then.
+    shutil.rmtree(place.parent)
+    place.parent.write_text(secret, encoding="utf-8")
+    assert look("no_folder")["open_line"] is None
+
+    # The request cannot name a file: it names the app, and the kind of application.
+    for host in ("/etc/passwd", "../../etc/passwd", str(target), "~/.ssh/id_ed25519", ""):
+        with refused(404, "not_found"):
+            unlocked.connect_check(name="claude-desktop", host=host)
+    with refused(404, "not_found"):
+        unlocked.connect_check(name="nobody")
+    with refused(404, "not_found"):
+        unlocked.connect_check(name="../../etc/passwd")
+    with pytest.raises(TypeError):
+        unlocked.connect_check(name="claude-desktop", path=str(target))  # type: ignore[call-arg]
+    # An application the app knows no settings file of, and one that cannot be connected.
+    for host in ("claude-code", "openclaw", "generic", "claude-web", "grok-bot"):
+        answer = unlocked.connect_check(name="claude-desktop", host=host)
+        assert answer == {
+            "state": "unsupported",
+            "path": None,
+            "folder": None,
+            "open_line": None,
+            "section": None,
+        }
+    # An app under a name of its own is looked for under that name, in the form it was given.
+    assert unlocked.connect_check(name="lm-studio")["state"] == "unsupported"  # "Another app"
+    # In all of it nothing was recorded and nothing was sealed, and the app needed no owner mode.
+    assert record_and_files(unlocked) == record
+
+
+def test_the_check_does_not_wait_for_a_named_pipe_and_needs_no_owner_mode(
+    unlocked: GateService, home: Path, gate_clock: FakeClock
+) -> None:
+    expire_owner_mode(gate_clock)
+    place = settings_place(home)
+    place.parent.mkdir(parents=True)
+    os.mkfifo(place)
+    answers: list[Any] = []
+    thread = threading.Thread(
+        target=lambda: answers.append(unlocked.connect_check(name="claude-desktop")), daemon=True
+    )
+    thread.start()
+    thread.join(timeout=30)
+    assert not thread.is_alive(), "the check waits for somebody to write into the pipe"
+    assert answers[0]["state"] == "not_read"
+    assert stat.S_ISFIFO(place.lstat().st_mode)
+
+
+def test_the_check_reads_one_fixed_file_and_only_when_asked(
+    unlocked: GateService, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    place = settings_place(home)
+    place.parent.mkdir(parents=True)
+    place.write_text(json.dumps({"mcpServers": {SLUG: the_entry(unlocked)}}), encoding="utf-8")
+    decoy = home / ".codex" / "config.toml"
+    decoy.parent.mkdir()
+    decoy.write_text("not = 'looked at'\n", encoding="utf-8")
+    opened: list[str] = []
+    real_open = os.open
+
+    def noting(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+        opened.append(os.fspath(path))
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(hostcheck.os, "open", noting)
+    # Not when the form is asked for, the list of apps, the state or anything else that reads.
+    every_answer(unlocked)
+    unlocked.connect(name="claude-desktop", host="codex")
+    assert [path for path in opened if path.startswith(str(home))] == []
+    # On the one request: the one file of that application, once, for reading.
+    assert unlocked.connect_check(name="claude-desktop")["state"] == "present"
+    assert [path for path in opened if path.startswith(str(home))] == [str(place)]
+    # A file that passed the first look and is something else when it is opened is not read.
+    opened.clear()
+    looked = os.lstat(place)
+    place.unlink()
+    place.symlink_to(home / "elsewhere.json")
+    (home / "elsewhere.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        hostcheck.os,
+        "lstat",
+        lambda path, *a, **k: looked if os.fspath(path) == str(place) else os.lstat(path, *a, **k),
+    )
+    assert unlocked.connect_check(name="claude-desktop")["state"] == "not_read"
+    place.unlink()
+    os.mkfifo(place)
+    assert unlocked.connect_check(name="claude-desktop")["state"] == "not_read"
+
+
+@pytest.mark.parametrize("host", ["chatgpt-desktop", "codex"])
+def test_the_check_reads_toml_only_where_it_can(
+    host: str, unlocked: GateService, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    unlocked.add_app(name=host, hosted=True, destination="OpenAI")
+    place = settings_place(home, host)
+    here = "macos" if sys.platform == "darwin" else "linux"
+    text = next(b["text"] for b in unlocked.connect(name=host)["blocks"] if b["language"] == "toml")
+    unsupported = {
+        "state": "unsupported",
+        "path": None,
+        "folder": None,
+        "open_line": None,
+        "section": None,
+    }
+    if sys.version_info < (3, 11):
+        # No TOML reader in this Python: the file is not looked at, whatever is there.
+        assert unlocked.connect_check(name=host) == unsupported
+        assert not home.exists()
+        return
+
+    def look(expected: str) -> dict[str, Any]:
+        before = tree(home) if home.exists() else {}
+        answer = unlocked.connect_check(name=host)
+        assert (tree(home) if home.exists() else {}) == before
+        assert answer == {
+            "state": expected,
+            "path": "~/.codex/config.toml",
+            "folder": "~/.codex",
+            "open_line": hostconfig.open_line(
+                place, state=expected, platform=here, language="toml", text=text
+            ),
+            "section": None,  # a section is told for JSON only: TOML is added at the end
+        }
+        for marker in MARKERS:
+            assert marker not in json.dumps(answer)
+        return answer
+
+    secret, key, token, _ = MARKERS
+    look("no_folder")
+    assert not home.exists()
+    place.parent.mkdir(parents=True)
+    assert ": > " in look("no_file")["open_line"]
+    for nothing in ("", "\n \n", f"# {secret}\n", "[mcp_servers]\n"):
+        place.write_text(nothing, encoding="utf-8")
+        look("empty")
+    place.write_text(f'model = "o9"\napi_key = "{key}"\n', encoding="utf-8")
+    look("other")
+    place.write_text(
+        f'[mcp_servers.another-tool]\ncommand = "tool"\nenv = {{ T = "{token}" }}\n',
+        encoding="utf-8",
+    )
+    look("other")
+    place.write_text(f'api_key = "{key}"\n\n{text}\n', encoding="utf-8")
+    assert look("present")["open_line"] is None
+    place.write_text(
+        text.replace(str(unlocked.path), str(home / "another vault")), encoding="utf-8"
+    )
+    look("differs")
+    place.write_text(f'[mcp_servers.{SLUG}]\ncommand = "{secret}"\n', encoding="utf-8")
+    look("differs")
+    for broken in (
+        f'api_key = "{key}\n',  # a quote that does not end
+        f"{text}\n{text}\n",  # the section twice
+        f'mcp_servers = "{secret}"\n',  # not a table
+        "= 1\n",
+    ):
+        place.write_text(broken, encoding="utf-8")
+        look("unreadable")
+    place.write_bytes(text.encode() + b"\xff")
+    look("unreadable")
+    place.write_bytes(text.encode() + b"\n" * (2 * 1024 * 1024))
+    look("not_read")
+    place.unlink()
+    place.symlink_to(home / "elsewhere.toml")
+    look("not_read")
+
+    # Without a reader for TOML (a Python older than 3.11) nothing is looked at.
+    place.unlink()
+    place.write_text(text, encoding="utf-8")
+    look("present")
+    monkeypatch.setattr(hostcheck, "_toml_loads", lambda: None)
+    assert unlocked.connect_check(name=host) == unsupported
+    # The JSON file of the other application is read all the same.
+    assert unlocked.connect_check(name=host, host="claude-desktop")["state"] == "no_folder"
+
+
+OPEN_STUB = '#!/bin/sh\nfor word in "$@"; do printf \'%s\\n\' "$word"; done >> "$STUB_OUT/{name}"\n'
+PBCOPY_STUB = '#!/bin/sh\ncat > "$STUB_OUT/clipboard"\n'
+SHELLS = ["/bin/sh", *filter(None, (shutil.which(name) for name in ("bash", "zsh", "dash")))]
+OPEN_LINE_CASES = [
+    ("claude-desktop", "json", "macos"),
+    ("claude-desktop", "json", "linux"),
+    ("codex", "toml", "macos"),
+    ("codex", "toml", "linux"),
+]
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize(("host", "language", "platform"), OPEN_LINE_CASES)
+def test_the_open_line_never_changes_a_file_that_exists(
+    host: str,
+    language: str,
+    platform: str,
+    shell: str,
+    unlocked: GateService,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if language == "toml" and sys.version_info < (3, 11):
+        pytest.skip("this Python has no reader for TOML, so such a file is not looked at")
+    # A home with a space and a quote in its name: the path must survive the shell.
+    home = tmp_path / "it's a home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    stubs = tmp_path / "stubs"
+    out = tmp_path / "out"
+    stubs.mkdir()
+    for name in ("open", "xdg-open"):
+        (stubs / name).write_text(OPEN_STUB.format(name=name), encoding="utf-8")
+    (stubs / "pbcopy").write_text(PBCOPY_STUB, encoding="utf-8")
+    for stub in stubs.iterdir():
+        stub.chmod(0o755)
+    environment = {
+        "PATH": os.pathsep.join([str(stubs), "/usr/bin", "/bin"]),
+        "STUB_OUT": str(out),
+        "HOME": str(home),
+    }
+    place = settings_place(home, host, platform)
+    place.parent.mkdir(parents=True)
+    config = hostconfig.render(host, client=host, store=unlocked.path, platform=platform)
+    text = next(block.text for block in config.blocks if block.language == language)
+    editor = "open" if platform == "macos" else "xdg-open"
+
+    def look(expected: str) -> str | None:
+        answer = hostcheck.check(host, client=host, store=unlocked.path, platform=platform)
+        assert answer["state"] == expected
+        line: str | None = answer["open_line"]
+        return line
+
+    def opened(line: str | None, *, copies: bool) -> None:
+        """Run the line as a person does: it opens this one file and changes none that exists."""
+        assert line is not None
+        before = place.read_bytes() if place.exists() else None
+        shutil.rmtree(out, ignore_errors=True)
+        out.mkdir()
+        done = subprocess.run(
+            [shell, "-c", line],
+            env=environment,
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        assert (done.returncode, done.stdout, done.stderr) == (0, "", ""), line
+        if before is not None:
+            assert place.read_bytes() == before, f"the line changed the file: {line}"
+        given = {item.name: item.read_text(encoding="utf-8") for item in out.iterdir()}
+        # The system's editor was given this one file ...
+        arguments = given.pop(editor).splitlines()
+        assert arguments == (["-e", str(place)] if platform == "macos" else [str(place)])
+        # ... and on a Mac the block's text is on the clipboard, byte for byte, where the
+        # whole text is what gets pasted. Elsewhere the line copies nothing.
+        assert given == ({"clipboard": text} if copies and platform == "macos" else {})
+
+    # The file is not there: the line makes it, holding what an empty settings file of
+    # that kind holds, and opens it.
+    line = look("no_file")
+    opened(line, copies=True)
+    assert place.read_bytes() == (b"{}\n" if language == "json" else b"")
+    made = place.stat().st_mtime_ns
+    # Run again, the same line finds the file and leaves it alone.
+    opened(line, copies=True)
+    assert place.stat().st_mtime_ns == made
+    # And it does not touch a file that somebody made in between.
+    place.write_bytes(b"made in between, by somebody else\n")
+    opened(line, copies=True)
+    assert place.read_bytes() == b"made in between, by somebody else\n"
+    # What the line made is a file the check calls empty; then the whole text is pasted.
+    place.write_bytes(b"{}\n" if language == "json" else b"")
+    opened(look("empty"), copies=True)
+    # Other settings: opened and kept. JSON needs a place inside the file, so nothing is
+    # copied; TOML is added at the end, so the text is.
+    place.write_bytes(b'{"theme": "dark"}\n' if language == "json" else b'model = "o9"\n')
+    opened(look("other"), copies=language == "toml")
+    # An entry that differs, a file that cannot be read, one that is not read: opened only.
+    if language == "json":
+        place.write_text(json.dumps({"mcpServers": {SLUG: {"command": "x"}}}), encoding="utf-8")
+    else:
+        place.write_text(f'[mcp_servers.{SLUG}]\ncommand = "x"\n', encoding="utf-8")
+    opened(look("differs"), copies=False)
+    place.write_bytes(b'{"theme": ' if language == "json" else b"= 1\n")
+    opened(look("unreadable"), copies=False)
+    place.write_bytes(b" " * (hostcheck.MAX_BYTES + 1))
+    opened(look("not_read"), copies=False)
+    # With the entry in place there is nothing to open, and no line. Nor without the folder.
+    place.write_text(text, encoding="utf-8")
+    assert look("present") is None
+    shutil.rmtree(place.parent)
+    assert look("no_folder") is None
+    # The app ran none of these lines: this test did, with stand-ins on its PATH.
+
+
+# -- the demo's played app, told to ask again ------------------------------------------------
+
+
+def test_demo_again_is_not_there_outside_a_demo(
+    vault: GateService, short_store_dir: Path, gate_clock: FakeClock
+) -> None:
+    # A real vault has no played app, locked or unlocked.
+    with refused(404, "not_found"):
+        vault.demo_again()
+    vault.unlock(passphrase=gs.PASSPHRASE)
+    head = record_and_files(vault)
+    with refused(404, "not_found"):
+        vault.demo_again()
+    assert record_and_files(vault) == head
+    vault.close()
+    # And a real vault cannot be given one.
+    with pytest.raises(ValueError, match="demo"):
+        GateService(short_store_dir, demo_again=lambda: None, clock=gate_clock)
+
+    told: list[int] = []
+    played = GateService(
+        short_store_dir,
+        demo=True,
+        demo_passphrase=gs.PASSPHRASE,
+        clock=gate_clock,
+        scrypt_n=gs.FAST_SCRYPT,
+        demo_again=lambda: told.append(1),
+    )
+    try:
+        # Locked, there is nobody to ask: the played app is not told.
+        with refused(409, "locked"):
+            played.demo_again()
+        assert told == []
+        played.unlock(passphrase=gs.PASSPHRASE)
+        head = record_and_files(played)
+        assert played.demo_again() == {}
+        assert told == [1]  # the hook, once
+        # The call itself records nothing: what the played app then asks is its own call.
+        assert record_and_files(played) == head
+        # It is the played app's side: no owner mode is needed for it.
+        expire_owner_mode(gate_clock)
+        assert played.demo_again() == {}
+        assert told == [1, 1]
+    finally:
+        played.close()
+    # A demo that was given no played app has none to tell.
+    quiet = GateService(short_store_dir, demo=True, demo_passphrase=gs.PASSPHRASE, clock=gate_clock)
+    try:
+        quiet.unlock(passphrase=gs.PASSPHRASE)
+        with refused(404, "not_found"):
+            quiet.demo_again()
+    finally:
+        quiet.close()

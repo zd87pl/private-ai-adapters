@@ -81,6 +81,10 @@ class Service(Protocol):
         """Verify the record chain and say what was found."""
         ...
 
+    def set_interface(self, *, view: str | None = None, setup: str | None = None) -> JSONObject:
+        """Keep which view of the interface the owner uses, or that setup is done; the state."""
+        ...
+
     # -- activity ---------------------------------------------------------------
 
     def activity(
@@ -167,6 +171,10 @@ class Service(Protocol):
         """The configuration that connects one agent application under this app's name."""
         ...
 
+    def connect_check(self, *, name: str, host: str | None = None) -> JSONObject:
+        """Whether one application's settings file holds this app's entry, in one word."""
+        ...
+
     # -- settings ---------------------------------------------------------------
 
     def settings(self) -> JSONObject:
@@ -186,4 +194,10 @@ class Service(Protocol):
 
     def add_replaced_string(self, *, text: str) -> JSONObject:
         """Add one word or number that must never leave; returns only the new count."""
+        ...
+
+    # -- the demo ---------------------------------------------------------------
+
+    def demo_again(self) -> JSONObject:
+        """In a demo: have the played app ask once more for the passage it waits for."""
         ...

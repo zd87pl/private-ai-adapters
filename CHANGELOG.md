@@ -11,6 +11,116 @@ changes only when the bytes on disk do.
 
 ## [Unreleased]
 
+### Added
+
+- **Locktender (preview)**: a local app that stands between a vault of your
+  documents and the AI apps on the same computer. [docs/GATE.md](docs/GATE.md)
+  is its guide, [docs/GATE_FORMAT.md](docs/GATE_FORMAT.md) specifies its files
+  and what travels on its local connections, and a section of
+  [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md#locktender) says where its
+  protection stops. A copy of each document is sealed in a store directory
+  under a passphrase; the file that was added stays where it was, not
+  encrypted. An app can search the documents and read single passages of at
+  most 800 characters, inside limits per app, per kind of app (hosted or local)
+  and per document; where the owner asks for it, each passage waits for an
+  approval that shows the exact text. Every result is appended to a sealed,
+  hash-chained record with its exact text before it is handed over. The app
+  runs on macOS and Linux, not on Windows. It bounds and shows what leaves and
+  cannot recall it; the guide lists what it does not do.
+- **`wdva gate app`**: starts the app and serves its interface on the loopback
+  address, in the browser. Each browser tab has to present, once, the pairing
+  code that the terminal prints; the page then holds a session for that tab,
+  which it sends in a header, and the app sets no cookie. `--demo` runs on
+  invented documents in a temporary store with a played agent and without
+  pairing, `--lock-after` sets when the vault locks itself (eight hours by
+  default), `--view basic` or `--view pro` opens the interface in that view
+  and keeps the choice beside the vault, and `--window` is an experimental
+  window of its own, which pairs like the browser. At start the terminal says
+  where the vault and the page are and, when no AI app could connect to this
+  installation, why. A demo that stops prints one more line, the command that
+  starts the app on a vault of your own.
+- **Two views of one vault, Basic and Pro.** Basic is one page: what waits
+  for your approval, what left the vault, with its exact text, what was
+  stopped in the last 24 hours, your documents and your apps. It changes few
+  things. You add and remove documents there, and in a vault with one group of
+  documents (a group is what Pro calls a collection) you change what an app
+  may do or remove the app. You add an app there too, unless the vault has an
+  app that runs on this computer. What Basic does not change it says in
+  sentences, with a link into Pro. Pro is six pages, Overview, Activity,
+  Approvals, Documents, Apps and Vault, with every setting. A control labelled
+  "View" switches between the two. A new vault starts in Basic, and the demo
+  opens in Basic; a vault that was made before the two views existed opens in
+  Pro until you choose "Basic". What an app is given does not depend on the
+  view.
+- **A first run in four steps**, "Passphrase", "App", "Documents" and "First
+  question", for a new vault in Basic. The second step asks which AI app you
+  use and gives it one kind of access, "Ask me each time": every passage waits
+  for your approval. The third adds a document, or an invented sample letter
+  when no file is at hand. The fourth shows how to add Locktender to that app
+  and the start of a question to copy, waits for the app's first request, and
+  shows the passage the app asks for, with its exact text and the buttons
+  "Release once" and "Don’t release". For Claude Desktop and the ChatGPT
+  desktop app that step has a button "Check the file". A press makes
+  Locktender read that app's one settings file and tell the page one of a few
+  fixed answers, such as whether its own entry is there, and nothing of what
+  the file holds; the page asks for that look at no other time. It is the one
+  file of another program that Locktender reads. Locktender writes no file of
+  another program and changes no settings of any AI app: you copy the text and
+  put it where the AI app reads it. Every step after the first can be skipped
+  or left for later; until setting up is over, a card on the Basic page,
+  "Finish setting up", names the next one.
+- **The demo has a guide.** It stands on the Basic page under "Approvals" and
+  says where the demo is: an app is about to ask, a passage waits, it was
+  released or not, it was read. The played app asks again for the passage that
+  waited when the guide's button "Have the played app ask again" is pressed,
+  and at no other time, whatever your answer was.
+- **A small file beside the vault**, `run/interface.json` in the store
+  directory. It holds two words, which view you use and whether setting up is
+  finished, and nothing from the vault. It is not sealed, it is no setting of
+  the vault, and writing it leaves no entry in the record. A file that is
+  missing or holds anything else counts as no file: the vault then opens in
+  Pro, and it unlocks all the same.
+  [docs/GATE_FORMAT.md](docs/GATE_FORMAT.md#the-interface-file) specifies it.
+- **`wdva gate mcp`**: the program an agent application starts, a Model
+  Context Protocol server on standard input and output with three read-only
+  tools, `locktender_status`, `locktender_search` and `locktender_read`. It
+  holds no key and passes every call to the running app. It needs Python 3.11
+  or newer and the MCP SDK.
+- **`wdva gate config HOST`**: prints the configuration that connects one
+  application that starts local MCP servers. `HOST` is `claude-desktop`,
+  `claude-code`, `chatgpt-desktop`, `codex`, `openclaw` or `generic`. The
+  ChatGPT desktop app has a `HOST` of its own, apart from Codex:
+  `chatgpt-desktop` prints the section for `~/.codex/config.toml`, the file
+  that app shares with Codex according to OpenAI's documentation, and `codex`
+  prints the `codex mcp add` line with the same section as the other way. For
+  `chatgpt-web`, `claude-web`, `grok-web` and `grok-bot` the command says why
+  assistants on the web and on phones cannot be connected. The forms follow
+  each application's documentation and have not been tried with the
+  applications themselves.
+- **Extras**: `mcp` (the MCP SDK, installed on Python 3.11 and newer) and
+  `gate` (`mcp` and `pdf` together, everything the app can use). `all` now
+  includes `mcp`.
+- **Tests and continuous integration for the app**: its tests run on Linux and
+  macOS with Python 3.11 and 3.13. Three walk-throughs in `tests/browser/`
+  drive the interface in a real browser against the real app:
+  `journey_demo.js` walks the demo with its guide, `journey_real.js` a new
+  vault in Pro from pairing to Ctrl-C, and `journey_basic.js` the first run
+  and the Basic page. The CI job "Browser" runs them in Chromium on Linux and
+  in WebKit on macOS. No AI app takes part in them. Not tested: a person at a
+  Mac, Safari itself, a real conversation in any AI app, and `--window`.
+
+### Changed
+
+- **The `pdf` extra needs pypdf 7.0.1 or newer**; the floor was 4.0. The
+  extras `gate` and `all` include `pdf`, so the same holds for them. Older
+  releases of pypdf are named in security advisories about crafted PDF files
+  that take very long to read or use up memory. pypdf is what reads PDF files
+  for `wdva train` and for Locktender.
+- **Continuous integration tests every commit once.** A branch of this
+  repository is tested when it is pushed, and a pull request is tested as a
+  pull request only when it comes from a fork. Before, a push to a branch with
+  an open pull request started every job twice.
+
 ## [0.1.0] - 2026-11-12
 
 The first working release. Everything before it was a prototype that could

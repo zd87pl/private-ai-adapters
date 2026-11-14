@@ -25,6 +25,9 @@ export function button(label, options = {}) {
       "aria-label": options.label,
       "aria-describedby": options.describedby,
       "aria-pressed": options.pressed,
+      // For a button that unfolds something below it: "true" or "false", and the id of what it unfolds.
+      "aria-expanded": options.expanded,
+      "aria-controls": options.controls,
     },
     glyph ? icon(glyph) : null,
     label ? el("span", { class: "btn-label" }, label) : null,
@@ -41,6 +44,7 @@ export function iconButton(glyph, label, options = {}) {
       disabled: options.disabled,
       title: label,
       "aria-label": label,
+      id: options.id,
       key: options.key,
     },
     icon(glyph),
@@ -263,18 +267,27 @@ export function field({ label, id, control, hint, error, action }) {
 
 /**
  * Where the browser can, the messages sit in the layer above sheets. They are put
- * there once, and again whenever a sheet has been opened over them.
+ * there once, and again whenever a sheet has been opened over them: when the next
+ * message comes, and when a sheet opens while messages are showing.
  */
 function lift(host) {
   if (typeof host.showPopover !== "function" || !host.hasAttribute("popover")) return;
   try {
     const shown = host.matches(":popover-open");
     if (shown && !document.querySelector("dialog[open]")) return;
+    // Shown again, the messages that are there must not arrive a second time.
+    for (const item of host.children) item.classList.add("is-settled");
     if (shown) host.hidePopover();
     host.showPopover();
   } catch (_error) {
     host.removeAttribute("popover");
   }
+}
+
+/** A sheet has opened: the messages that are showing stay readable above it and its backdrop. */
+function liftOverSheet() {
+  const host = document.getElementById("toasts");
+  if (host && host.children.length) lift(host);
 }
 
 /** A short message at the bottom of the window that goes away by itself. */
@@ -307,6 +320,17 @@ export function toastError(error) {
 
 const openSheets = new Set();
 
+let sheetsWatcher = null;
+
+/** `watcher(open)` is called whenever a sheet has opened or closed, with how many are open then. */
+export function watchSheets(watcher) {
+  sheetsWatcher = watcher;
+}
+
+function sheetsChanged() {
+  if (sheetsWatcher) sheetsWatcher(openSheets.size);
+}
+
 /**
  * Open a sheet over the window. `build(sheet)` returns its content and is called
  * again by `sheet.update()`. `sheet.close(value)` closes it; `sheet.closed`
@@ -337,10 +361,13 @@ export function openSheet(build, options = {}) {
     openSheets.delete(sheet);
     dialog.remove();
     settle(sheet.result);
+    sheetsChanged();
   });
   openSheets.add(sheet);
+  sheetsChanged();
   sheet.update();
   dialog.showModal();
+  liftOverSheet();
   return sheet;
 }
 
@@ -456,24 +483,31 @@ export function deed(item, passages = null) {
   return text.replace(found[0], passageWords(Number(found[1]), known, item.collections));
 }
 
-/** One row of activity: when, who, what, how much, and how it ended. */
-export function activityRow(item, { onopen, selected, now, passages }) {
+/**
+ * One row of activity: when, who, what, how much, and how it ended. A row opens the
+ * details of its entry. With `plain` it is a line that opens nothing, for a screen
+ * that has no place for the details.
+ */
+export function activityRow(item, { onopen, selected, now, passages, plain = false }) {
   const tone = item.kind === "refusal" ? (item.code === "NEEDS_APPROVAL" ? "amber" : "red") : "plain";
   const what = sentence(deed(item, passages));
   const repeated = item.count > 1;
   const last = repeated && item.last_time ? ` · last ${agoShort(item.last_time, now)}` : "";
+  const shape = ["act-row", `act-${tone}`, selected && "is-selected", item.characters > 0 ? null : "act-nochars"];
   return el(
     "li",
     { class: "act-item", key: `a${item.seq}` },
     el(
-      "button",
-      {
-        type: "button",
-        class: ["act-row", `act-${tone}`, selected && "is-selected", item.characters > 0 ? null : "act-nochars"],
-        onclick: (event) => onopen(item, event.detail === 0),
-        "aria-pressed": selected ? "true" : "false",
-        "aria-label": `${actor(item)} ${deed(item, passages)}. Open the details.`,
-      },
+      plain ? "div" : "button",
+      plain
+        ? { class: shape.concat("act-still") }
+        : {
+            type: "button",
+            class: shape,
+            onclick: (event) => onopen(item, event.detail === 0),
+            "aria-pressed": selected ? "true" : "false",
+            "aria-label": `${actor(item)} ${deed(item, passages)}. Open the details.`,
+          },
       el("span", { class: "act-glyph" }, icon(rowGlyph(item))),
       el("time", { class: "act-time", datetime: item.time, title: whenFull(item.time) }, agoShort(item.time, now)),
       el(

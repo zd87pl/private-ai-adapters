@@ -13,6 +13,7 @@ record uses for the three tools, and the environment variable for the store.
 
 from __future__ import annotations
 
+import ast
 import http.client
 import io
 import json
@@ -161,8 +162,9 @@ def test_what_is_not_the_name_stays_under_any_name() -> None:
 
 # file, the literal as it stands in the source: why it does not follow brand.py
 SPELLED_OUT = {
-    ("brand.py", '"WDVA Gate"'): "the one place",
-    ("brand.py", '"wdva-gate"'): "the one place",
+    ("brand.py", '"Locktender"'): "the one place",
+    ("brand.py", '"locktender"'): "the one place",
+    ("paths.py", '"wdva-gate"'): "the store directory's earlier name, still looked for",
     ("messages.py", '"wdva_status"'): "file format: what a record calls the tool",
     ("messages.py", '"wdva_search"'): "file format: what a record calls the tool",
     ("messages.py", '"wdva_read"'): "file format: what a record calls the tool",
@@ -176,9 +178,9 @@ SPELLED_OUT = {
 
 
 def test_the_name_is_spelled_out_only_where_this_list_says() -> None:
-    # Fixed to today's name on purpose: after a rename this list is the map of what was
-    # left behind, and each entry says why it may stay.
-    forms = re.compile(r"WDVA Gate|wdva-gate|wdva_(?:status|search|read)|wdva_gate")
+    # Fixed to today's name and to the one before it on purpose: after a rename this list is
+    # the map of what was left behind, and each entry says why it may stay.
+    forms = re.compile(r"[Ll]ocktender|WDVA Gate|wdva-gate|wdva_(?:status|search|read)|wdva_gate")
     found: set[tuple[str, str]] = set()
     for path in sorted((PACKAGE / "gate").rglob("*.py")):
         source = path.read_text(encoding="utf-8")
@@ -193,6 +195,37 @@ def test_the_name_is_spelled_out_only_where_this_list_says() -> None:
     for path in sorted((PACKAGE / "gate" / "app" / "static").iterdir()):
         text = path.read_text(encoding="utf-8")
         assert forms.search(text) is None, path.name
+
+
+# file, the text as it stands in the source: why it may say "the gate"
+THE_GATE = {
+    ("core.py", "the gate is locked"): "about a Gate object; the app answers in its own words",
+    ("core.py", "the gate needs a store that was opened for writing"): "about a Gate object",
+    ("service.py", "the gate is locked"): "the engine's message above, compared and never shown",
+    ("link.py", "not the gate"): "kept inside the error that says the app did not answer",
+}
+
+
+def test_what_a_reader_meets_names_the_product_and_not_the_gate() -> None:
+    # "The gate" is what the code calls its engine. A sentence for a person or an agent names
+    # the product, through the constant. Documentation and comments may keep the word.
+    word = re.compile(r"\bthe gate\b|\bgate['\u2019]s\b", re.I)
+    found: set[tuple[str, str]] = set()
+    for path in sorted((PACKAGE / "gate").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        documentation = {
+            id(node.value)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
+        }
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                continue
+            if id(node) not in documentation and word.search(node.value):
+                found.add((path.name, node.value))
+    assert found == set(THE_GATE)
+    assert word.search("The gate cannot take it back.")
+    assert word.search("past the gate's counting")
 
 
 # -- under another name: what an agent can receive ------------------------------------------
@@ -367,7 +400,7 @@ def test_the_host_configuration_and_the_data_directory_carry_the_new_name(rename
     assert Path(told["directory"]).name == "example-desk"
     assert told["variable"] == "WDVA_GATE_STORE"
     hosts = told["hosts"]
-    assert len(hosts) == 9
+    assert len(hosts) == 10
     for host, shown in hosts.items():
         assert_renamed(shown["text"], f"the configuration text for {host}")
         assert_renamed(json.dumps(shown["json"]), f"the configuration for {host}")
@@ -381,6 +414,13 @@ def test_the_host_configuration_and_the_data_directory_carry_the_new_name(rename
     )
     assert hosts["codex"]["json"]["blocks"][0]["text"].startswith("codex mcp add example-desk -- ")
     assert hosts["codex"]["json"]["blocks"][1]["text"].startswith("[mcp_servers.example-desk]\n")
+    # The ChatGPT desktop app is an entry of its own, with the file alone.
+    (only,) = hosts["chatgpt-desktop"]["json"]["blocks"]
+    assert only["text"] == hosts["codex"]["json"]["blocks"][1]["text"]
+    # The pieces for a file that holds other settings carry the new key too.
+    inner = hosts["claude-desktop"]["json"]["blocks"][0]["inner"]
+    assert inner["entry"].startswith('"example-desk": {')
+    assert '"example-desk": {' in inner["section"]
     assert '"example-desk": {' in hosts["openclaw"]["json"]["blocks"][0]["text"]
     assert "Example Desk neither limits nor records it." in hosts["chatgpt-web"]["text"].replace(
         "\n", " "
@@ -515,7 +555,7 @@ class Running:
             env=environment,
         )
         self.lines: list[str] = []
-        self.cookie: str | None = None
+        self.session: str | None = None  # the token the app told this "page"
         watchdog = threading.Timer(90, self.process.kill)
         watchdog.start()
         try:
@@ -534,8 +574,8 @@ class Running:
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
         try:
             headers = {"Host": f"127.0.0.1:{self.port}"}
-            if self.cookie:
-                headers["Cookie"] = self.cookie
+            if self.session:
+                headers["X-WDVA-Session"] = self.session
             data = None
             if method != "GET":
                 headers["X-WDVA-Gate"] = "1"
@@ -544,9 +584,9 @@ class Running:
             connection.request(method, target, body=data, headers=headers)
             answer = connection.getresponse()
             content = answer.read()
-            given = answer.getheader("Set-Cookie")
-            if given:
-                self.cookie = given.split(";")[0]
+            assert answer.getheader("Set-Cookie") is None, "the session must never be a cookie"
+            if answer.status == 200 and target.startswith("/api/session"):
+                self.session = json.loads(content).get("session", self.session)
             return answer.status, {k.lower(): v for k, v in answer.getheaders()}, content
         finally:
             connection.close()
@@ -608,11 +648,12 @@ def test_the_app_starts_serves_and_answers_under_the_new_name(
         status, _, content = app.call("GET", f"/{name}")
         assert status == 200, name
         assert_renamed(content.decode("utf-8"), f"the served file {name}")
-    # Paired: the cookie's name, and what the service says.
+    # Paired: the session is a token without any name in it, and then what the service says.
     code = re.search(r"pairing code: (\S+)", "\n".join(app.lines))
     assert code is not None
-    assert app.json("POST", "/api/session/pair", {"code": code.group(1)}) == {"paired": True}
-    assert (app.cookie or "").startswith(f"example_desk_{app.port}=")
+    answer = app.json("POST", "/api/session/pair", {"code": code.group(1)})
+    assert answer == {"paired": True, "session": app.session}
+    assert re.fullmatch(r"[0-9a-f]{64}", app.session or "")
     state = app.json("POST", "/api/store/create", {"passphrase": "correct horse battery staple"})
     assert state["locked"] is False
     assert_renamed(json.dumps(app.json("GET", "/api/apps")), "the list of apps")
@@ -624,7 +665,8 @@ def test_the_demo_starts_under_the_new_name(renamed: Path, running: list[Running
     running.append(app)
     assert app.lines[0].startswith("Example Desk ")
     assert_renamed("\n".join(app.lines), "the start-up lines of the demo")
-    assert app.call("GET", "/")[0] == 200  # the page gives the session in the demo
+    assert app.call("GET", "/")[0] == 200
+    assert app.json("GET", "/api/session")["name"] == "Example Desk"  # and the demo's session
     state = app.json("GET", "/api/state")
     assert Path(state["store"]["path"]).name.startswith("example-desk-demo-")
     assert_renamed(json.dumps(state), "the state of the demo")

@@ -395,10 +395,10 @@ async def test_sloppy_arguments_reach_the_backend_and_get_its_answer(
             result = await client.call_tool(tool, arguments)
             assert not result.is_error, arguments
             text = only_text(result)
-            assert text.startswith(f"OK: {tool[5:]} answered."), arguments
+            assert text.startswith(f"OK: {tool.rpartition('_')[2]} answered."), arguments
             assert "pydantic" not in text
             assert "://" not in text
-            assert backend.calls == [(tool[5:], said(mode), *expected)], arguments
+            assert backend.calls == [(tool.rpartition("_")[2], said(mode), *expected)], arguments
 
 
 @pytest.mark.anyio

@@ -55,7 +55,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from wdva._util import MAX_SAFE_INTEGER, check_json_limits, strict_json_loads
-from wdva.gate import messages, paths
+from wdva.gate import brand, messages, paths
 from wdva.gate.errors import GateError, KeeperUnavailableError
 from wdva.gate.types import CODES, Backend, Caller, Reply
 
@@ -86,7 +86,13 @@ MAX_REQUEST_BYTES = 16 * 1024
 MAX_REPLY_BYTES = 1024 * 1024
 
 MAX_CONNECTIONS = 16
-"""Connections served at the same time. A further one is closed at once."""
+"""Connections served at the same time.
+
+When all are taken, a new caller takes the place of the one that has waited
+longest without sending its request, so that callers who say nothing keep
+nobody out. It is closed at once only when every place is held by a call that
+is being answered.
+"""
 
 HANDSHAKE_SECONDS = 5.0
 """How long a caller has, from the moment it is accepted, to send its complete request."""
@@ -106,6 +112,7 @@ MAX_CLAIMED_CHARS = 64
 KEYSLOT_NAME = "keyslot.wdva"
 """The file every store has. A directory without it is not a store."""
 
+_LEAVING_CONNECTIONS = 8  # callers that were told to go and whose threads have not ended yet
 _MAX_CLIENT_CHARS = 64  # longer than any name that can be registered
 _MAX_TRANSPORT_CHARS = 16
 _REQUEST_KEYS = frozenset({"v", "op", "client", "claimed", "transport", "args"})
@@ -269,10 +276,10 @@ def _check_socket_path(path: Path) -> None:
     if not stat.S_ISDIR(info.st_mode):
         raise GateError(f"{folder} is not a directory, so no socket can be made in it")
     if info.st_uid != os.geteuid():
-        raise GateError(f"{folder} belongs to another user; the gate does not listen there")
+        raise GateError(f"{folder} belongs to another user; {brand.PRODUCT} does not listen there")
     if stat.S_IMODE(info.st_mode) & 0o077:
         raise GateError(
-            f"{folder} can be entered by other users; the gate does not listen there. "
+            f"{folder} can be entered by other users; {brand.PRODUCT} does not listen there. "
             f"Close it with: chmod 700 {folder}"
         )
 
@@ -344,8 +351,9 @@ class LinkServer:
         self._idle = threading.Condition(self._lock)
         self._started = False
         self._listening: _Listening | None = None
-        # Each open connection, and whether its call has been handed to the backend.
-        self._connections: dict[socket.socket, bool] = {}
+        # Each open connection, oldest first: False while its request is awaited, True once
+        # its call was handed to the backend, None when it was told to go for a newcomer.
+        self._connections: dict[socket.socket, bool | None] = {}
 
     @property
     def socket_path(self) -> Path:
@@ -451,13 +459,29 @@ class LinkServer:
                 self._admit(conn)
 
     def _admit(self, conn: socket.socket) -> None:
+        told_to_go: socket.socket | None = None
         with self._lock:
-            admitted = self._listening is not None and len(self._connections) < MAX_CONNECTIONS
+            admitted = self._listening is not None
+            if admitted and len(self._connections) >= MAX_CONNECTIONS:
+                # Every place is taken. The caller that has waited longest without sending
+                # its request gives way: a program that connects and says nothing must not
+                # be able to keep the applications out.
+                told_to_go = next(
+                    (held for held, state in self._connections.items() if state is False), None
+                )
+                admitted = (
+                    told_to_go is not None
+                    and len(self._connections) < MAX_CONNECTIONS + _LEAVING_CONNECTIONS
+                )
+                if admitted and told_to_go is not None:
+                    self._connections[told_to_go] = None
             if admitted:
                 self._connections[conn] = False
         if not admitted:
             _close(conn)
             return
+        if told_to_go is not None:
+            _hang_up(told_to_go)
         thread = threading.Thread(
             target=self._serve, args=(conn,), name="wdva-gate-link-call", daemon=True
         )
@@ -496,7 +520,9 @@ class LinkServer:
     def _hand_over(self, conn: socket.socket) -> bool:
         """Mark the connection's call as running, unless the server is stopping."""
         with self._lock:
-            if self._listening is None or conn not in self._connections:
+            # Not when the caller was told to go a moment ago: it would get no reply, and
+            # a call that is made must be one whose reply is sent.
+            if self._listening is None or self._connections.get(conn) is not False:
                 return False
             self._connections[conn] = True
             return True

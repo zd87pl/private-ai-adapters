@@ -129,6 +129,20 @@ def connect(path: Path, timeout: float = 5.0) -> socket.socket:
     return conn
 
 
+def was_hung_up(conn: socket.socket) -> bool:
+    """Whether the listener has ended this connection. Reads nothing and does not wait."""
+    timeout = conn.gettimeout()
+    conn.setblocking(False)
+    try:
+        return conn.recv(1, socket.MSG_PEEK) == b""
+    except BlockingIOError:  # still open, nothing sent
+        return False
+    except ConnectionResetError:
+        return True
+    finally:
+        conn.settimeout(timeout)
+
+
 def raw(path: Path, payload: bytes, *, role: bytes = b"c") -> tuple[bytes, bytes]:
     """Send ``role`` and ``payload``; return the hello and everything that came after it."""
     with connect(path) as conn:
@@ -534,26 +548,35 @@ def test_a_caller_that_stays_silent_is_dropped(
     assert backend.calls == []
 
 
-def test_at_most_sixteen_connections_at_a_time(
-    server: LinkServer, backend: FakeBackend, monkeypatch: pytest.MonkeyPatch
+def test_at_most_sixteen_calls_are_answered_at_a_time(
+    server: LinkServer, backend: FakeBackend
 ) -> None:
     assert link.MAX_CONNECTIONS == 16
-    monkeypatch.setattr(link, "HANDSHAKE_SECONDS", 60.0)  # the held ones must not time out
     path = server.socket_path
+    backend.hold = threading.Event()  # every call stays in the backend until this is set
     held = []
     try:
         for _ in range(16):
             conn = connect(path)
-            assert conn.recv(5) == b"WDVG1"  # accepted and waiting for its request
+            assert conn.recv(5) == b"WDVG1"
+            conn.sendall(b"c" + frame(request("status")))
             held.append(conn)
+        deadline = time.monotonic() + 10
+        while len(backend.calls) < 16:
+            assert time.monotonic() < deadline, "the calls did not reach the backend"
+            time.sleep(0.01)
 
-        with connect(path) as extra:
-            assert read_until_closed(extra) == b""  # closed at once: not even a hello
+        # Every place is held by a call that is being answered: no one is cut off for a
+        # newcomer, and the newcomer is closed at once, without even a hello.
+        for _ in range(3):
+            with connect(path) as extra:
+                assert read_until_closed(extra) == b""
+        assert len(backend.calls) == 16
 
-        # A held connection can still finish its call ...
-        held[0].sendall(b"c" + frame(request("status")))
-        assert decode(read_until_closed(held[0]))["code"] == "OK"
-        # ... and its place is free again afterwards.
+        backend.hold.set()
+        for conn in held:
+            assert decode(read_until_closed(conn))["code"] == "OK"
+        # The places are free again afterwards.
         deadline = time.monotonic() + 30
         while True:
             with connect(path) as again:
@@ -566,7 +589,78 @@ def test_at_most_sixteen_connections_at_a_time(
     finally:
         for conn in held:
             conn.close()
-    assert len(backend.calls) == 2
+    assert len(backend.calls) == 17
+
+
+def test_callers_that_say_nothing_keep_nobody_out(
+    server: LinkServer, store: Path, backend: FakeBackend, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(link, "HANDSHAKE_SECONDS", 60.0)  # the silent ones would wait this long
+    path = server.socket_path
+    held = []
+    try:
+        for _ in range(16):
+            conn = connect(path)
+            assert conn.recv(5) == b"WDVG1"  # accepted and waiting for its request
+            held.append(conn)
+
+        # Every place is taken by a caller that has sent nothing. An application that
+        # calls now is answered all the same, each time ...
+        gate = RemoteGate(store, CLIENT)
+        for _ in range(3):
+            assert gate.status(caller()).code == "OK"
+        # ... because the first one took the place of the caller that had waited longest.
+        assert read_until_closed(held[0]) == b""
+        # A later call takes the place the call before it has left. When the listener has
+        # not yet seen that place become free (its thread ends a moment after the reply
+        # is read), the call takes the place of the next silent caller. So the callers
+        # told to go are the ones that waited longest, and at most one for each call.
+        told_to_go = [conn for conn in held if was_hung_up(conn)]
+        assert 1 <= len(told_to_go) <= 3
+        assert told_to_go == held[: len(told_to_go)]
+        # A caller that was told to go is not served after all: its request comes too late.
+        with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+            held[0].sendall(b"c" + frame(request("read", args={"ref": "d-3f9a2c41b07e.7"})))
+        # The others still wait, and can still make their call.
+        waiting = held[len(told_to_go)]
+        waiting.sendall(b"c" + frame(request("status")))
+        assert decode(read_until_closed(waiting))["code"] == "OK"
+        assert [call[0] for call in backend.calls] == ["status"] * 4
+
+        # More silent callers than there are places only replace one another: each is let
+        # in for the one that has waited longest, or turned away at the door while the
+        # listener is still ending as many callers as it lets leave at one time.
+        for _ in range(40):
+            conn = connect(path)
+            assert conn.recv(5) in (b"WDVG1", b"")
+            held.append(conn)
+        deadline = time.monotonic() + 10
+        while len(server._connections) > link.MAX_CONNECTIONS:
+            assert time.monotonic() < deadline, "more connections are kept than there are places"
+            time.sleep(0.01)
+        assert gate.status(caller()).code == "OK"
+    finally:
+        for conn in held:
+            conn.close()
+    assert [call[0] for call in backend.calls] == ["status"] * 5
+
+
+def test_a_caller_that_was_told_to_go_is_not_handed_to_the_backend(
+    server: LinkServer, backend: FakeBackend, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Its reply could not be sent any more, and a call that is made must be one whose
+    # reply is sent: what a call releases is recorded and counted.
+    monkeypatch.setattr(link, "HANDSHAKE_SECONDS", 60.0)
+    with connect(server.socket_path) as conn:
+        assert conn.recv(5) == b"WDVG1"
+        (held,) = list(server._connections)
+        with server._lock:
+            server._connections[held] = None  # as _admit marks the one it tells to go
+        assert server._hand_over(held) is False
+        with server._lock:
+            server._connections[held] = False
+        assert server._hand_over(held) is True
+    assert backend.calls == []
 
 
 # -- failures of the backend ---------------------------------------------------

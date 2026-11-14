@@ -15,12 +15,17 @@ one is checked on every request, before the request's body is read.
   ``localhost:<port>``. A page that reaches the port under another name (a
   host name pointed at the loopback address) is refused.
 * **Pairing.** At start the server draws a code that the app prints on its
-  terminal. The page asks for it; the right code sets a session cookie
-  (``HttpOnly; SameSite=Strict``, held in memory only). Five wrong codes switch
+  terminal. The page asks for it; for the right code it is told the session
+  token of this run (random, held in memory only). Five wrong codes switch
   pairing off until the app is restarted. Every API call except the two that
-  do the pairing needs the cookie. Without pairing (the demo, and the app's own
-  window) the cookie is given with the page itself: in the demo with every
-  load, otherwise with the first one only.
+  do the pairing must carry the token in the header ``X-WDVA-Session``. Only
+  the demo, whose documents are invented, runs without pairing: there the
+  session endpoint hands the token to whoever asks from the page.
+* **No cookie.** The session is never put into a cookie. A browser sends the
+  cookies of ``127.0.0.1`` to every port of that address, so a page served by
+  another program on this computer would be sent the session, and could
+  replace it. The page keeps the token where only pages of this very address,
+  port included, can read it, and sends it itself.
 * **Other sites.** Every call that changes something is a ``POST`` or
   ``DELETE`` and must carry the header ``X-WDVA-Gate: 1``, which a page of
   another site cannot send without asking first. On any request an ``Origin``
@@ -30,6 +35,15 @@ one is checked on every request, before the request's body is read.
   permit another site to read it.
 * **Size.** A JSON body may have 64 KiB, an uploaded document 20 MiB. A larger
   one is refused from its declared length alone.
+* **Passphrases** are checked for one request at a time, whichever connection
+  it came on, and a wrong one is answered no sooner than a second after its
+  turn began. So they can be tried at one a second at most, and the memory
+  that stretching a passphrase takes is needed once, not once per connection.
+* **Connections.** At most :data:`MAX_CONNECTIONS` are served at a time, so
+  that a program which opens connections and says nothing cannot use up what
+  the app needs to open files and to answer agent applications. When all
+  places are taken, the connection that has waited longest without showing
+  the session gives way to the new one.
 * **Static files** are the files found in one flat directory when the server
   starts, read into memory then. A request path is only ever looked up in
   that table; nothing derived from a request reaches the file system. The
@@ -42,9 +56,10 @@ line with the name of the exception class goes to standard error and the
 caller gets a plain error without detail.
 
 None of this is a wall against programs that run under the owner's account:
-one that can read the app's terminal can pair, and one that can read the
-browser's cookies has the session. Without pairing, a program that loads the
-page before the owner's browser or window does is given the session instead.
+one that can read the app's terminal can pair, and one that can read what the
+browser keeps for the page has the session. Any program on the computer can
+also send five wrong pairing codes and so switch pairing off until the app is
+restarted; a page that is paired already goes on working.
 """
 
 from __future__ import annotations
@@ -75,6 +90,7 @@ from wdva.gate.extract import MAX_UPLOAD_BYTES
 
 __all__ = [
     "CONTENT_SECURITY_POLICY",
+    "MAX_CONNECTIONS",
     "MAX_JSON_BYTES",
     "MAX_WRONG_CODES",
     "PAIRING_ALPHABET",
@@ -92,7 +108,14 @@ PAIRING_ALPHABET = "ABCDEFGHJKMNPQRSTVWXYZ23456789"
 """The characters of a pairing code: no letter or digit that is easily taken for another."""
 
 WRONG_PASSPHRASE_DELAY = 1.0
-"""Seconds that pass, counted from the request's arrival, before a wrong passphrase is answered."""
+"""Seconds from the moment a passphrase's turn began until a wrong one is answered.
+
+Requests that carry a passphrase take turns, so this is also the shortest time
+between two wrong passphrases, however many connections try at once.
+"""
+
+MAX_CONNECTIONS = 64
+"""The most connections that are served at one time. A browser opens six."""
 
 CONTENT_SECURITY_POLICY = (
     "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
@@ -102,6 +125,8 @@ CONTENT_SECURITY_POLICY = (
 
 _PAIRING_CODE_LENGTH = 8
 _GATE_HEADER = "X-WDVA-Gate"
+_SESSION_HEADER = "X-WDVA-Session"
+_LEAVING_CONNECTIONS = 16  # connections that were told to go and have not gone yet
 _CONNECTION_TIMEOUT = 30.0  # seconds a connection may stay silent
 _ACCEPT_WAIT = 0.5  # seconds between two looks at whether the server was stopped
 _DISCARD_MAX_BYTES = 64 * 1024 * 1024
@@ -121,7 +146,6 @@ _CONTENT_TYPES = {
 }
 _JSON = "application/json"
 _INDEX = "index.html"
-_PAGE_PATHS = ("/", "/" + _INDEX)
 _NAME_PLACE = b"{{product}}"  # where the page gets the product's name
 # The product's name as a header value: plain letters, a hyphen for each space.
 _SERVER_HEADER = "-".join(re.sub(r"[^A-Za-z0-9 ]", "", brand.PRODUCT).split()) or "app"
@@ -207,6 +231,7 @@ _ROUTES: tuple[_Route, ...] = (
     _Route("POST", "reauth", "reauth", fields=(_PASSPHRASE,)),
     _Route("POST", "serving", "set_serving", fields=(_text("kinds"), _Field("paused", "texts"))),
     _Route("POST", "verify", "verify"),
+    _Route("POST", "interface", "set_interface", fields=(_text("view"), _text("setup"))),
     _Route(
         "GET",
         "activity",
@@ -281,6 +306,7 @@ _ROUTES: tuple[_Route, ...] = (
     ),
     _Route("POST", "apps/<name>/limits", "set_app_limits", whole_body="limits"),
     _Route("GET", "apps/<name>/connect", "connect", query=(_text("host"),)),
+    _Route("POST", "apps/<name>/connect/check", "connect_check", fields=(_text("host"),)),
     _Route("GET", "settings", "settings"),
     _Route(
         "POST",
@@ -296,6 +322,7 @@ _ROUTES: tuple[_Route, ...] = (
     _Route(
         "POST", "replaced-strings", "add_replaced_string", fields=(_text("text", required=True),)
     ),
+    _Route("POST", "demo/again", "demo_again"),
 )
 
 
@@ -319,7 +346,6 @@ class _Response:
     content_type: str
     body: bytes
     code: str | None = None  # the error code, when this is an error
-    set_cookie: bool = False
 
 
 class _Refused(Exception):
@@ -332,9 +358,9 @@ class _Refused(Exception):
         self.message = message
 
 
-def _json_response(value: Any, *, set_cookie: bool = False) -> _Response:
+def _json_response(value: Any) -> _Response:
     body = json.dumps(value, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
-    return _Response(200, _JSON, body.encode("ascii"), set_cookie=set_cookie)
+    return _Response(200, _JSON, body.encode("ascii"))
 
 
 def _error_response(status: int, code: str, message: str) -> _Response:
@@ -472,30 +498,17 @@ class _App:
         if port == 80:  # the one port a browser leaves out of the Host header
             self.hosts |= {"127.0.0.1", "localhost"}
         self.code = _draw_pairing_code() if pairing else None
-        # Cookies are shared between the ports of one host, so the name carries the port.
-        self.cookie_name = f"{brand.SLUG.replace('-', '_')}_{port}"
         self.stopped = threading.Event()
-        self._token = secrets.token_hex(32)
+        self.token = secrets.token_hex(32)  # the session of this run; never in a cookie
+        self.passphrase_turn = threading.Lock()  # held while one passphrase is checked
         self._lock = threading.Lock()
         self._wrong_codes = 0
-        self._page_served = False
 
-    @property
-    def cookie(self) -> str:
-        """The ``Set-Cookie`` value that makes a browser part of the session."""
-        return f"{self.cookie_name}={self._token}; HttpOnly; SameSite=Strict; Path=/"
-
-    def is_session(self, cookie_headers: list[str]) -> bool:
-        """Whether one of the request's cookies is this run's session token."""
-        found = False
-        for header in cookie_headers:
-            for part in header.split(";"):
-                name, _, value = part.strip().partition("=")
-                if name == self.cookie_name and hmac.compare_digest(
-                    value.encode("utf-8"), self._token.encode("ascii")
-                ):
-                    found = True
-        return found
+    def is_session(self, values: list[str]) -> bool:
+        """Whether the request shows this run's session: the token, once, in its header."""
+        return len(values) == 1 and hmac.compare_digest(
+            values[0].encode("utf-8"), self.token.encode("ascii")
+        )
 
     def try_code(self, code: str) -> str:
         """Check a typed pairing code: ``"ok"``, ``"wrong"`` or ``"disabled"``.
@@ -513,27 +526,72 @@ class _App:
             self._wrong_codes += 1
             return "disabled" if self._wrong_codes >= MAX_WRONG_CODES else "wrong"
 
-    def page_gives_session(self) -> bool:
-        """Whether a load of the page, arriving without the cookie, is given it.
-
-        Never with pairing. In the demo, where every document is invented,
-        always. Otherwise only the first load: the app's own window takes the
-        session, and whatever loads the page later gets none.
-        """
-        if self.pairing:
-            return False
-        if self.demo:
-            return True
-        with self._lock:
-            first = not self._page_served
-            self._page_served = True
-            return first
-
 
 class _Server(ThreadingHTTPServer):
     daemon_threads = True
     timeout = _ACCEPT_WAIT
     app: _App
+
+    def __init__(self, address: tuple[str, int], handler: type[BaseHTTPRequestHandler]) -> None:
+        # Every connection that is open, oldest first. True while it may be told to go:
+        # it has not shown the session, and it was not told already.
+        self._open: dict[socket.socket, bool] = {}
+        self._open_lock = threading.Lock()
+        super().__init__(address, handler)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        """Serve a new connection in a thread of its own, if there is a place for it.
+
+        Each connection costs a thread and a file descriptor, and a program
+        needs no session to open one and say nothing. So their number is
+        bounded. When every place is taken, the connection that has waited
+        longest without showing the session is closed and the new one takes
+        its place: whoever fills the places with silent connections keeps
+        nobody out. A new connection is closed at once only when no connection
+        can be told to go, or too many were told and have not gone yet.
+        """
+        with self._open_lock:
+            admitted = self._make_room()
+            if admitted:
+                self._open[request] = True
+        if not admitted:
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:  # no thread could be started for it
+            self._gone(request)
+            raise
+
+    def _make_room(self) -> bool:
+        """Whether one more connection may be served; closes the longest waiting one for it."""
+        if len(self._open) < MAX_CONNECTIONS:
+            return True
+        if len(self._open) >= MAX_CONNECTIONS + _LEAVING_CONNECTIONS:
+            return False
+        for held, may_go in self._open.items():
+            if may_go:
+                self._open[held] = False
+                with contextlib.suppress(OSError):  # it may have closed a moment ago
+                    held.shutdown(socket.SHUT_RDWR)  # its thread sees the end and returns
+                return True
+        return False
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._gone(request)
+
+    def _gone(self, request: Any) -> None:
+        with self._open_lock:
+            self._open.pop(request, None)
+
+    def keep(self, request: Any) -> None:
+        """Note that a connection showed the session: it is not closed for a newcomer."""
+        with self._open_lock:
+            if request in self._open:
+                self._open[request] = False
 
     def server_bind(self) -> None:
         # The stock method also asks the resolver for the host's full name,
@@ -621,7 +679,6 @@ class _Handler(BaseHTTPRequestHandler):
     # -- the request ------------------------------------------------------------
 
     def _handle(self, method: str) -> None:
-        arrived = time.monotonic()
         try:
             response = self._answer(method)
         except _Refused as refused:
@@ -631,9 +688,6 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception as error:
             _report(error, "a request")
             response = _INTERNAL
-        if response.code == "wrong_passphrase":
-            # Slow down guessing. Every wrong passphrase costs this much, with no lock-out.
-            time.sleep(max(0.0, arrived + WRONG_PASSPHRASE_DELAY - time.monotonic()))
         self._send(response)
         if self._unread > 0:
             self._discard_unread()
@@ -665,17 +719,21 @@ class _Handler(BaseHTTPRequestHandler):
 
         if any(v.lower() not in _SAME_SITE_VALUES for v in self._header_values("Sec-Fetch-Site")):
             raise _forbidden("this request came from another site")
-        paired = app.is_session(self._header_values("Cookie"))
+        paired = app.is_session(self._header_values(_SESSION_HEADER))
+        if paired:
+            cast(_Server, self.server).keep(self.connection)
         if (method, path) == ("GET", "/api/session"):
-            return _json_response(
-                {
-                    "paired": paired,
-                    "pairing": "code" if app.pairing else "none",
-                    "demo": app.demo,
-                    "version": app.version,
-                    "name": brand.PRODUCT,
-                }
-            )
+            session: dict[str, Any] = {
+                "paired": paired,
+                "pairing": "code" if app.pairing else "none",
+                "demo": app.demo,
+                "version": app.version,
+                "name": brand.PRODUCT,
+            }
+            if not app.pairing:
+                # Only the demo, whose documents are invented, runs without pairing.
+                session["session"] = app.token
+            return _json_response(session)
         if (method, path) == ("POST", "/api/session/pair"):
             return self._pair()
         if not paired:
@@ -686,12 +744,7 @@ class _Handler(BaseHTTPRequestHandler):
         entry = self._app.static.get(path) if method == "GET" else None
         if entry is None:
             raise _not_found()
-        give_session = (
-            path in _PAGE_PATHS
-            and not self._app.is_session(self._header_values("Cookie"))
-            and self._app.page_gives_session()
-        )
-        return _Response(200, entry[0], entry[1], set_cookie=give_session)
+        return _Response(200, entry[0], entry[1])
 
     def _pair(self) -> _Response:
         body = self._read_json(MAX_JSON_BYTES)
@@ -701,7 +754,7 @@ class _Handler(BaseHTTPRequestHandler):
             raise _not_found()
         result = self._app.try_code(body["code"])
         if result == "ok":
-            return _json_response({"paired": True}, set_cookie=True)
+            return _json_response({"paired": True, "session": self._app.token})
         if result == "wrong":
             raise _Refused(403, "wrong_code", "that is not the code the app printed")
         raise _Refused(
@@ -721,6 +774,20 @@ class _Handler(BaseHTTPRequestHandler):
                 arguments[route.whole_body] = body
             else:
                 arguments.update(_body_arguments(route, body))
+        if _PASSPHRASE not in route.fields:
+            return self._ask(route, arguments)
+        # Checking a passphrase costs time and memory on purpose. One request does so
+        # at a time, and a wrong passphrase keeps its turn until the delay is over:
+        # opening more connections tries no more passphrases, and needs no more memory.
+        with self._app.passphrase_turn:
+            began = time.monotonic()
+            response = self._ask(route, arguments)
+            if response.code == "wrong_passphrase":
+                time.sleep(max(0.0, began + WRONG_PASSPHRASE_DELAY - time.monotonic()))
+        return response
+
+    def _ask(self, route: _Route, arguments: dict[str, Any]) -> _Response:
+        """The service's answer to one call, or its error in the form every error has."""
         if self._app.stopped.is_set():
             raise _Refused(503, "unavailable", "the app is shutting down")
         try:
@@ -816,8 +883,6 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
-        if response.set_cookie:
-            self.send_header("Set-Cookie", self._app.cookie)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(response.body)
@@ -836,10 +901,10 @@ class AppServer:
     :class:`OSError` if that fails; :meth:`start` begins to answer requests in
     a background thread; :meth:`stop` ends it.
 
-    With ``pairing`` a code is drawn, and a browser must present it before the
-    API answers. Without it the page itself carries the session: every load in
-    ``demo`` mode, only the first one otherwise. So load nothing from the
-    server before the page that is meant to have it.
+    With ``pairing`` a code is drawn, and a page must present it before the
+    API answers. Only a ``demo`` can do without: its session is handed to
+    whoever loads the page, which is acceptable for invented documents and for
+    nothing else, so ``pairing=False`` without ``demo`` raises ``ValueError``.
 
     ``version`` and ``demo`` are what the session endpoint reports, next to the
     product's name. The interface's files are read from ``static_dir``
@@ -859,6 +924,8 @@ class AppServer:
     ) -> None:
         if not 0 <= port <= 65535:
             raise ValueError("port must be between 0 and 65535")
+        if not pairing and not demo:
+            raise ValueError("only a demo runs without pairing")
         directory = Path(static_dir) if static_dir is not None else Path(__file__).parent / "static"
         static = _load_static(directory)
         self._httpd = _Server(("127.0.0.1", port), _Handler)

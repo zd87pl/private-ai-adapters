@@ -19,6 +19,11 @@ export function count(value, one, many) {
   return `${num(value)} ${value === 1 ? one : many}`;
 }
 
+/** A share between 0 and 1 as a whole percentage: "50%". */
+export function percent(share) {
+  return `${num(Math.round(share * 100))}%`;
+}
+
 /** A size in the decimal units a Mac shows: "4.8 MB". */
 export function bytes(value) {
   if (typeof value !== "number" || !Number.isFinite(value)) return "–";

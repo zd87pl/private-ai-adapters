@@ -14,13 +14,16 @@ app has beyond the store itself:
 * **Owner mode.** For ten minutes after the passphrase was last entered, the
   owner may make changes that let more leave: register an app, grant a
   collection, open a collection to hosted apps, show titles, raise a limit,
-  answer both kinds of apps at once. After that such a change is refused until
-  the passphrase is entered again. Changes that only take away, approvals of
-  single passages, adding and removing documents and locking are never held
-  up by this.
+  answer both kinds of apps at once, answer an app again that was not being
+  answered. After that such a change is refused until the passphrase is
+  entered again. Changes that only take away, approvals of single passages,
+  adding and removing documents and locking are never held up by this.
 * **Which apps are answered.** Every registered app is, unless the owner
   paused it in this session. When hosted and local apps are both registered,
-  only the hosted ones are answered until the owner has chosen.
+  only the hosted ones are answered until the owner has chosen. Which apps
+  are answered is not part of the stored settings, so it is watched apart
+  from them: whatever would make the session answer an app it does not answer
+  now needs owner mode, also when it is the removal of another app.
 * **The activity list.** One entry per record, written as a sentence, built
   from the record when the vault is unlocked and extended as records are
   appended. A call that asks what an app may use is listed as a question, not
@@ -28,6 +31,12 @@ app has beyond the store itself:
   is read from the record when it is asked for, and nowhere else is document
   text handed to the interface except the passage the owner is asked to
   approve.
+* **Which view the owner uses.** Two words about the interface, kept in a
+  small file beside the vault that is not sealed (``run/interface.json``):
+  which of its two views the owner uses, and whether setting up was finished.
+  The service alone writes it. It is no setting of the vault and leaves no
+  entry in the record; a file that is missing or holds anything else counts
+  as no file, and never keeps a vault from unlocking.
 
 The methods take and return plain JSON values and raise
 :class:`~wdva.gate.app.api.ServiceError`. A passphrase is used and forgotten:
@@ -43,8 +52,11 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import json
 import os
 import re
+import stat
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
@@ -54,9 +66,10 @@ from pathlib import Path, PurePosixPath
 from typing import Any, TypeVar, cast
 
 from wdva import vault
+from wdva._util import strict_json_loads
 from wdva._version import __version__
 from wdva.errors import WDVAError, WrongKeyError
-from wdva.gate import brand, extract, hostconfig, messages, paths
+from wdva.gate import brand, extract, hostcheck, hostconfig, messages, paths
 from wdva.gate.app.api import JSONObject, ServiceError
 from wdva.gate.app.startcheck import start_problem
 from wdva.gate.core import (
@@ -96,6 +109,7 @@ from wdva.gate.policy import (
     widens,
 )
 from wdva.gate.store import (
+    CHUNK_CHARS,
     REASON_DUPLICATE,
     REASON_TOO_LARGE,
     DocumentRefusedError,
@@ -118,7 +132,9 @@ __all__ = [
     "MIN_PASSPHRASE_CHARS",
     "NOT_REGISTERED",
     "OWNER_MODE",
+    "VIEWS",
     "GateService",
+    "connect_problem",
 ]
 
 OWNER_MODE = timedelta(minutes=10)
@@ -141,6 +157,12 @@ A ``question`` is a status call: an app asked what it may use and was told,
 without any document text. It is not a release and is counted apart from them.
 """
 
+VIEWS = ("basic", "pro")
+"""The two views of the interface: what is used every day, and every setting."""
+
+_SETUP = ("open", "done")
+_INTERFACE_MAX_BYTES = 1024  # a larger file in the place of the interface file counts as none
+_NO_INTERFACE_FILE = {"view": "pro", "setup": "done", "stored": False}
 _DEFAULT_PAGE = 50
 _MAX_PAGE = 200
 _MAX_NAME_CHARS = 255
@@ -175,6 +197,11 @@ _LOCK_WORDS = {
     "interrupt": f"you stopped {brand.PRODUCT}, which locked the vault",
     "signal": f"you stopped {brand.PRODUCT}, which locked the vault",
 }
+
+_UNUSABLE_NAME = (
+    "An application can only be connected under a name of a-z, 0-9 and -, "
+    "starting with a letter. Register the app again under such a name."
+)
 
 _F = TypeVar("_F", bound=Callable[..., Any])
 
@@ -319,6 +346,94 @@ def _spoken(claimed: Any) -> str | None:
     said = _mapping(claimed)
     parts = [said.get("name"), said.get("version")]
     return " ".join(part for part in parts if isinstance(part, str) and part) or None
+
+
+def connect_problem(status: Mapping[str, Any]) -> tuple[str, str, list[str]] | None:
+    """Why no agent application can connect in this environment, or ``None`` when one can.
+
+    ``status`` is what :func:`wdva.gate.hostconfig.sdk_status` returned. The answer is the
+    code of the warning, what is wrong in words that follow "Apps", and the command that
+    puts it right, if there is one. The warning of an unlocked vault and the start-up
+    line of the app are both made from it.
+    """
+    if status.get("python") is False:
+        return (
+            "python_too_old",
+            "cannot connect: the program they start needs Python 3.11 or newer, and "
+            f"{brand.PRODUCT} runs on an older one.",
+            [],
+        )
+    if status.get("sdk") is False:
+        return (
+            "no_sdk",
+            f"cannot connect yet: the MCP SDK is not installed where {brand.PRODUCT} runs.",
+            [hostconfig.INSTALL_LINE],
+        )
+    return None
+
+
+def _read_interface(path: Path) -> dict[str, Any]:
+    """What the interface file at ``path`` says, or what holds for a vault without one.
+
+    The file counts only when it is a regular file of at most a kibibyte that
+    holds exactly the two keys with values that exist. Anything else in its
+    place (a link, a folder, other JSON, something that is not JSON) is the
+    same as no file. Never raises, and never waits: what is not a regular file
+    is not opened.
+    """
+    try:
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            return dict(_NO_INTERFACE_FILE)
+        flags = os.O_RDONLY
+        for name in ("O_NOFOLLOW", "O_NONBLOCK", "O_NOCTTY", "O_CLOEXEC"):
+            flags |= getattr(os, name, 0)
+        descriptor = os.open(path, flags)
+        try:
+            status = os.fstat(descriptor)
+            if not stat.S_ISREG(status.st_mode) or status.st_size > _INTERFACE_MAX_BYTES:
+                return dict(_NO_INTERFACE_FILE)
+            raw = os.read(descriptor, _INTERFACE_MAX_BYTES + 1)
+        finally:
+            os.close(descriptor)
+        if len(raw) > _INTERFACE_MAX_BYTES:
+            return dict(_NO_INTERFACE_FILE)
+        held = strict_json_loads(raw)
+    except (OSError, ValueError):
+        return dict(_NO_INTERFACE_FILE)
+    if (
+        not isinstance(held, dict)
+        or set(held) != {"view", "setup"}
+        or held["view"] not in VIEWS
+        or held["setup"] not in _SETUP
+    ):
+        return dict(_NO_INTERFACE_FILE)
+    return {"view": held["view"], "setup": held["setup"], "stored": True}
+
+
+def _write_interface(path: Path, view: str, setup: str) -> None:
+    """Write the interface file: to a temporary file beside it, then one rename.
+
+    Raises :class:`OSError` when that cannot be done; the file that was there
+    is then still there. Only ever called for the ``run/`` folder of a vault
+    that exists.
+    """
+    if view not in VIEWS or setup not in _SETUP:
+        raise ValueError("the interface file holds a view and whether setup is done")
+    content = json.dumps({"view": view, "setup": setup}).encode("ascii") + b"\n"
+    path.parent.mkdir(mode=0o700, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    )  # made with mode 0600
+    try:
+        with os.fdopen(descriptor, "wb") as out:
+            out.write(content)
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(temporary, path)  # a link in its place is replaced, not followed
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
+        raise
 
 
 def _kdf(scrypt_n: int | None) -> str:
@@ -871,15 +986,25 @@ class _AgentSide:
 class GateService:
     """The app for one store directory: every call of the interface, and the lock state.
 
-    ``store_dir`` is where the vault is or will be created. ``demo`` is only
-    reported in the state. ``demo_passphrase`` is the passphrase of a demo
-    vault, which the state then carries so that the interface can show it; it
-    is refused without ``demo``, and the state of a real vault never has that
-    field. ``lock_after_hours`` is how long the vault stays unlocked when an
-    unlock does not say. ``clock`` supplies every time (of
-    records, limits, owner mode and the moment the vault locks itself);
+    ``store_dir`` is where the vault is or will be created. ``demo`` says that
+    the vault is a demo's: the state reports it. ``demo_passphrase`` is the
+    passphrase of a demo vault, which the state then carries so that the
+    interface can show it; it is refused without ``demo``, and the state of a
+    real vault never has that field. ``lock_after_hours`` is how long the vault
+    stays unlocked when an unlock does not say. ``clock`` supplies every time
+    (of records, limits, owner mode and the moment the vault locks itself);
     ``scrypt_n`` is the cost of the passphrase stretch of a vault created
     here (``None``: the default).
+
+    ``view`` is the view the app was started with (``--view``), ``"basic"`` or
+    ``"pro"``; ``None`` when none was named. A vault created here starts in
+    it, else in ``"basic"``. For a vault that exists already a named view is
+    stored at once; without one nothing is written at start, except for a
+    demo, whose vault is marked as set up. ``launch_command`` is the command
+    line that starts this installation again and ``port_fixed`` whether it
+    names a port; the state passes both on. ``demo_again`` is what
+    :meth:`demo_again` calls: the played app of a demo, told to ask once more.
+    It is refused without ``demo``.
 
     The methods may be called from several threads at once. :attr:`backend`
     is what answers agent applications; it stays the same object across
@@ -895,12 +1020,20 @@ class GateService:
         lock_after_hours: float = 8.0,
         clock: Callable[[], datetime] | None = None,
         scrypt_n: int | None = None,
+        view: str | None = None,
+        launch_command: str | None = None,
+        port_fixed: bool = False,
+        demo_again: Callable[[], None] | None = None,
     ) -> None:
         hours = float(lock_after_hours)
         if not MIN_HOURS <= hours <= MAX_HOURS:
             raise ValueError(f"lock_after_hours must be between {MIN_HOURS} and {MAX_HOURS:g}")
         if demo_passphrase is not None and not demo:
             raise ValueError("only a demo vault has a passphrase that is shown")
+        if demo_again is not None and not demo:
+            raise ValueError("only a demo has a played app that can be told to ask again")
+        if view is not None and view not in VIEWS:
+            raise ValueError(f"view must be one of {', '.join(VIEWS)}")
         self._path = Path(os.path.abspath(os.path.expanduser(os.fspath(store_dir))))
         self._demo = bool(demo)
         self._demo_passphrase = demo_passphrase
@@ -908,6 +1041,7 @@ class GateService:
         self._clock: Callable[[], datetime] = clock or utc_now
         self._scrypt_n = scrypt_n
         self._lock = threading.RLock()  # the session and every change made through it
+        self._checking = threading.Lock()  # one passphrase is stretched at a time
         self._session: _Session | None = None
         self._opening = False
         self._cursor_lock = threading.Lock()
@@ -915,6 +1049,12 @@ class GateService:
         self._info: tuple[Any, StoreInfo] | None = None
         self._start_checked: tuple[str | None] | None = None  # the one result of the start check
         self._backend = _AgentSide(self)
+        self._start_view = view
+        self._launch = {"command": launch_command, "port_fixed": bool(port_fixed)}
+        self._demo_again = demo_again
+        self._interface_lock = threading.Lock()  # one change of the interface file at a time
+        self._interface = _read_interface(paths.interface_path(self._path))
+        self._interface_at_start()
 
     # -- what others may ask --------------------------------------------------------
 
@@ -1047,6 +1187,8 @@ class GateService:
         timer = threading.Timer(hours * 3600.0, self._timer_fired, args=(session,))
         timer.daemon = True
         session.timer = timer
+        with self._interface_lock:  # read at each unlock; whatever it holds, the vault unlocks
+            self._interface = _read_interface(paths.interface_path(self._path))
         with self._lock:
             self._session = session
             self._info = None
@@ -1078,23 +1220,99 @@ class GateService:
             session.feed.refused((key, code), format_time(self._clock()))
         self._bump()
 
+    @staticmethod
+    def _serving(
+        policy: Policy, kinds: str | None, paused: Iterable[str]
+    ) -> tuple[str | None, frozenset[str], tuple[str, ...]]:
+        """The choice of kinds and the pauses that hold under ``policy``, and who is answered."""
+        if not (policy.client_names(True) and policy.client_names(False)):
+            kinds = None  # one kind only: there is nothing to choose between
+        held = frozenset(name for name in paused if name in policy.clients)
+        return kinds, held, served_set(policy, kinds, held)
+
+    def _answers_more(
+        self, session: _Session, policy: Policy, kinds: str | None, paused: Iterable[str]
+    ) -> bool:
+        """Whether an app would be answered that is not answered now.
+
+        That lets more leave, however it comes about: an app is no longer
+        paused, another kind of app is chosen, or the last app of the kind
+        that was answered is removed and the other kind takes its place.
+        """
+        answered = self._serving(policy, kinds, paused)[2]
+        return not set(answered) <= set(session.gate.served())
+
     def _apply_serving(self, session: _Session, policy: Policy) -> None:
         """Tell the gate which names are answered, after the policy or the choice changed."""
-        if not (policy.client_names(True) and policy.client_names(False)):
-            session.kinds = None  # one kind only: there is nothing to choose between
-        session.paused = frozenset(name for name in session.paused if name in policy.clients)
-        session.gate.set_served(served_set(policy, session.kinds, session.paused))
+        session.kinds, session.paused, answered = self._serving(
+            policy, session.kinds, session.paused
+        )
+        session.gate.set_served(answered)
 
     def _change(self, session: _Session, new: Policy) -> Policy:
         """Put a changed policy in force. One that lets more leave needs owner mode."""
         old = session.gate.policy()
         if new.with_serial(old.serial) == old:
             return old
-        if widens(old, new):
+        if widens(old, new) or self._answers_more(session, new, session.kinds, session.paused):
             self._owner(session)
         stored = session.gate.set_policy(new)
         self._apply_serving(session, stored)
         return stored
+
+    # -- which view the owner uses ----------------------------------------------------
+
+    def _keep_interface(self, view: str, setup: str) -> None:
+        """Write the interface file and read it again. :class:`OSError` when it cannot be kept."""
+        path = paths.interface_path(self._path)
+        with self._interface_lock:
+            try:
+                _write_interface(path, view, setup)
+            finally:
+                self._interface = _read_interface(path)
+        self._bump()
+
+    def _interface_at_start(self) -> None:
+        """What a start writes for a vault that exists: the view it named, and a demo's setup.
+
+        Without a view named on the command line nothing is written for a real
+        vault. Where it cannot be written the app starts all the same, with
+        what the file says.
+        """
+        if self._start_view is None and not self._demo:
+            return
+        if not store_info(self._path).exists:
+            return
+        view = self._start_view or ("basic" if self._demo else self._interface["view"])
+        setup = "done" if self._demo else self._interface["setup"]
+        with contextlib.suppress(OSError):
+            self._keep_interface(view, setup)
+
+    @_translated
+    def set_interface(self, *, view: str | None = None, setup: str | None = None) -> JSONObject:
+        """Keep which view the owner uses, or that setting up is finished; return the state.
+
+        Works on a locked vault too, and needs no owner mode: it lets nothing
+        leave and changes nothing that is sealed. ``setup`` can only be set to
+        ``"done"``. Nothing is written into the record.
+        """
+        if view is not None and view not in VIEWS:
+            raise _invalid('The view is "basic" or "pro".')
+        if setup is not None and setup != "done":
+            raise _invalid('Setting up can only be marked "done".')
+        if view is None and setup is None:
+            raise _invalid("Say which view to keep, or that setting up is done.")
+        if not store_info(self._path).exists:
+            raise _not_found("There is no vault here yet.")
+        current = self._interface
+        try:
+            self._keep_interface(view or current["view"], setup or current["setup"])
+        except OSError as exc:
+            reason = exc.strerror or "the file could not be written"
+            raise _unavailable(
+                f"The choice could not be kept: {reason[0].lower()}{reason[1:]}."
+            ) from None
+        return self.state()
 
     # -- state ------------------------------------------------------------------------
 
@@ -1144,6 +1362,9 @@ class GateService:
             "serving": None,
             "today": None,
             "warnings": None,
+            # Not sealed and not part of the vault: the view, and how to start the app again.
+            "interface": dict(self._interface) if info.exists else None,
+            "launch": dict(self._launch),
         }
         if self._demo and self._demo_passphrase is not None:
             # Only the demo vault, whose documents are invented, has a passphrase that is shown.
@@ -1299,19 +1520,10 @@ class GateService:
                 f"{'is' if len(unreadable) == 1 else 'are'} left out of every search.",
                 unreadable,
             )
-        if session.sdk.get("python") is False:
-            warn(
-                "python_too_old",
-                "Apps cannot connect: the program they start needs Python 3.11 or newer, and "
-                f"{brand.PRODUCT} runs on an older one.",
-            )
-        elif session.sdk.get("sdk") is False:
-            warn(
-                "no_sdk",
-                f"Apps cannot connect yet: the MCP SDK is not installed where {brand.PRODUCT} "
-                "runs.",
-                [hostconfig.INSTALL_LINE],
-            )
+        problem = connect_problem(session.sdk)
+        if problem is not None:
+            code, words, command = problem
+            warn(code, f"Apps {words}", command)
         return warnings
 
     # -- creating, unlocking, locking ---------------------------------------------------
@@ -1363,6 +1575,10 @@ class GateService:
                 ) from None
             except StoreLocationError as exc:
                 raise _invalid(_sentence(_vault_words(str(exc)))) from None
+            # A new vault starts in the everyday view, with setting up still to do. A
+            # vault whose file could not be written is shown like one from before.
+            with contextlib.suppress(OSError):
+                self._keep_interface(self._start_view or "basic", "open")
             self._begin(store, self._default_hours)
         finally:
             self._opening = False
@@ -1408,7 +1624,13 @@ class GateService:
     def reauth(self, *, passphrase: str) -> JSONObject:
         """Check the passphrase again; changes that let more leave are then accepted for a while."""
         session = self._unlocked()
-        if not isinstance(passphrase, str) or not session.store.check_passphrase(passphrase):
+        if not isinstance(passphrase, str):
+            raise WrongKeyError("wrong passphrase")
+        # Each check holds the memory that stretching a passphrase takes, so checks
+        # that arrive together wait for one another instead of adding up.
+        with self._checking:
+            right = session.store.check_passphrase(passphrase)
+        if not right:
             raise WrongKeyError("wrong passphrase")
         with self._lock:
             session.owner_until = self._clock() + OWNER_MODE
@@ -1419,7 +1641,13 @@ class GateService:
     def set_serving(
         self, *, kinds: str | None = None, paused: list[str] | None = None
     ) -> JSONObject:
-        """Choose which kinds of apps are answered and which apps are paused; return the state."""
+        """Choose which kinds of apps are answered and which apps are paused; return the state.
+
+        Answering both kinds needs owner mode, and so does every choice after
+        which an app is answered that was not answered before: taking an app
+        out of the paused ones, or choosing the other kind. Pausing, and a
+        choice that only takes away, do not.
+        """
         session = self._unlocked()
         if kinds is not None and kinds not in (HOSTED, LOCAL, BOTH):
             raise _invalid('Choose "hosted", "local" or "both".')
@@ -1427,12 +1655,13 @@ class GateService:
             raise _invalid("The paused apps must be given as a list of names.")
         with self._lock:
             policy = session.gate.policy()
-            if kinds == BOTH and session.kinds != BOTH:
+            chosen = session.kinds if kinds is None else kinds
+            held = session.paused if paused is None else frozenset(paused)
+            if (kinds == BOTH and session.kinds != BOTH) or self._answers_more(
+                session, policy, chosen, held
+            ):
                 self._owner(session)
-            if kinds is not None:
-                session.kinds = kinds
-            if paused is not None:
-                session.paused = frozenset(paused)
+            session.kinds, session.paused = chosen, held
             self._apply_serving(session, policy)
         self._bump()
         return self.state()
@@ -1945,17 +2174,11 @@ class GateService:
         """The configuration that connects one agent application under this app's name."""
         session = self._unlocked()
         self._registered(session.gate.policy(), name)
-        known = {entry.id for entry in hostconfig.KNOWN_HOSTS}
-        chosen = host if host is not None else (name if name in known else "generic")
-        if chosen not in known:
-            raise _not_found("There is no application of that kind to connect.")
+        chosen = self._host_for(name, host)
         try:
             config = hostconfig.render(chosen, client=name, store=self._path)
         except ValueError:
-            raise _invalid(
-                "An application can only be connected under a name of a-z, 0-9 and -, "
-                "starting with a letter. Register the app again under such a name."
-            ) from None
+            raise _invalid(_UNUSABLE_NAME) from None
         status = hostconfig.sdk_status()
         message = status["message"]
         starts = message is None
@@ -1979,22 +2202,78 @@ class GateService:
             checked = self._start_checked = (start_problem(),)
         return checked[0]
 
+    @staticmethod
+    def _host_for(name: str, host: str | None) -> str:
+        """The application a configuration is asked for: the one named, else the app's own."""
+        known = {entry.id for entry in hostconfig.KNOWN_HOSTS}
+        chosen = host if host is not None else (name if name in known else "generic")
+        if chosen not in known:
+            raise _not_found("There is no application of that kind to connect.")
+        return chosen
+
+    @_translated
+    def connect_check(self, *, name: str, host: str | None = None) -> JSONObject:
+        """Look at the settings file of one agent application for this app's entry.
+
+        The one call that reads a file outside the vault's folder: one file,
+        whose place is fixed by the application and this computer, read when
+        this is called and at no other time. The answer says in one word what
+        was found and holds nothing from the file. Nothing is changed, here or
+        there, so it needs no owner mode.
+        """
+        session = self._unlocked()
+        self._registered(session.gate.policy(), name)
+        chosen = self._host_for(name, host)
+        try:
+            return hostcheck.check(chosen, client=name, store=self._path)
+        except ValueError:
+            raise _invalid(_UNUSABLE_NAME) from None
+
+    # -- the demo -----------------------------------------------------------------------
+
+    @_translated
+    def demo_again(self) -> JSONObject:
+        """Tell the played app of a demo to ask once more for the passage it waits for.
+
+        It is the played app's side, not the owner's: what its call gets is
+        decided by the gate like any call. Outside a demo there is no such thing.
+        """
+        if not self._demo or self._demo_again is None:
+            raise _not_found("Only a demo has a played app.")
+        self._unlocked()
+        self._demo_again()
+        return {}
+
     # -- settings -----------------------------------------------------------------------
 
     @staticmethod
     def _settings_view(policy: Policy) -> JSONObject:
-        return {
-            "serial": policy.serial,
+        new = default_policy()
+        figures: dict[str, Any] = {
             "defaults": policy.defaults.to_json(),
             "groups": {pool: policy.pools[pool].to_json() for pool in POOLS},
             "per_document": policy.per_document.to_json(),
             "approval": policy.approval.to_json(),
+        }
+        as_new: dict[str, Any] = {
+            "defaults": new.defaults.to_json(),
+            "groups": {pool: new.pools[pool].to_json() for pool in POOLS},
+            "per_document": new.per_document.to_json(),
+            "approval": new.approval.to_json(),
+        }
+        return {
+            "serial": policy.serial,
+            **figures,
             "replaced_strings": len(policy.redact_literals),
             "ceilings": {
                 "chars_per_call": MAX_RESULT_CHARS,
                 "ttl_minutes": MAX_APPROVAL_MINUTES,
                 "replaced_strings": MAX_REDACT_LITERALS,
+                # The longest passage a vault cuts a document into: fixed, not a setting.
+                "passage_chars": CHUNK_CHARS,
             },
+            # Which of the four groups of figures are not those of a new vault.
+            "changed_from_new": [name for name in figures if figures[name] != as_new[name]],
         }
 
     @_translated

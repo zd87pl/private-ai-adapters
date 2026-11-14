@@ -27,18 +27,18 @@ import re
 
 __all__ = ["PRODUCT", "SLUG", "TAGLINE", "TOOL_PREFIX", "tool_name"]
 
-PRODUCT = "WDVA Gate"
+PRODUCT = "Locktender"
 """The name a person reads: in the window title, on the terminal, in sentences."""
 
-SLUG = "wdva-gate"
+SLUG = "locktender"
 """The name as an identifier: the data directory, the server's name in an agent
 application, the key in a configuration file. Lower-case letters, digits and hyphens."""
 
-TOOL_PREFIX = "wdva"
-"""What the names of the three tools start with: ``wdva_status``, ``wdva_search``,
-``wdva_read``. Lower-case letters and digits."""
+TOOL_PREFIX = "locktender"
+"""What the names of the three tools start with: ``locktender_status``,
+``locktender_search``, ``locktender_read``. Lower-case letters and digits."""
 
-TAGLINE = "A local gate between your sealed documents and AI agents."
+TAGLINE = "A lock, a meter and a record between your private documents and AI apps."
 """One line that says what the product is."""
 
 

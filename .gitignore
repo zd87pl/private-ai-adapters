@@ -45,6 +45,9 @@ __pycache__/
 /env/
 /ENV/
 
+# The lock file that "uv run" writes in a clone: the project commits none
+/uv.lock
+
 # -----------------------------------------------------------------------------
 # Tests, coverage and tool caches
 # -----------------------------------------------------------------------------
@@ -57,6 +60,11 @@ htmlcov/
 .dmypy.json
 dmypy.json
 .ruff_cache/
+
+# The browser walk-throughs (tests/browser/): their screenshots, and the
+# Playwright that "npm install --no-save" puts beside the repository's files
+/tests/browser/shots/
+/node_modules/
 
 # -----------------------------------------------------------------------------
 # Editors, notebooks and operating systems

@@ -15,6 +15,7 @@ def run_app(
     demo: bool = False,
     window: bool = False,
     lock_after_hours: float = 8.0,
+    view: str | None = None,
 ) -> int:
     """Start the app and block until it is stopped. Returns the process exit status."""
     # Loaded by name so that importing this package stays cheap: the server, the
@@ -28,5 +29,6 @@ def run_app(
             demo=demo,
             window=window,
             lock_after_hours=lock_after_hours,
+            view=view,
         )
     )

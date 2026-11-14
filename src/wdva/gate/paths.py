@@ -3,8 +3,9 @@
 """Where a store lives, and the paths inside it that are not sealed files.
 
 A store is one directory. Everything in it is a sealed file except ``run/``,
-which holds the lock file of the process that has the store open and, while the
-store is unlocked, the socket that agent applications are served through.
+which holds the lock file of the process that has the store open, while the
+store is unlocked the socket that agent applications are served through, and a
+small file in which the app keeps which view of its interface the owner uses.
 
 Nothing here creates, reads or changes a file.
 """
@@ -19,12 +20,14 @@ from wdva.gate import brand
 from wdva.gate.errors import GateError
 
 __all__ = [
+    "EARLIER_STORE_DIR_NAMES",
     "ENV_STORE",
     "SOCKET_PATH_LIMIT",
     "STORE_DIR_NAME",
     "SYNCED_FOLDER_NAMES",
     "check_socket_path",
     "default_store",
+    "interface_path",
     "lock_path",
     "looks_synced",
     "resolve_store",
@@ -38,6 +41,11 @@ ENV_STORE = "WDVA_GATE_STORE"
 
 STORE_DIR_NAME = brand.SLUG
 """The name of the per-user store directory."""
+
+EARLIER_STORE_DIR_NAMES = ("wdva-gate",)
+"""Names the per-user store directory had in earlier previews. A store that lies under one
+of them is used as long as none exists under :data:`STORE_DIR_NAME`, so that a new name for
+the product does not hide a vault somebody already has."""
 
 SOCKET_PATH_LIMIT = 100
 """The longest socket path, in bytes, that every supported system accepts."""
@@ -66,14 +74,25 @@ def default_store() -> Path:
     A directory named :data:`STORE_DIR_NAME`: on macOS in
     ``~/Library/Application Support``, elsewhere in ``$XDG_DATA_HOME`` when that
     variable holds an absolute path, and in ``~/.local/share`` otherwise.
+
+    While no such directory exists and one with a name from
+    :data:`EARLIER_STORE_DIR_NAMES` does, in the same place, that one is the store.
     """
     home = Path.home()
     if sys.platform == "darwin":
-        return home / "Library" / "Application Support" / STORE_DIR_NAME
-    data_home = os.environ.get("XDG_DATA_HOME", "")
-    if data_home and os.path.isabs(data_home):
-        return Path(data_home) / STORE_DIR_NAME
-    return home / ".local" / "share" / STORE_DIR_NAME
+        parent = home / "Library" / "Application Support"
+    else:
+        data_home = os.environ.get("XDG_DATA_HOME", "")
+        if data_home and os.path.isabs(data_home):
+            parent = Path(data_home)
+        else:
+            parent = home / ".local" / "share"
+    current = parent / STORE_DIR_NAME
+    if not current.exists():
+        for name in EARLIER_STORE_DIR_NAMES:
+            if name != STORE_DIR_NAME and (parent / name).is_dir():
+                return parent / name
+    return current
 
 
 def resolve_store(arg: str | os.PathLike[str] | None = None) -> Path:
@@ -104,6 +123,15 @@ def lock_path(store: str | os.PathLike[str]) -> Path:
 def socket_path(store: str | os.PathLike[str]) -> Path:
     """``<store>/run/gate.sock``: where an unlocked store is reached by agent applications."""
     return run_dir(store) / "gate.sock"
+
+
+def interface_path(store: str | os.PathLike[str]) -> Path:
+    """``<store>/run/interface.json``: which view of the interface the owner uses.
+
+    Not sealed, and written by the app alone: it holds two words about the
+    interface and nothing from the vault.
+    """
+    return run_dir(store) / "interface.json"
 
 
 def check_socket_path(store: str | os.PathLike[str]) -> Path:

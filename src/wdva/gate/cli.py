@@ -18,7 +18,7 @@ from wdva.gate import brand
 from wdva.gate.errors import GateError
 from wdva.gate.paths import ENV_STORE
 
-WINDOWS_MESSAGE = "the gate does not run on Windows yet"
+WINDOWS_MESSAGE = f"{brand.PRODUCT} does not run on Windows yet"
 
 
 class _SubParsers(Protocol):
@@ -41,6 +41,7 @@ def _cmd_app(args: argparse.Namespace) -> int:
         demo=args.demo,
         window=args.window,
         lock_after_hours=args.lock_after,
+        view=args.view,
     )
 
 
@@ -99,7 +100,7 @@ def add_gate_parser(subparsers: _SubParsers) -> None:
         )
         return parser
 
-    p = add("app", help="start the gate and open its interface in the browser")
+    p = add("app", help=f"start {brand.PRODUCT} and open its interface in the browser")
     p.add_argument(
         "--port", type=int, default=0, metavar="N", help="local port (default: any free)"
     )
@@ -107,7 +108,10 @@ def add_gate_parser(subparsers: _SubParsers) -> None:
     p.add_argument(
         "--window",
         action="store_true",
-        help="open the interface in its own window (needs pywebview; experimental)",
+        help=(
+            "show the interface in a window of its own, which asks for the pairing code "
+            "like the browser does (needs pywebview; experimental)"
+        ),
     )
     p.add_argument(
         "--demo",
@@ -120,6 +124,16 @@ def add_gate_parser(subparsers: _SubParsers) -> None:
         default=8.0,
         metavar="HOURS",
         help="lock the store this long after it was unlocked (default: 8)",
+    )
+    p.add_argument(
+        "--view",
+        choices=("basic", "pro"),
+        default=None,
+        help=(
+            "open the interface in this view and keep the choice beside the store: basic "
+            "shows what is used every day, pro shows every setting (default: a new store "
+            "starts in basic, an existing one opens as it was left)"
+        ),
     )
     p.set_defaults(func=_cmd_app)
 

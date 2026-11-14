@@ -232,6 +232,37 @@ def test_the_readme_install_line_matches_the_package() -> None:
     assert used <= extras, f"the README names extras that do not exist: {used - extras}"
 
 
+def test_the_pypi_description_takes_pictures_from_where_the_files_are_served() -> None:
+    # The build rewrites the README's relative links for PyPI (pyproject.toml). A link goes
+    # to GitHub's page about the file; a picture needs the address of the file itself.
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    hook = pyproject.split("[tool.hatch.metadata.hooks.fancy-pypi-readme]")[1]
+    rules = re.findall(
+        r"^pattern = '([^'\n]+)'\nreplacement = '([^'\n]+)'$",
+        hook.split("[tool.hatch.version]")[0],
+        re.MULTILINE,
+    )
+    assert len(rules) == 2
+    text = (
+        "![The vault](docs/images/vault.png)\n"
+        "[![A linked picture](docs/images/a.png)](docs/GUIDE.md)\n"
+        "See [the guide](docs/GUIDE.md), [the top](#wdva) and ![in a sentence](images/b.svg).\n"
+        "[![CI](https://example.com/badge.svg)](LICENSE) ![Absolute](https://example.com/c.png)\n"
+    )
+    for pattern, replacement in rules:  # in the order the build applies them
+        text = re.sub(pattern, replacement.replace("$HFPR_VERSION", "1.2.3"), text)
+    file = "https://raw.githubusercontent.com/zd87pl/private-ai-adapters/v1.2.3"
+    page = "https://github.com/zd87pl/private-ai-adapters/blob/v1.2.3"
+    assert text == (
+        f"![The vault]({file}/docs/images/vault.png)\n"
+        f"[![A linked picture]({file}/docs/images/a.png)]({page}/docs/GUIDE.md)\n"
+        f"See [the guide]({page}/docs/GUIDE.md), [the top](#wdva) "
+        f"and ![in a sentence]({file}/images/b.svg).\n"
+        f"[![CI](https://example.com/badge.svg)]({page}/LICENSE) "
+        "![Absolute](https://example.com/c.png)\n"
+    )
+
+
 # -- output quoted in the documentation is the output that was recorded ----------------
 
 

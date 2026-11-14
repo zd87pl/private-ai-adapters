@@ -27,6 +27,7 @@ import os
 import random
 import re
 import threading
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -314,7 +315,9 @@ _GRANTS: tuple[tuple[str, str, str], ...] = (
     (SECOND_APP, "home", MODE_READ),
     (LOCAL_APP, "home", MODE_READ),
 )
-_DAILY_LIMITS: tuple[tuple[str, int], ...] = ((HONEST_APP, 12_000), (SECOND_APP, 4_000))
+# The second app's limit is small enough to be reached while every passage it asks for is
+# still one it may have without asking: its run is stopped by the limit, and by nothing else.
+_DAILY_LIMITS: tuple[tuple[str, int], ...] = ((HONEST_APP, 12_000), (SECOND_APP, 3_000))
 
 _REF = re.compile(r"ref=(d-[0-9a-f]{12}\.[0-9]{1,5})")
 _PASSAGE = re.compile(r"OK: passage ([0-9]+) of ([0-9]+) from document (d-[0-9a-f]{12}) ")
@@ -328,6 +331,7 @@ _LIGHT_QUESTIONS = (
 )
 _MAX_INJECTED_READS = 12
 _LOCKED_WAIT = 1.0  # seconds between two looks at whether the vault is unlocked again
+_AGAIN_WAIT = 0.25  # seconds between two looks at whether the agent was told to ask again
 
 
 def make_demo_store(directory: str | os.PathLike[str], *, scrypt_n: int | None = None) -> str:
@@ -394,17 +398,24 @@ class DemoAgent(threading.Thread):
        for the rent and a read of the best match;
     2. a search in the collection that needs approval, which returns
        references only, and a read that is answered ``NEEDS_APPROVAL``. That
-       passage is asked for again every ``retry_seconds`` and read once the
-       owner has released it; until then this app asks for nothing else, as
-       the refusal told it;
+       passage is asked for again only when the agent is told to
+       (:meth:`ask_again`), and read then if the owner has released it; until
+       it was read this app asks for nothing else, as the refusal told it;
     3. under the second hosted app, a search that finds the bank letter and a
        read of the passage that carries an instruction. The script then does
        what the instruction says and reads every passage it can find, until
        the app's daily limit has refused it twice;
     4. one search under a name that is not registered.
 
-    Afterwards, and once nothing waits for the owner, a light question is
-    asked every ``idle_seconds``.
+    Afterwards, and once the passage of step 2 has been read, a light question
+    is asked every ``idle_seconds``.
+
+    :meth:`ask_again` is how a person says "try again" to the played app: the
+    thread then asks once more for the passage it was told to wait for, within
+    a second, also while the script is still being played. Nothing else makes
+    it ask for that passage again: no clock does. It is not told what the
+    owner decided. After a release the read is answered; after a "no" the
+    passage waits again, as it would with a real application.
 
     :meth:`run` (started with ``start()``) waits between ``pause[0]`` and
     ``pause[1]`` seconds between the steps. :meth:`step` makes the next call
@@ -424,7 +435,6 @@ class DemoAgent(threading.Thread):
         *,
         pause: tuple[float, float] = (2.0, 4.0),
         idle_seconds: float = 30.0,
-        retry_seconds: float = 10.0,
         rng: random.Random | None = None,
         ready: Callable[[], bool] | None = None,
     ) -> None:
@@ -433,10 +443,10 @@ class DemoAgent(threading.Thread):
         self._ready = ready
         self._pause = pause
         self._idle_seconds = idle_seconds
-        self._retry_seconds = retry_seconds
         # The pauses only make the screen look alive; they protect nothing.
         self._rng = rng or random.Random()  # noqa: S311
         self._halt = threading.Event()
+        self._again = threading.Event()  # set by ask_again, taken by the thread
         self._step_lock = threading.Lock()
         self._script: Iterator[None] = self._play()
         self._honest = Caller(HONEST_APP, "claude-ai", "1.2", "2025-11-25", "stdio")
@@ -512,10 +522,13 @@ class DemoAgent(threading.Thread):
         yield
 
     def _idle_step(self) -> None:
-        """After the script: ask again for the passage that waits, else a light question."""
-        if self.waiting_ref is not None:
-            self._retry()
-        else:
+        """After the script: a light question, and nothing while the first app waits.
+
+        It was told not to ask for further passages until the owner has
+        answered, and it is not told when the owner has: it asks for that
+        passage again when somebody says so (:meth:`ask_again`), not by itself.
+        """
+        if self.waiting_ref is None:
             self._light_question()
 
     def _retry(self) -> None:
@@ -529,7 +542,11 @@ class DemoAgent(threading.Thread):
         self._search(self._honest, query, "home", 1)
 
     def step(self) -> None:
-        """Make the agent's next call now: the next step of the script, or of the routine after."""
+        """Make the agent's next call now: the next step of the script, or of the routine after.
+
+        After the script that is a light question, and no call at all while the
+        first app still waits for its passage.
+        """
         with self._step_lock:
             if self.scripted:
                 try:
@@ -538,6 +555,29 @@ class DemoAgent(threading.Thread):
                 except StopIteration:
                     self.scripted = False
             self._idle_step()
+
+    def ask_again(self) -> None:
+        """Tell the played app to ask once more for the passage it waits for.
+
+        Returns at once. The thread makes the call within a second: one read
+        under the first app's name, when a passage waits; nothing otherwise.
+        """
+        self._again.set()
+
+    def _asks_again(self) -> bool:
+        """Make the read :meth:`ask_again` asked for, if it was asked. True when a call was made.
+
+        A request that finds no passage waiting, or the vault locked, is
+        forgotten: it is not made up for later.
+        """
+        if not self._again.is_set():
+            return False
+        self._again.clear()
+        if self.waiting_ref is None or not self._is_ready():
+            return False
+        with self._step_lock:
+            self._safely(self._retry)
+        return True
 
     # -- running with pauses ----------------------------------------------------------
 
@@ -555,6 +595,7 @@ class DemoAgent(threading.Thread):
     def _wait_until_unlocked(self) -> bool:
         """Wait while the vault is locked. False when the agent was stopped meanwhile."""
         while self._ready is not None and not self._is_ready():
+            self._again.clear()  # nothing is asked of a locked vault, now or once it is unlocked
             if self._halt.wait(_LOCKED_WAIT):
                 return False
         return not self._halt.is_set()
@@ -565,20 +606,38 @@ class DemoAgent(threading.Thread):
         except Exception:
             return False
 
+    def _wait(self, seconds: float, *, until_asked: bool = False) -> str:
+        """Wait ``seconds``, and ask again in between when told to.
+
+        Returns ``"stop"`` when the agent was stopped, else ``"done"`` when the
+        time has passed. With ``until_asked`` the wait also ends, with
+        ``"asked"``, as soon as a call was made because of :meth:`ask_again`.
+        """
+        end = time.monotonic() + seconds
+        while True:
+            if self._halt.wait(max(0.0, min(end - time.monotonic(), _AGAIN_WAIT))):
+                return "stop"
+            if self._asks_again() and until_asked:
+                return "asked"
+            if time.monotonic() >= end:
+                return "done"
+
     def run(self) -> None:
         """Play the script with pauses, then the quiet routine, until :meth:`stop`."""
-        if self._halt.wait(self._rng.uniform(*self._pause)):
+        if self._wait(self._rng.uniform(*self._pause)) == "stop":
             return
         while self.scripted:
             if not self._wait_until_unlocked():
                 return
             self._safely(self.step)
-            if self._halt.wait(self._rng.uniform(*self._pause)):
+            if self._wait(self._rng.uniform(*self._pause)) == "stop":
                 return
         while True:
-            waiting = self.waiting_ref is not None
-            if self._halt.wait(self._retry_seconds if waiting else self._idle_seconds):
+            waited = self._wait(self._idle_seconds, until_asked=True)
+            if waited == "stop":
                 return
+            if waited == "asked":
+                continue  # the passage may have been read: what comes next is decided anew
             if not self._wait_until_unlocked():
                 return
             self._safely(self.step)

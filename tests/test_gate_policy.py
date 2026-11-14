@@ -1357,24 +1357,55 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def test_default_store_location(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(paths.sys, "platform", "linux")
-    assert paths.default_store() == home / ".local" / "share" / "wdva-gate"
+    assert paths.default_store() == home / ".local" / "share" / "locktender"
     monkeypatch.setenv("XDG_DATA_HOME", str(home / "data"))
-    assert paths.default_store() == home / "data" / "wdva-gate"
+    assert paths.default_store() == home / "data" / "locktender"
     monkeypatch.setenv("XDG_DATA_HOME", "relative/data")  # not absolute: ignored
-    assert paths.default_store() == home / ".local" / "share" / "wdva-gate"
+    assert paths.default_store() == home / ".local" / "share" / "locktender"
     monkeypatch.setenv("XDG_DATA_HOME", "")
-    assert paths.default_store() == home / ".local" / "share" / "wdva-gate"
+    assert paths.default_store() == home / ".local" / "share" / "locktender"
 
     monkeypatch.setattr(paths.sys, "platform", "darwin")
     monkeypatch.setenv("XDG_DATA_HOME", str(home / "data"))  # plays no part on macOS
-    assert paths.default_store() == home / "Library" / "Application Support" / "wdva-gate"
+    assert paths.default_store() == home / "Library" / "Application Support" / "locktender"
+
+
+def test_a_store_made_under_an_earlier_name_is_still_found(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(paths.sys, "platform", "linux")
+    assert paths.EARLIER_STORE_DIR_NAMES == ("wdva-gate",)
+    share = home / ".local" / "share"
+    earlier = share / "wdva-gate"
+    current = share / "locktender"
+
+    share.mkdir(parents=True)
+    (share / "wdva-gate-file").write_text("not a directory")
+    assert paths.default_store() == current  # nothing there yet: the current name
+
+    earlier.mkdir()
+    assert paths.default_store() == earlier  # a vault somebody already has is not hidden
+    assert paths.resolve_store(None) == earlier
+    monkeypatch.setenv("WDVA_GATE_STORE", str(home / "from-env"))
+    assert paths.resolve_store(None) == home / "from-env"  # a named store wins as before
+    monkeypatch.delenv("WDVA_GATE_STORE")
+
+    current.mkdir()
+    assert paths.default_store() == current  # once both exist, the current name
+
+    # The earlier name is looked for in the same place only.
+    monkeypatch.setattr(paths.sys, "platform", "darwin")
+    support_dir = home / "Library" / "Application Support"
+    assert paths.default_store() == support_dir / "locktender"
+    (support_dir / "wdva-gate").mkdir(parents=True)
+    assert paths.default_store() == support_dir / "wdva-gate"
 
 
 def test_resolve_store_prefers_the_argument_then_the_environment(
     home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(paths.sys, "platform", "linux")
-    default = home / ".local" / "share" / "wdva-gate"
+    default = home / ".local" / "share" / "locktender"
     assert paths.resolve_store(None) == default
     assert paths.resolve_store() == default
     assert paths.resolve_store("") == default
@@ -1479,7 +1510,7 @@ def test_synced_folder_names_are_recognised(name: str, tmp_path: Path) -> None:
 
 def test_ordinary_paths_do_not_look_synced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert not paths.looks_synced(tmp_path / "store")
-    assert not paths.looks_synced(tmp_path / ".local" / "share" / "wdva-gate")
+    assert not paths.looks_synced(tmp_path / ".local" / "share" / "locktender")
     monkeypatch.chdir(tmp_path)
     assert not paths.looks_synced("store")
     # A relative path is judged by where it really is.

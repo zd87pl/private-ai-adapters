@@ -29,7 +29,7 @@ export const GRANT_LABEL = { none: "No access", read: "Can read", approve: "Ask 
 
 export const BOTH_KINDS_SENTENCE =
   "While both kinds are answered, any program running as you, including a hosted agent that can run " +
-  "commands, can call the gate under a local app's name.";
+  `commands, can call ${PRODUCT} under a local app's name.`;
 
 /** The sentence shown wherever an app is given a collection. */
 export function grantSentence(app, collection) {
@@ -37,8 +37,25 @@ export function grantSentence(app, collection) {
     return `Text this app receives from "${collection}" is sent to ${app.destination} and cannot be recalled.`;
   }
   return (
-    `The gate cannot check that this app is local. If it uses a cloud model, or has tools that send ` +
+    `${PRODUCT} cannot check that this app is local. If it uses a cloud model, or has tools that send ` +
     `data out, text it receives from "${collection}" leaves this Mac.`
+  );
+}
+
+/** The same, where no one app is meant: what holds for every app that sends text to a provider. */
+export const GENERAL_SENTENCE = "Text that an app receives from your documents is sent to the company behind the app and cannot be recalled.";
+
+/**
+ * The sentence for one app where the documents are not told apart by collection:
+ * the Basic page and the first run, which say "your documents".
+ */
+export function basicGrantSentence(app) {
+  if (app.hosted) {
+    return `Text that ${app.name} receives from your documents is sent to ${app.destination} and cannot be recalled.`;
+  }
+  return (
+    `${PRODUCT} cannot check that this app is local. If it uses a cloud model, or has tools that send ` +
+    "data out, text it receives from your documents leaves this Mac."
   );
 }
 
@@ -136,7 +153,8 @@ const MODE_TEXT = {
 
 /** Change what one app may do with one collection, asking first when it widens access. */
 export async function changeGrant(ctx, app, collection, mode) {
-  const current = app.grants[collection] || "none";
+  // By the entry of the group itself: a group may be named like something every object has ("constructor").
+  const current = Object.prototype.hasOwnProperty.call(app.grants, collection) ? app.grants[collection] : "none";
   if (mode === current) return;
   const widens = mode === "read" || (mode === "approve" && current === "none");
   if (widens) {
@@ -220,6 +238,90 @@ export function appFormProblem(form, known) {
   return "";
 }
 
+/** For an app the list does not name: where its model runs. */
+function kindRow(form, update, prefix) {
+  return el(
+    "div",
+    { class: "choice-row", role: "radiogroup", "aria-labelledby": `${prefix}-where` },
+    el("span", { class: "choice-row-label field-label", id: `${prefix}-where` }, "Where does its model run?"),
+    [
+      [true, "On someone else's servers"],
+      [false, "On this Mac"],
+    ].map(([hosted, label]) =>
+      el(
+        "label",
+        { class: "radio" },
+        el("input", {
+          type: "radio",
+          name: `${prefix}-kind`,
+          value: hosted ? "hosted" : "local",
+          checked: form.hosted === hosted,
+          onchange: () => {
+            form.hosted = hosted;
+            form.destination = hosted ? "" : "local model on this computer";
+            update();
+          },
+        }),
+        el("span", null, label),
+      ),
+    ),
+  );
+}
+
+/** For an app the list does not name, whose model runs elsewhere: who receives the text. */
+function destinationField(form, update, prefix) {
+  return field({
+    label: "Who receives the text?",
+    id: `${prefix}-destination`,
+    hint: "The company or service behind the app, for example its model provider.",
+    control: el("input", {
+      type: "text",
+      id: `${prefix}-destination`,
+      class: "input",
+      value: form.destination,
+      maxlength: 80,
+      autocomplete: "off",
+      oninput: (event) => {
+        form.destination = event.target.value;
+        update();
+      },
+    }),
+  });
+}
+
+/** The name an app has in the vault. */
+function nameField(form, update, prefix) {
+  return field({
+    label: "Name in this vault",
+    id: `${prefix}-name`,
+    hint: "Lower-case letters, digits and hyphens. This is how the app appears in Activity.",
+    error: form.name && !NAME_PATTERN.test(form.name) ? "Use lower-case letters, digits and hyphens, starting with a letter; 32 at most." : "",
+    control: el("input", {
+      type: "text",
+      id: `${prefix}-name`,
+      class: "input input-mono",
+      value: form.name,
+      maxlength: 32,
+      autocomplete: "off",
+      autocapitalize: "off",
+      spellcheck: "false",
+      oninput: (event) => {
+        form.name = event.target.value;
+        update();
+      },
+    }),
+  });
+}
+
+/**
+ * The three things the owner says about an app the list does not name: where its
+ * model runs, who receives the text (for one whose model runs elsewhere), and its
+ * name in the vault. The form of Pro and the first run both ask with these fields.
+ */
+export function otherAppFields(form, update, prefix) {
+  return [kindRow(form, update, prefix), form.hosted ? destinationField(form, update, prefix) : null, nameField(form, update, prefix)];
+}
+
 /** The fields of the "add an app" form: which application, its name, where text goes. */
 export function appFormFields(form, known, update, prefix, short = false) {
   const entry = knownEntry(known, form.choice);
@@ -268,73 +370,9 @@ export function appFormFields(form, known, update, prefix, short = false) {
           `${entry.label} cannot use this vault. It only calls servers that ${entry.destination || "its provider"}'s cloud can reach, and ${PRODUCT} runs on your Mac only. Use the same company's desktop app instead.`,
         )
       : [
-          generic
-            ? el(
-                "div",
-                { class: "choice-row", role: "radiogroup", "aria-labelledby": `${prefix}-where` },
-                el("span", { class: "choice-row-label field-label", id: `${prefix}-where` }, "Where does its model run?"),
-                [
-                  [true, "On someone else's servers"],
-                  [false, "On this Mac"],
-                ].map(([hosted, label]) =>
-                  el(
-                    "label",
-                    { class: "radio" },
-                    el("input", {
-                      type: "radio",
-                      name: `${prefix}-kind`,
-                      value: hosted ? "hosted" : "local",
-                      checked: form.hosted === hosted,
-                      onchange: () => {
-                        form.hosted = hosted;
-                        form.destination = hosted ? "" : "local model on this computer";
-                        update();
-                      },
-                    }),
-                    el("span", null, label),
-                  ),
-                ),
-              )
-            : null,
-          generic && form.hosted
-            ? field({
-                label: "Who receives the text?",
-                id: `${prefix}-destination`,
-                hint: "The company or service behind the app, for example its model provider.",
-                control: el("input", {
-                  type: "text",
-                  id: `${prefix}-destination`,
-                  class: "input",
-                  value: form.destination,
-                  maxlength: 80,
-                  autocomplete: "off",
-                  oninput: (event) => {
-                    form.destination = event.target.value;
-                    update();
-                  },
-                }),
-              })
-            : null,
-          field({
-            label: "Name in this vault",
-            id: `${prefix}-name`,
-            hint: "Lower-case letters, digits and hyphens. This is how the app appears in Activity.",
-            error: form.name && !NAME_PATTERN.test(form.name) ? "Use lower-case letters, digits and hyphens, starting with a letter; 32 at most." : "",
-            control: el("input", {
-              type: "text",
-              id: `${prefix}-name`,
-              class: "input input-mono",
-              value: form.name,
-              maxlength: 32,
-              autocomplete: "off",
-              autocapitalize: "off",
-              spellcheck: "false",
-              oninput: (event) => {
-                form.name = event.target.value;
-                update();
-              },
-            }),
-          }),
+          generic ? kindRow(form, update, prefix) : null,
+          generic && form.hosted ? destinationField(form, update, prefix) : null,
+          nameField(form, update, prefix),
           el(
             "div",
             { class: ["goes-to", short && "goes-to-short"] },
@@ -350,7 +388,7 @@ export function appFormFields(form, known, update, prefix, short = false) {
                         { class: "muted" },
                         form.hosted
                           ? `Whatever this app reads from the vault is sent to ${described.destination} and cannot be recalled.`
-                          : "The gate cannot check this. If the app uses a cloud model, or has tools that send data out, what it reads leaves this Mac.",
+                          : `${PRODUCT} cannot check this. If the app uses a cloud model, or has tools that send data out, what it reads leaves this Mac.`,
                       ),
                 ],
           ),
@@ -448,9 +486,10 @@ export async function loadConnect(view, update) {
 
 /**
  * A configuration as words and the spaces between them, so that a long line wraps
- * at a space and never inside an option such as "--store".
+ * at a space and never inside an option such as "--store". Only a word that is
+ * longer than a whole line wraps inside itself (the style sheet sees to that).
  */
-function codeWords(text) {
+export function codeWords(text) {
   return String(text)
     .split(/(\s+)/)
     .filter(Boolean)

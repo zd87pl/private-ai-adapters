@@ -206,9 +206,9 @@
   color: #fff;
 }
 
+/* A part that is done carries a check in the colour of text. Green is kept for what is sealed. */
 .step.is-done .step-dot {
-  background: var(--green-soft);
-  color: var(--green);
+  color: var(--text-2);
 }
 
 .shake-0 {
@@ -371,7 +371,31 @@
   line-height: 1.3;
 }
 
+.lock-state.is-unknown .lock-glyph {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
 .lock-now-state {
+  display: none;
+}
+
+/* The view, at the foot of the sidebar above the lock state: the same corner as on the Basic page. */
+.view-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.view-label {
+  color: var(--text-2);
+  font-size: var(--fs-s);
+  font-weight: 600;
+}
+
+.view-switch .icon-btn {
   display: none;
 }
 
@@ -381,18 +405,51 @@
   outline: none;
 }
 
-/* Lies over the top of the page while it is there, so that nothing is pushed down and back. */
+/* On a visit from Basic: the way back and the way to stay, above the page's head. */
+.visit-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  max-width: 1120px;
+  margin: 10px auto 0;
+  padding: 7px 8px 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+}
+
+.visit-text {
+  flex: 1 1 260px;
+  min-width: 0;
+  color: var(--text-2);
+}
+
+/* The title of the page and, while there is one, the bar above it: both stay in view. */
+.page-top {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  /* Keeps the bar's margin inside, so that the bar has the same room above it when scrolled. */
+  display: flow-root;
+  max-width: 1120px;
+  margin: 0 auto;
+  background: var(--bg-veil);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  backdrop-filter: blur(20px) saturate(1.6);
+}
+
+/* A hairline once something has scrolled under the title. */
+.is-scrolled .page-top {
+  box-shadow: 0 1px 0 var(--line);
+}
+
+/* Stands above the title and moves it down while it is there, so that it covers nothing. */
 .offline-bar {
-  position: fixed;
-  top: 10px;
-  left: calc(var(--sidebar-width) + var(--gutter));
-  right: var(--gutter);
-  z-index: 30;
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  max-width: 1120px;
-  margin: 0 auto;
+  margin-top: 10px;
   padding: 9px 12px;
   border: 1px solid var(--line);
   border-radius: 9px;
@@ -400,7 +457,6 @@
     linear-gradient(var(--red-soft), var(--red-soft)),
     var(--surface);
   color: var(--text);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
 }
 
 .offline-bar .icon {
@@ -409,24 +465,15 @@
 }
 
 .page-head {
-  position: sticky;
-  top: 0;
-  z-index: 5;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  max-width: 1120px;
-  margin: 0 auto;
   padding: 26px 0 14px;
-  background: var(--bg-veil);
-  -webkit-backdrop-filter: blur(20px) saturate(1.6);
-  backdrop-filter: blur(20px) saturate(1.6);
 }
 
-/* A hairline once something has scrolled under the title. */
-.is-scrolled .page-head {
-  box-shadow: 0 1px 0 var(--line);
+.offline-bar + .page-head {
+  padding-top: 14px;
 }
 
 .page-heading {
@@ -2095,13 +2142,17 @@
   font-weight: 600;
 }
 
-/* The whole block is on show: a long line wraps at its spaces, and copying it gives the line unbroken. */
+/* The whole block is on show: a long line wraps at its spaces, and copying it gives the line
+   unbroken. A word stays in one piece wherever it fits on a line of its own. One that is longer
+   than the block, such as a long path, wraps inside itself instead of running out of the block. */
 .config .code {
   white-space: pre-wrap;
 }
 
 .code-word {
-  white-space: nowrap;
+  display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .config-where {
@@ -2132,23 +2183,35 @@
     padding: 16px 8px 12px;
   }
 
-  .brand {
+  .sidebar .brand {
     flex-direction: column;
     gap: 5px;
     padding: 0;
     justify-content: center;
   }
 
-  .brand .chip {
+  .sidebar .brand .chip {
     height: 15px;
     padding: 0 4px;
     font-size: 0.5625rem;
   }
 
-  .brand-name,
+  /* The view control becomes one button, as the six links became icons. */
+  .view-switch .view-label,
+  .view-switch .segmented {
+    display: none;
+  }
+
+  .view-switch .icon-btn {
+    display: inline-flex;
+    width: 40px;
+    height: 32px;
+  }
+
+  .sidebar .brand-name,
   .nav-label,
-  .lock-state,
-  .lock-now .btn-label {
+  .sidebar .lock-state,
+  .sidebar .lock-now .btn-label {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -2188,17 +2251,17 @@
     width: 100%;
   }
 
-  .lock-now {
+  .sidebar .lock-now {
     width: 40px;
     padding: 0;
   }
 
   /* One control at the foot: it shows the state and locks. */
-  .lock-now-act {
+  .sidebar .lock-now-act {
     display: none;
   }
 
-  .lock-now-state {
+  .sidebar .lock-now-state {
     display: block;
   }
 
@@ -2253,11 +2316,6 @@
   .stat {
     padding: 0;
     border-left: 0;
-  }
-
-  .offline-bar {
-    left: 12px;
-    right: 12px;
   }
 
   .choice-text {
@@ -2363,4 +2421,1093 @@
 .upload-outside {
   display: block;
   padding-top: 4px;
+}
+
+/* -- the Basic page ----------------------------------------------------------------- */
+
+.basic {
+  --panel-width: 440px;
+  --column: 760px;
+  --gutter: 24px;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* The top bar and, while there is one, the bar that says what is wrong: both stay in view. */
+.basic-top {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: 0 var(--gutter);
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-veil);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  backdrop-filter: blur(20px) saturate(1.6);
+}
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 16px;
+  max-width: var(--column);
+  margin: 0 auto;
+  padding: 10px 0;
+}
+
+.topbar .brand {
+  padding: 0;
+}
+
+.topbar-lock {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+
+.topbar .lock-state {
+  display: inline;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.topbar .lock-state.is-unknown {
+  color: var(--red);
+  font-weight: 500;
+}
+
+/* The bar stands in the page's column, under the top bar. */
+.basic-bar {
+  max-width: var(--column);
+  margin: -8px auto 0;
+  padding-bottom: 10px;
+}
+
+.bar-text {
+  display: grid;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.offline-bar .btn .icon {
+  margin-top: 0;
+  color: inherit;
+}
+
+.copy-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.copy-line .code {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 9px;
+}
+
+/* "Copy" and "Copied" take the same room, so that nothing beside or below the button moves. */
+.copy-line .btn {
+  flex: none;
+  min-width: 82px;
+}
+
+.basic-main {
+  flex: 1;
+  min-width: 0;
+  padding: 0 var(--gutter) 40px;
+  outline: none;
+}
+
+.basic-main .page-body {
+  gap: 30px;
+  max-width: var(--column);
+  margin-top: 22px;
+}
+
+.basic-section {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 16px;
+}
+
+.section-title {
+  font-size: var(--fs-l);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.section-aside {
+  color: var(--text-2);
+  font-size: var(--fs-s);
+  font-variant-numeric: tabular-nums;
+}
+
+.basic-label {
+  color: var(--text-2);
+  font-size: var(--fs-s);
+  font-weight: 600;
+}
+
+/* The headline keeps its height whatever it says, and while it says nothing yet: one line,
+   two in a narrow window. Nothing under it moves when the number of waiting passages changes. */
+.basic-status {
+  min-block-size: 1.2em;
+  margin-top: -8px;
+  font-size: var(--fs-2xl);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  outline: none;
+}
+
+.approval-stack {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.approval-stack > .btn {
+  justify-self: start;
+}
+
+.basic-none,
+.basic-again {
+  color: var(--text-2);
+}
+
+.basic-hint {
+  color: var(--text-2);
+  font-size: var(--fs-s);
+}
+
+.basic-ask {
+  display: grid;
+  gap: 6px;
+}
+
+/* The line between what left since this unlock and what left before it. */
+.act-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 16px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--text-3);
+  font-size: var(--fs-s);
+  font-variant-numeric: tabular-nums;
+}
+
+.act-divider::before,
+.act-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+.act-divider + .act-item {
+  border-top: 1px solid var(--line-soft);
+}
+
+.act-none {
+  padding: 9px 16px;
+  color: var(--text-2);
+}
+
+.basic-under {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.basic-hints {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.basic-under .btn {
+  flex: none;
+}
+
+.basic-stops {
+  display: grid;
+  gap: 0;
+  margin-top: 6px;
+}
+
+.basic-stopped {
+  display: grid;
+  gap: 1px;
+}
+
+/* A sentence about calls that were stopped. It opens the newest such entry and reads as a line, not as an alarm. */
+.stop-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: calc(100% + 16px);
+  margin: 0 -8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.stop-row:hover {
+  background: var(--fill-hover);
+}
+
+.stop-row.is-selected {
+  background: var(--fill-selected);
+}
+
+.stop-row .icon {
+  margin-top: 1px;
+  color: var(--text-3);
+}
+
+.basic-fold,
+.panel-more {
+  display: flex;
+  margin-left: -8px;
+}
+
+.basic-docs {
+  padding: 12px 18px 8px;
+}
+
+.basic-doc-table .col-left {
+  width: 250px;
+  white-space: normal;
+}
+
+.doc-group {
+  display: block;
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.basic-app-list {
+  display: grid;
+  padding: 2px 18px;
+}
+
+.basic-app {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 13px 0;
+}
+
+.basic-app + .basic-app {
+  border-top: 1px solid var(--line-soft);
+}
+
+.basic-app-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.basic-app-name {
+  min-width: 0;
+  font-size: var(--fs-m);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.basic-app.is-idle .basic-app-name {
+  color: var(--text-2);
+}
+
+.basic-app-access {
+  font-weight: 500;
+}
+
+/* The place of the control: at the end of the line. */
+.basic-app-change,
+.basic-app-line > .btn {
+  margin-left: auto;
+}
+
+.basic-app-groups {
+  display: grid;
+  gap: 2px;
+  color: var(--text-2);
+}
+
+.basic-app-meter {
+  display: grid;
+  gap: 3px;
+  color: var(--text-2);
+  font-size: var(--fs-s);
+  font-variant-numeric: tabular-nums;
+}
+
+.basic-app-used {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+}
+
+.basic-app-used .meter {
+  flex: 0 0 150px;
+  margin-left: auto;
+}
+
+.basic-app-close {
+  color: var(--amber);
+}
+
+.basic-app-seen {
+  color: var(--text-2);
+  font-size: var(--fs-s);
+}
+
+.also-group {
+  display: grid;
+  gap: 4px;
+}
+
+.also-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.also-head .mini-title {
+  margin-bottom: 0;
+}
+
+.also-list {
+  display: grid;
+  gap: 4px;
+  padding-left: 18px;
+  list-style: disc;
+  color: var(--text-2);
+}
+
+.basic-foot {
+  display: grid;
+  gap: 10px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  color: var(--text-2);
+}
+
+.launch {
+  display: grid;
+  gap: 6px;
+}
+
+.basic-foot .gate-foot {
+  max-width: none;
+  text-align: left;
+}
+
+/* A button that reads as a link: it opens a sheet and goes nowhere. */
+button.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* -- the controls of the Basic page and their sheets ------------------------------- */
+
+/* The sample letter: what it is, and the button that removes it, on one line where both fit. */
+.basic-sample {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  color: var(--text-2);
+}
+
+/* Under the files that were sealed: which apps can ask for them from now on. */
+.upload-said {
+  padding: 1px 0 3px 24px;
+}
+
+.upload-who {
+  color: var(--text);
+}
+
+.upload-group {
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+/* A choice whose options each carry a sentence or two: the sentence stands under the option. */
+.choice-stack .choice {
+  align-items: flex-start;
+}
+
+.choice-stack .choice input {
+  margin-top: 3px;
+}
+
+.choice-stack .choice-text {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.choice-stack .choice-hint {
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.sheet-who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: -6px;
+}
+
+.sheet-files {
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.basic-opens {
+  color: var(--text-2);
+  font-size: var(--fs-s);
+}
+
+/* Below the buttons of the app's sheet: where its connection steps are, and removing it. */
+.sheet-more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.sheet-more .btn {
+  margin-right: -8px;
+}
+
+/* In a sheet the statements stand in one column. */
+.sheet .cannot {
+  columns: 1;
+}
+
+.sheet .version {
+  text-align: left;
+}
+
+/* The view, in the bottom-left corner at every width. */
+.viewbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 8px var(--gutter);
+  border-top: 1px solid var(--line);
+  background: var(--bg-veil);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  backdrop-filter: blur(20px) saturate(1.6);
+}
+
+.viewbar-text {
+  flex: 1 1 300px;
+  min-width: 0;
+  color: var(--text-2);
+  font-size: var(--fs-s);
+}
+
+/* Messages stand above the bar with the view, not over it. */
+body:has(.viewbar) .toasts {
+  bottom: 64px;
+}
+
+@media (max-width: 640px) {
+  .basic-doc-table .col-added {
+    display: none;
+  }
+
+  .basic-doc-table .col-left {
+    width: 190px;
+  }
+}
+
+@media (max-width: 560px) {
+  .basic {
+    --gutter: 16px;
+  }
+
+  /* Two lines: the name; the lock state and "Lock now". */
+  .topbar .brand {
+    flex-basis: 100%;
+  }
+
+  .topbar-lock {
+    justify-content: space-between;
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .basic-status {
+    min-block-size: 2.4em;
+  }
+
+  /* The two answers stack, the careful one first. */
+  .basic .approval-actions {
+    flex-direction: column;
+  }
+
+  .basic .approval-actions .btn {
+    width: 100%;
+  }
+
+  .basic-app-used .meter {
+    flex-basis: 100%;
+  }
+
+  /* The sentence goes under the switch, so the bar is taller and the messages stand higher. */
+  .viewbar-text {
+    flex-basis: 100%;
+  }
+
+  body:has(.viewbar) .toasts {
+    bottom: 104px;
+  }
+
+  .basic .panel {
+    width: 100vw;
+  }
+}
+
+/* -- setting up: the card on the Basic page, and the three focused steps ----------- */
+
+/* One line that names the next step, until setting up is over or the owner hides it. */
+.card-setup {
+  padding: 12px 18px 14px;
+}
+
+.card-setup .card-head {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  margin-bottom: 6px;
+}
+
+.card-setup .card-aside::before {
+  content: "·";
+  margin-right: 8px;
+}
+
+.card-setup .card-head .btn {
+  margin-left: auto;
+  margin-right: -8px;
+}
+
+.setup-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+/* The guide of the demo, in the place of that card. It stands under the approval cards, so
+   what it says and how tall it is moves nothing above it. */
+.card-guide {
+  display: grid;
+  gap: 10px;
+  padding: 12px 18px 16px;
+}
+
+.card-guide .card-head {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 4px 10px;
+  margin-bottom: 0;
+}
+
+.card-guide .card-head .btn {
+  margin-left: auto;
+  margin-right: -8px;
+}
+
+/* The title takes the focus when the button that was just pressed has gone, and shows no ring for it. */
+#guide-title {
+  outline: none;
+}
+
+.guide-actions,
+.guide-more {
+  display: flex;
+}
+
+.guide-more {
+  margin-left: -8px;
+}
+
+/* How to go on with a vault of one's own: three numbered lines and what to have ready. */
+.guide-own {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.guide-own-title {
+  font-size: var(--fs);
+  font-weight: 600;
+}
+
+.guide-steps {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  margin: 0;
+  padding-left: 20px;
+  list-style: decimal;
+}
+
+.guide-steps li {
+  min-width: 0;
+  padding-left: 2px;
+}
+
+.guide-steps .copy-line {
+  margin-top: 4px;
+}
+
+.guide-ready {
+  color: var(--text-2);
+}
+
+/* While the guide is open, three parts of the page are folded to their headings. The button
+   that unfolds a part stands at the end of its heading. */
+.is-foldable .section-head {
+  align-items: center;
+}
+
+.is-foldable .section-head .btn {
+  margin-right: -8px;
+}
+
+/* A step starts at the top of the window: what grows in its card moves nothing that stands above it. */
+.gate-step {
+  justify-content: flex-start;
+  padding-top: 40px;
+}
+
+.gate-wider .gate-card,
+.gate-card.gate-wider {
+  max-width: 720px;
+}
+
+.gate-step .gate-foot,
+.gate-bar {
+  width: 100%;
+  max-width: 520px;
+}
+
+.gate-wider .gate-foot,
+.gate-wider .gate-bar {
+  max-width: 720px;
+}
+
+/* The title of a step takes the focus when the step opens, and shows no ring for it. */
+#setup-title {
+  outline: none;
+}
+
+/* Four parts do not fit on one line in a narrow card: they go on, part by part, on the next. */
+.steps {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.step-label {
+  white-space: nowrap;
+}
+
+/* The rule every app of the first run gets, set apart from the lines around it. */
+.setup-rule {
+  display: grid;
+  gap: 4px;
+  padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--line-strong);
+}
+
+.setup-rule-small,
+.setup-aside {
+  color: var(--text-2);
+  font-size: var(--fs-s);
+}
+
+.setup-web {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  margin: -6px 0 0 -8px;
+}
+
+.setup-web .setup-aside {
+  margin-left: 8px;
+}
+
+.setup-fields,
+.setup-said {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.setup-who {
+  display: grid;
+  gap: 4px;
+  margin-top: -8px;
+}
+
+.setup-sample {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  color: var(--text-2);
+}
+
+.connect-sub {
+  margin-top: -8px;
+  color: var(--text-2);
+}
+
+/* The line that says whether a request has come. Only its words change: it has the room of
+   two lines whatever it says, three in a narrow window, so nothing under it ever moves. */
+.ask-wait {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  block-size: calc(3em + 20px);
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: var(--inset);
+  line-height: 1.5;
+  overflow: hidden;
+}
+
+/* The sign of the line is drawn in the colour of text. Green is the colour of what is sealed. */
+.ask-wait-glyph {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 1.5em;
+  color: var(--text);
+}
+
+.ask-blocked .ask-wait-glyph {
+  color: var(--amber);
+}
+
+.ask-approvals {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+.ask-heading {
+  margin-top: -6px;
+  font-size: var(--fs-l);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.ask-end {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.ask-end-title {
+  font-weight: 600;
+  outline: none;
+}
+
+h2.ask-end-title {
+  font-size: var(--fs-l);
+}
+
+.ask-end-wait {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+}
+
+.ask-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ask-steps {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ask-step {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 0 12px;
+}
+
+.ask-num {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--fill-quiet);
+  font-size: var(--fs-s);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.ask-num .icon {
+  width: 13px;
+  height: 13px;
+  stroke-width: 2;
+}
+
+/* One column that is as wide as the card allows and no wider: a long line of a text to copy
+   scrolls inside its own box. */
+.ask-step-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+/* A button that unfolds something stands at the start of its line. */
+.ask-step-body > .btn {
+  justify-self: start;
+}
+
+.ask-step-body > .btn-quiet {
+  margin-left: -8px;
+}
+
+.ask-step-title {
+  font-size: var(--fs-m);
+  font-weight: 600;
+  line-height: 24px;
+}
+
+.ask-where {
+  font-size: var(--fs-s);
+  overflow-wrap: anywhere;
+}
+
+.ask-path {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-size: var(--fs-s);
+  overflow-wrap: anywhere;
+}
+
+.ask-check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.ask-check .btn {
+  flex: none;
+}
+
+.ask-check-note {
+  flex: 1 1 260px;
+  color: var(--text-2);
+  font-size: var(--fs-s);
+}
+
+/* What a look at the file found. It takes the focus after the look, and shows no ring for it. */
+.ask-found {
+  font-weight: 600;
+  outline: none;
+}
+
+.ask-abc {
+  margin: 0;
+  padding-left: 20px;
+  list-style: lower-alpha;
+}
+
+.ask-abc li {
+  min-width: 0;
+  padding-left: 2px;
+}
+
+.ask-abc li + li {
+  margin-top: 10px;
+}
+
+.ask-abc li > * + * {
+  margin-top: 6px;
+}
+
+.ask-label {
+  color: var(--text-2);
+  font-size: var(--fs-s);
+  font-weight: 600;
+}
+
+.ask-block,
+.ask-all {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+
+.ask-note {
+  display: grid;
+  gap: 4px;
+}
+
+.ask-note .btn {
+  justify-self: start;
+}
+
+/* A text of several lines to copy. It is at most seven lines high and scrolls inside its box;
+   the page itself never scrolls sideways. */
+.copy-block {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.copy-block .code {
+  flex: 1;
+  min-width: 0;
+}
+
+.copy-block .btn {
+  flex: none;
+  min-width: 82px;
+}
+
+.ask-text {
+  max-block-size: calc(10.85em + 22px);
+}
+
+.ask-fold {
+  display: flex;
+  margin-left: -8px;
+}
+
+.ask-help-list {
+  display: grid;
+  gap: 6px;
+  padding-left: 18px;
+  list-style: disc;
+  color: var(--text-2);
+}
+
+/* What the app asked for so far. The rows open nothing here: this screen has no place for details. */
+.ask-rows {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.act-still,
+.act-still:hover {
+  background: transparent;
+  cursor: default;
+}
+
+@media (max-width: 560px) {
+  .gate-step {
+    padding-top: 24px;
+  }
+
+  .gate-step .gate-card {
+    padding: 22px 18px 20px;
+  }
+
+  /* The four parts on one line: shorter lines between them. */
+  .steps {
+    gap: 6px;
+  }
+
+  .step {
+    gap: 5px;
+  }
+
+  .step + .step::before {
+    width: 8px;
+  }
+
+  .ask-wait {
+    block-size: calc(4.5em + 20px);
+  }
+
+  /* The two answers stack, the careful one first. */
+  .gate .approval-actions {
+    flex-direction: column;
+  }
+
+  .gate .approval-actions .btn {
+    width: 100%;
+  }
+
+  .copy-block {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .copy-block .btn {
+    align-self: flex-start;
+  }
 }

@@ -5,17 +5,27 @@
 // state every two seconds, and decides which screen is shown.
 
 import { ApiError, api, configure } from "./api.js";
+import { basicBars, basicView, freshGuide, settleSetup } from "./basic.js";
 import { PRODUCT } from "./brand.js";
 import { el, icon, render } from "./dom.js";
-import { at, num } from "./format.js";
-import { bootScreen, createScreen, lockedScreen, offlineScreen, pairingScreen, setupScreen } from "./gateway.js";
+import { at, num, parseTime } from "./format.js";
+import { bootScreen, createScreen, freshFirstRun, lockedScreen, offlineScreen, openStep, pairingScreen, setupScreen, stepApp } from "./gateway.js";
 import { appsView, documentsView, vaultView } from "./manage.js";
-import { button, chip, closeAllSheets, toast, toastError } from "./parts.js";
+import { button, chip, closeAllSheets, iconButton, segmented, toast, toastError, watchSheets } from "./parts.js";
 import { requestReauth } from "./sheets.js";
 import { activityView, approvalCardKey, approvalsView, detailPanel, overviewView } from "./views.js";
 
 const POLL_MS = 2000;
 const PAGE = 50;
+/** The Basic page: how many answers that left it shows at first, and how many "Show more" adds. */
+const LEFT_FIRST = 5;
+const LEFT_MORE = 20;
+/** The step "First question": how many of the newest calls of the app that is being connected it lists. */
+const ASKED_FIRST = 5;
+/** How the stopped calls of the last 24 hours are asked for: a page, and how many older pages at most. */
+const STOPS_PAGE = 20;
+const STOPS_MORE_PAGES = 5;
+const DAY_MS = 86400000;
 const root = document.getElementById("app");
 
 const NAV = [
@@ -44,20 +54,36 @@ const NEEDS = {
   documents: ["documents"],
   apps: ["apps", "settings"],
   vault: ["settings"],
-  setup: ["documents", "apps"],
+  basic: ["apps", "approvals", "settings", "documents", "left", "stops"],
+  // The step "First question" also needs what its app asked for: see `needs`.
+  setup: ["apps", "approvals", "settings", "documents", "stops"],
 };
+
+/** The steps of setting up that are addresses: "#/setup/app" and so on. */
+const SETUP_STEPS = ["app", "documents", "connect"];
+
+const VIEW_OPTIONS = [
+  { value: "basic", label: "Basic", title: "The everyday view: approvals, what left, documents and apps." },
+  { value: "pro", label: "Pro", title: "Every page and every setting." },
+];
 
 function freshActivity() {
   return { items: new Map(), order: [], nextBefore: null, filters: { app: "", kind: "" }, loaded: false, loadingMore: false, error: "", latest: null };
 }
 
+/** The answers that left, newest first, as the Basic page lists them. */
+function freshLeft() {
+  return { items: new Map(), order: [], nextBefore: null, loaded: false, loadingMore: false };
+}
+
 function freshUi() {
-  return {
+  return Object.assign(freshFirstRun(), {
     pair: { code: "", busy: false, error: "", disabled: false, expired: false },
-    unlock: { passphrase: "", busy: false, error: "", shake: 0 },
+    // `waited`: how many passages were waiting when this page saw the vault lock.
+    unlock: { passphrase: "", busy: false, error: "", shake: 0, waited: 0 },
     create: { passphrase: "", again: "", busy: false, error: "", shown: false },
     uploads: {},
-    notes: {},
+    notes: Object.create(null), // by group name, and a group may be named "constructor"
     limits: null,
     word: { text: "", busy: false, error: "" },
     openWarnings: new Set(),
@@ -73,9 +99,22 @@ function freshUi() {
     focusApproval: null,
     focusPanel: false,
     focusId: null,
+    focusView: false,
     anchorKey: null,
     locking: false,
-  };
+    // The Basic page: whether every waiting passage is shown, what was last said to a screen
+    // reader about how many wait, what is unfolded, and which "Copy" was just pressed.
+    allApprovals: false,
+    waitingCount: null,
+    waitingSaid: "",
+    docsOpen: false,
+    panelMore: false,
+    copied: null,
+    // How many sheets lie over the page. The Basic page has its cards and its sheets on one page.
+    sheets: 0,
+    // The demo's guide on the Basic page: what was hidden, unfolded and answered.
+    guide: freshGuide(),
+  });
 }
 
 const ctx = {
@@ -84,12 +123,20 @@ const ctx = {
   phase: "boot", // boot, pair, stuck, ready
   offline: false,
   route: "overview",
+  // The step of setting up that the address names, and on its last step the app it is about.
+  setupStep: "app",
+  setupApp: "",
   data: { apps: null, approvals: null, documents: null, settings: null },
   activity: freshActivity(),
+  // What the Basic page lists: the answers that left, and the calls that were stopped.
+  left: freshLeft(),
+  stops: null,
+  // The newest calls under the name of the app that is being connected, for the step "First question":
+  // the app's name, the entries, and whether the app has older ones.
+  asked: null,
   // What the page has learned about passages, by reference: title, number, collection.
   passages: new Map(),
   panel: null,
-  onboarding: null,
   loadErrors: {},
   now: new Date(),
   ui: freshUi(),
@@ -101,6 +148,8 @@ const ctx = {
   closePanel,
   setActivityFilters,
   loadMoreActivity,
+  loadMoreLeft,
+  setUpInPro,
   start,
 };
 
@@ -117,9 +166,28 @@ function schedule() {
   });
 }
 
+/** The choice between the two views. The one that is on screen is the one selected. */
+function viewChoice(shown) {
+  return segmented({ name: "view", legend: "View", value: shown, options: VIEW_OPTIONS, onchange: chooseView });
+}
+
+/** The view control of Pro, at the foot of the sidebar: the choice, or one button where the sidebar is icons. */
+function viewSwitch() {
+  return el(
+    "div",
+    { class: "view-switch", key: "view" },
+    el("span", { class: "view-label" }, "View"),
+    viewChoice("pro"),
+    iconButton("view", "Switch to Basic view", { id: "view-basic", onclick: () => chooseView("basic") }),
+  );
+}
+
 function sidebar() {
   const state = ctx.state;
   const waiting = state.today ? state.today.approvals_waiting : 0;
+  // While the app does not answer, what this page last heard of the vault may no longer
+  // hold: the foot then says that it does not know, not what it knew.
+  const unknown = ctx.offline;
   return el(
     "aside",
     { class: "sidebar", key: "sidebar" },
@@ -154,15 +222,23 @@ function sidebar() {
     el(
       "div",
       { class: "sidebar-foot" },
+      viewSwitch(),
       el(
         "div",
-        { class: "lock-state", title: state.locks_at ? `Unlocked. Locks itself ${at(state.locks_at, ctx.now)}.` : "Unlocked" },
-        el("span", { class: "lock-glyph" }, icon("unlock")),
+        {
+          class: ["lock-state", unknown && "is-unknown"],
+          title: unknown
+            ? `${PRODUCT} is not answering, so this page cannot tell whether the vault is unlocked.`
+            : state.locks_at
+              ? `Unlocked. Locks itself ${at(state.locks_at, ctx.now)}.`
+              : "Unlocked",
+        },
+        el("span", { class: "lock-glyph" }, icon(unknown ? "warning" : "unlock")),
         el(
           "span",
           { class: "lock-text" },
-          el("span", { class: "lock-title" }, "Unlocked"),
-          el("span", { class: "lock-sub" }, state.locks_at ? `Locks itself ${at(state.locks_at, ctx.now)}` : "Until you lock it"),
+          el("span", { class: "lock-title" }, unknown ? "State unknown" : "Unlocked"),
+          el("span", { class: "lock-sub" }, unknown ? `${PRODUCT} is not answering` : state.locks_at ? `Locks itself ${at(state.locks_at, ctx.now)}` : "Until you lock it"),
         ),
       ),
       el(
@@ -172,20 +248,46 @@ function sidebar() {
           class: ["btn", "btn-default", "btn-block", "lock-now", ctx.ui.locking && "is-busy"],
           onclick: lockNow,
           disabled: ctx.ui.locking,
-          title: state.locks_at ? `Unlocked until ${at(state.locks_at, ctx.now).replace(/^(at|on) /, "")}. Lock now` : "Unlocked. Lock now",
+          title: unknown
+            ? `${PRODUCT} is not answering. Lock now`
+            : state.locks_at
+              ? `Unlocked until ${at(state.locks_at, ctx.now).replace(/^(at|on) /, "")}. Lock now`
+              : "Unlocked. Lock now",
         },
         icon("lock", "lock-now-act"),
-        icon("unlock", "lock-now-state"),
+        icon(unknown ? "warning" : "unlock", "lock-now-state"),
         el("span", { class: "btn-label" }, "Lock now"),
       ),
     ),
   );
 }
 
+/** The lists the screen that is shown needs. */
+function needs() {
+  if (ctx.route === "setup" && ctx.setupStep === "connect") return NEEDS.setup.concat("asked");
+  return NEEDS[ctx.route];
+}
+
 function loadProblem() {
-  const needed = ctx.onboarding ? NEEDS.setup : NEEDS[ctx.route];
-  const name = needed.find((entry) => ctx.loadErrors[entry]);
+  const name = needs().find((entry) => ctx.loadErrors[entry]);
   return name ? ctx.loadErrors[name] : "";
+}
+
+/**
+ * While the view that is kept is Basic and a page of Pro is shown, the owner is on a
+ * visit: they followed a link from Basic, or typed an address. The bar offers both
+ * ways on, so that nobody has to press an option that is already selected.
+ */
+function visitBar() {
+  const kept = ctx.state.interface;
+  if (!kept || kept.view !== "basic") return null;
+  return el(
+    "nav",
+    { class: "visit-bar", key: "visit", "aria-label": "Back to Basic" },
+    el("a", { class: "btn btn-default btn-small", id: "visit-back", href: "#/basic" }, el("span", { class: "btn-label" }, "← Back to Basic")),
+    el("span", { class: "visit-text" }, "You are in Pro, where every setting is. Your view stays Basic."),
+    button("Stay in Pro", { kind: "quiet", small: true, id: "visit-stay", onclick: stayInPro }),
+  );
 }
 
 function shell() {
@@ -197,23 +299,81 @@ function shell() {
     el(
       "main",
       { class: "main", id: "main", tabindex: -1 },
-      ctx.offline
-        ? el("div", { class: "offline-bar", role: "alert", key: "offline" }, icon("warning"), el("span", null, `${PRODUCT} is not answering. Is it still running in its terminal? What you see may be out of date.`))
-        : loadProblem()
-          ? el("div", { class: "offline-bar", role: "alert", key: "load-error" }, icon("warning"), el("span", null, `This page could not be brought up to date: ${loadProblem()} Trying again.`))
-          : null,
+      visitBar(),
+      // What is wrong with the page stands above its title, in the block that stays in view.
       el(
-        "header",
-        { class: "page-head", key: "head" },
+        "div",
+        { class: "page-top", key: "top" },
+        ctx.offline
+          ? el("div", { class: "offline-bar", role: "alert", key: "offline" }, icon("warning"), el("span", null, `${PRODUCT} is not answering. Is it still running in its terminal? What you see may be out of date.`))
+          : loadProblem()
+            ? el("div", { class: "offline-bar", role: "alert", key: "load-error" }, icon("warning"), el("span", null, `This page could not be brought up to date: ${loadProblem()} Trying again.`))
+            : null,
         el(
-          "div",
-          { class: "page-heading" },
-          el("h1", { class: "page-title" }, view.title),
-          view.lead ? el("p", { class: "page-lead" }, view.lead) : null,
+          "header",
+          { class: "page-head", key: "head" },
+          el(
+            "div",
+            { class: "page-heading" },
+            el("h1", { class: "page-title" }, view.title),
+            view.lead ? el("p", { class: "page-lead" }, view.lead) : null,
+          ),
+          view.actions ? el("div", { class: "page-actions" }, view.actions) : null,
         ),
-        view.actions ? el("div", { class: "page-actions" }, view.actions) : null,
       ),
       el("div", { class: "page-body", key: `view-${ctx.route}` }, view.body),
+    ),
+    detailPanel(ctx),
+  );
+}
+
+function topbar() {
+  const state = ctx.state;
+  // While the app does not answer, the bar says that it does not know, not what it knew.
+  const unknown = ctx.offline;
+  let lock = "Unlocked until you lock it";
+  if (unknown) lock = "State unknown";
+  else if (state.locks_at) lock = `Unlocked until ${at(state.locks_at, ctx.now).replace(/^(at|on) /, "")}`;
+  return el(
+    "header",
+    { class: "topbar", key: "topbar" },
+    el(
+      "div",
+      { class: "brand" },
+      el("img", { src: "favicon.svg", width: 24, height: 24, alt: "" }),
+      el("span", { class: "brand-name" }, PRODUCT),
+      state.demo ? chip("Demo", "accent") : null,
+    ),
+    el(
+      "div",
+      { class: "topbar-lock" },
+      el("span", { class: ["lock-state", unknown && "is-unknown"] }, lock),
+      el(
+        "button",
+        { type: "button", class: ["btn", "btn-default", "lock-now", ctx.ui.locking && "is-busy"], onclick: lockNow, disabled: ctx.ui.locking },
+        icon("lock"),
+        el("span", { class: "btn-label" }, "Lock now"),
+      ),
+    ),
+  );
+}
+
+/** The frame of the Basic page: one column under a top bar, the view at its foot. */
+function basicShell() {
+  const problem = loadProblem();
+  const bar = basicBars(ctx, problem);
+  return el(
+    "div",
+    { class: ["basic", ctx.panel && "has-panel"], key: "basic" },
+    // The top bar and, while there is one, the bar that says what is wrong: both stay in view.
+    el("div", { class: "basic-top", key: "top" }, topbar(), bar ? el("div", { class: "basic-bar", key: "bar" }, bar) : null),
+    el("main", { class: "basic-main", id: "main", tabindex: -1 }, el("div", { class: "page-body", key: "view-basic" }, basicView(ctx, problem))),
+    el(
+      "footer",
+      { class: "viewbar", key: "viewbar" },
+      el("span", { class: "view-label" }, "View"),
+      viewChoice("basic"),
+      el("p", { class: "viewbar-text" }, "Basic shows what you use every day; Pro shows every setting. Both show the same vault."),
     ),
     detailPanel(ctx),
   );
@@ -227,7 +387,7 @@ function stuckScreen() {
       "section",
       { class: "gate-card" },
       el("h1", { class: "gate-title" }, "This page has no session"),
-      el("p", { class: "gate-lead" }, `${PRODUCT} did not give this browser a session. Reload the page. If that does not help, quit ${PRODUCT} in its terminal and start it again.`),
+      el("p", { class: "gate-lead" }, `${PRODUCT} did not give this page a session. Reload the page. If that does not help, quit ${PRODUCT} in its terminal and start it again.`),
       button("Reload", { kind: "primary", onclick: () => window.location.reload() }),
     ),
   );
@@ -239,7 +399,9 @@ function screen() {
   if (!ctx.state) return ctx.offline ? offlineScreen(ctx) : bootScreen();
   if (!ctx.state.store.exists) return createScreen(ctx);
   if (ctx.state.locked) return lockedScreen(ctx);
-  if (ctx.onboarding) return setupScreen(ctx);
+  // A step of setting up is an address. Nothing of the first run lives in this page's memory.
+  if (ctx.route === "setup") return setupScreen(ctx, loadProblem());
+  if (ctx.route === "basic") return basicShell();
   return shell();
 }
 
@@ -277,7 +439,12 @@ function paint() {
   if (state && state.store.exists && state.locked) title = `${PRODUCT} – locked`;
   else if (waiting > 0) title = `(${num(waiting)}) ${PRODUCT}`;
   if (document.title !== title) document.title = title;
-  if (ctx.ui.focusApproval && ctx.route === "approvals" && ctx.data.approvals) {
+  // The icon of the tab carries a dot while a passage waits for the owner.
+  const tabIcon = document.querySelector('link[rel="icon"]');
+  const wanted = waiting > 0 ? "favicon-waiting.svg" : "favicon.svg";
+  if (tabIcon && tabIcon.getAttribute("href") !== wanted) tabIcon.setAttribute("href", wanted);
+  const showsCards = ctx.route === "approvals" || ctx.route === "basic" || ctx.route === "setup";
+  if (ctx.ui.focusApproval && showsCards && ctx.data.approvals) {
     focusApproval(ctx.ui.focusApproval);
     ctx.ui.focusApproval = null;
   }
@@ -287,9 +454,20 @@ function paint() {
     if (shown) shown.focus();
   }
   if (ctx.ui.focusId) {
-    // A control that replaced the one just used takes over the focus.
+    // A control that replaced the one just used takes over the focus. What is to take it may
+    // belong to a list that is still on its way: it stays wanted until it is on the page.
     const next = document.getElementById(ctx.ui.focusId);
-    ctx.ui.focusId = null;
+    if (next) {
+      ctx.ui.focusId = null;
+      if (!document.querySelector("dialog[open]")) next.focus();
+    }
+  }
+  if (ctx.ui.focusView) {
+    // After a switch the focus stays on the control that made it, which is in the same corner in both views.
+    ctx.ui.focusView = false;
+    const chosen = document.querySelector('input[name="view"]:checked');
+    const narrow = document.getElementById("view-basic");
+    const next = chosen && chosen.offsetParent !== null ? chosen : narrow;
     if (next && !document.querySelector("dialog[open]")) next.focus();
   }
 }
@@ -300,7 +478,7 @@ function paint() {
  */
 function focusApproval(wanted) {
   if (document.querySelector("dialog[open]")) return;
-  const entries = Array.from(root.querySelectorAll(".page-body > .approval, .page-body > .decided"));
+  const entries = Array.from(root.querySelectorAll(".page-body > .approval, .page-body > .decided, .approval-stack > .approval, .approval-stack > .decided"));
   const cards = entries.filter((node) => node.classList.contains("approval"));
   let card = cards[0];
   if (wanted.ref) {
@@ -310,7 +488,13 @@ function focusApproval(wanted) {
     card = entries.slice(wanted.after).find((node) => node.classList.contains("approval")) || card;
   }
   const target = card ? card.querySelector('[data-key="dismiss"]') : null;
-  if (!target) return;
+  if (!target) {
+    // The last card was decided. On the Basic page the headline says so and takes the focus; on
+    // the step "First question" the outcome does. Never a button.
+    const headline = document.getElementById("basic-status") || document.getElementById("ask-end-title");
+    if (headline && typeof wanted.after === "number") headline.focus({ preventScroll: true });
+    return;
+  }
   // After a decision nothing may move under the pointer, so the page is not scrolled then.
   target.focus({ preventScroll: wanted.still === true || typeof wanted.after === "number" });
   if (wanted.ref && wanted.show) card.scrollIntoView({ block: "start" });
@@ -327,26 +511,66 @@ const fetchers = {
   settings: () => api.settings(),
   latest: () => api.activity({ limit: 8 }),
   activity: () => api.activity({ limit: PAGE, app: ctx.activity.filters.app, kind: ctx.activity.filters.kind }),
+  // The two lists of the Basic page are asked for by kind. Neither is made by picking from the newest entries.
+  left: () => api.activity({ limit: LEFT_FIRST, kind: "release" }),
+  stops: loadStops,
+  // What one app asked for, by its name: for the step that waits for the first request of that app.
+  asked: loadAsked,
 };
 
+async function loadAsked() {
+  const app = ctx.setupApp;
+  if (!app) return null;
+  const page = await api.activity({ limit: ASKED_FIRST, app });
+  return { app, items: page.items || [], more: page.next_before !== null && page.next_before !== undefined };
+}
+
+/**
+ * The entries of calls that were stopped, as far back as 24 hours. The record keeps one
+ * entry per kind of refusal and hour with a count, so one page nearly always holds them
+ * all. So that a count is never short, older pages are asked for while the oldest entry
+ * in hand is still newer than 24 hours.
+ */
+async function loadStops() {
+  const since = Date.now() - DAY_MS;
+  let page = await api.activity({ limit: STOPS_PAGE, kind: "refusal" });
+  const items = (page.items || []).slice();
+  for (let round = 0; round < STOPS_MORE_PAGES; round += 1) {
+    const oldest = items.length ? parseTime(items[items.length - 1].time) : null;
+    const more = page.next_before !== null && page.next_before !== undefined;
+    if (!more || !oldest || oldest.getTime() <= since) break;
+    page = await api.activity({ limit: STOPS_PAGE, kind: "refusal", before: page.next_before });
+    for (const item of page.items || []) items.push(item);
+  }
+  return items;
+}
+
+function sortList(list) {
+  list.order = Array.from(list.items.keys()).sort((a, b) => b - a);
+}
+
 function sortActivity() {
-  ctx.activity.order = Array.from(ctx.activity.items.keys()).sort((a, b) => b - a);
+  sortList(ctx.activity);
+}
+
+/** Take the newest page of a list that grows at its head into what is already shown of it. */
+function mergeHead(list, page) {
+  const items = page.items || [];
+  const known = list.order.length ? list.order[0] : null;
+  const oldest = items.length ? items[items.length - 1].seq : null;
+  const gap = list.loaded && known !== null && oldest !== null && oldest > known && page.next_before !== null;
+  if (!list.loaded || gap) {
+    list.items = new Map();
+    list.nextBefore = page.next_before === undefined ? null : page.next_before;
+  }
+  for (const item of items) list.items.set(item.seq, item);
+  list.loaded = true;
+  sortList(list);
 }
 
 function mergeActivityHead(page) {
-  const activity = ctx.activity;
-  const items = page.items || [];
-  const known = activity.order.length ? activity.order[0] : null;
-  const oldest = items.length ? items[items.length - 1].seq : null;
-  const gap = activity.loaded && known !== null && oldest !== null && oldest > known && page.next_before !== null;
-  if (!activity.loaded || gap) {
-    activity.items = new Map();
-    activity.nextBefore = page.next_before === undefined ? null : page.next_before;
-  }
-  for (const item of items) activity.items.set(item.seq, item);
-  activity.loaded = true;
-  activity.error = "";
-  sortActivity();
+  mergeHead(ctx.activity, page);
+  ctx.activity.error = "";
 }
 
 const adopt = {
@@ -369,7 +593,29 @@ const adopt = {
     ctx.activity.latest = value.items || [];
   },
   activity: mergeActivityHead,
+  left: (value) => mergeHead(ctx.left, value),
+  stops: (value) => {
+    ctx.stops = value;
+  },
+  asked: (value) => {
+    ctx.asked = value;
+  },
 };
+
+/**
+ * Which app the step "First question" is about, once the list of apps is in. The name
+ * is written into the address, so that a reload shows the same app, and what that app
+ * asked for is loaded.
+ */
+function settleSetupApp() {
+  if (ctx.route !== "setup" || ctx.setupStep !== "connect" || !ctx.data.apps) return;
+  const name = stepApp(ctx);
+  if (name === ctx.setupApp) return;
+  ctx.setupApp = name;
+  ctx.asked = null;
+  if (name) window.history.replaceState(null, "", `#/setup/connect?app=${encodeURIComponent(name)}`);
+  load(["asked"]);
+}
 
 async function load(names) {
   await Promise.all(
@@ -391,21 +637,28 @@ async function load(names) {
       }
     }),
   );
+  if (ctx.state && !ctx.state.locked) {
+    settleSetupApp();
+    // Setting up ends by itself once the vault has an app, a document and a first request.
+    settleSetup(ctx);
+  }
   schedule();
 }
 
 function loadRoute() {
   if (!ctx.state || ctx.state.locked || !ctx.state.store.exists) return Promise.resolve();
-  return load(ctx.onboarding ? NEEDS.setup : NEEDS[ctx.route]);
+  return load(needs());
 }
 
 /** Drop everything that came out of the vault, for when it locks or the session ends. */
 function forget() {
   ctx.data = { apps: null, approvals: null, documents: null, settings: null };
   ctx.activity = freshActivity();
+  ctx.left = freshLeft();
+  ctx.stops = null;
+  ctx.asked = null;
   ctx.passages = new Map();
   ctx.panel = null;
-  ctx.onboarding = null;
   ctx.loadErrors = {};
   const kept = ctx.ui;
   clearTimeout(kept.armTimer);
@@ -427,10 +680,19 @@ function applyState(next, force = false) {
   const wasOpen = Boolean(previous && !previous.locked);
   const isOpen = !next.locked;
   if (wasOpen && !isOpen) {
+    // This page saw the vault lock. What waited then was not released; the locked screen says how many.
+    const waited = previous.today ? previous.today.approvals_waiting : 0;
     closeAllSheets();
     forget();
+    ctx.ui.unlock.waited = waited;
     toast("The vault is locked.", "plain");
   }
+  // Which page an address opens that names none is decided by the view that is kept, once the app has said it.
+  if (next.interface && !(previous && previous.interface)) settleRoute();
+  // Whenever the Basic page opens, the focus goes to its headline, never to a button of a card.
+  // A step of setting up starts on its title.
+  if (isOpen && !wasOpen && ctx.route === "basic") ctx.ui.focusId = "basic-status";
+  if (isOpen && !wasOpen && ctx.route === "setup") ctx.ui.focusId = "setup-title";
   const retry = Object.keys(ctx.loadErrors).length > 0;
   if (isOpen && (force || retry || !wasOpen || previous.cursor !== next.cursor)) lastLoad = loadRoute();
   schedule();
@@ -500,6 +762,26 @@ async function loadMoreActivity() {
   schedule();
 }
 
+/** "Show more" on the Basic page: the next answers that left, older than the oldest shown. */
+async function loadMoreLeft() {
+  const left = ctx.left;
+  if (left.loadingMore || left.nextBefore === null || !left.order.length) return;
+  left.loadingMore = true;
+  schedule();
+  try {
+    const page = await api.activity({ limit: LEFT_MORE, kind: "release", before: left.order[left.order.length - 1] });
+    if (ctx.left === left) {
+      for (const item of page.items || []) left.items.set(item.seq, item);
+      left.nextBefore = page.next_before === undefined ? null : page.next_before;
+      sortList(left);
+    }
+  } catch (error) {
+    toastError(error);
+  }
+  left.loadingMore = false;
+  schedule();
+}
+
 let panelOpener = null;
 
 function openPanel(seq, viaKeyboard = false) {
@@ -508,9 +790,10 @@ function openPanel(seq, viaKeyboard = false) {
     return;
   }
   const active = document.activeElement;
-  if (active && active.classList && active.classList.contains("act-row")) panelOpener = active;
+  if (active && active.classList && (active.classList.contains("act-row") || active.classList.contains("stop-row"))) panelOpener = active;
   const panel = { seq, detail: null, error: "" };
   ctx.panel = panel;
+  ctx.ui.panelMore = false;
   ctx.ui.focusPanel = viaKeyboard;
   ctx.ui.anchorKey = `a${Number(seq)}`;
   schedule();
@@ -541,13 +824,48 @@ function closePanel() {
 // -- moving around ------------------------------------------------------------------
 
 function hashParts() {
-  const [name, query = ""] = window.location.hash.replace(/^#\/?/, "").split("?");
-  return { name: name.split("/")[0], query: new URLSearchParams(query) };
+  const [path, query = ""] = window.location.hash.replace(/^#\/?/, "").split("?");
+  const [name, step = ""] = path.split("/");
+  return { name, step, query: new URLSearchParams(query) };
 }
 
+/** The page that opens when the address names none: Basic where that is the view that is kept. */
+function defaultRoute() {
+  const kept = ctx.state ? ctx.state.interface : null;
+  return kept && kept.view === "basic" ? "basic" : "overview";
+}
+
+/**
+ * The route the address names. The six pages of Pro are always Pro pages and "#/basic"
+ * is always the Basic page, whatever view is kept. "#/setup/…" names a step of setting
+ * up; its second part is kept in `ctx.setupStep`.
+ */
 function routeFromHash() {
-  const name = hashParts().name;
-  return Object.prototype.hasOwnProperty.call(VIEWS, name) ? name : "overview";
+  const { name, step, query } = hashParts();
+  if (Object.prototype.hasOwnProperty.call(VIEWS, name)) return name;
+  if (name === "basic") return "basic";
+  if (name === "setup") {
+    ctx.setupStep = SETUP_STEPS.includes(step) ? step : "app";
+    ctx.setupApp = ctx.setupStep === "connect" ? query.get("app") || "" : "";
+    return "setup";
+  }
+  return defaultRoute();
+}
+
+/** The screen the address names, in one text: the route and, for a step of setting up, the step and its app. */
+function placeNow() {
+  return ctx.route === "setup" ? `setup/${ctx.setupStep}?${ctx.setupApp}` : ctx.route;
+}
+
+/** The first state with the view is in: an address that names no page now has one. */
+function settleRoute() {
+  const before = placeNow();
+  const name = routeFromHash();
+  ctx.route = name;
+  if (placeNow() === before) return;
+  ctx.panel = null;
+  ctx.ui.focusApproval = null;
+  ctx.ui.approvalSignature = null;
 }
 
 /** The request a link to Approvals points at, or the first one. */
@@ -558,20 +876,37 @@ function approvalFromHash() {
 }
 
 function onRoute() {
+  const before = placeNow();
+  const from = ctx.route;
   const name = routeFromHash();
-  if (name === ctx.route) {
+  ctx.route = name;
+  if (placeNow() === before) {
     if (name === "approvals" && hashParts().query.get("ref")) {
       ctx.ui.focusApproval = approvalFromHash();
       schedule();
     }
     return;
   }
-  ctx.route = name;
-  if (name !== "overview" && name !== "activity") ctx.panel = null;
+  // The details of an entry stay open between Overview and Activity, and nowhere else.
+  if (name === "basic" || from === "basic" || (name !== "overview" && name !== "activity")) ctx.panel = null;
+  ctx.ui.focusApproval = null;
+  // What was to take the focus on the screen that is left is not looked for on the next one.
+  ctx.ui.focusId = null;
   if (name === "approvals") {
     // The cards appear anew, so "Release once" waits again before it can be pressed.
     ctx.ui.focusApproval = approvalFromHash();
     ctx.ui.approvalSignature = null;
+  }
+  if (name === "basic" || name === "setup") {
+    // Here too the cards appear anew. The focus goes to the headline, never to a button of a card.
+    ctx.ui.approvalSignature = null;
+    ctx.ui.allApprovals = false;
+    if (name === "basic") ctx.ui.focusId = "basic-status";
+    if (name === "setup") {
+      // What an app asked for belongs to the app the step is about.
+      ctx.asked = null;
+      openStep(ctx);
+    }
   }
   ctx.ui.limits = null;
   window.scrollTo(0, 0);
@@ -579,9 +914,60 @@ function onRoute() {
   lastLoad = loadRoute();
 }
 
-function navigate(name) {
-  if (routeFromHash() === name && ctx.route === name) return;
-  window.location.hash = `#/${name}`;
+/**
+ * Open a page by its address without the "#/": "basic", "setup/documents",
+ * "setup/connect?app=…". The route changes at once, not when the browser has told of
+ * the new address.
+ */
+function navigate(address) {
+  const [path] = address.split("?");
+  const shown = hashParts();
+  const there = address.includes("/") || address.includes("?") ? window.location.hash === `#/${address}` : shown.name === path;
+  if (!there) window.location.hash = `#/${address}`;
+  onRoute();
+}
+
+/** Keep the view the owner chose. Resolves to whether it was kept. Nothing is said when it was: the screen is the answer. */
+async function keepView(view) {
+  try {
+    applyState(await api.setInterface({ view }));
+    return true;
+  } catch (error) {
+    toastError(error);
+    return false;
+  }
+}
+
+/**
+ * The owner pressed "Basic" or "Pro" in the view control. The choice is kept and its
+ * page opens: the Basic page, or Overview. On a visit to Pro the view that is kept is
+ * Basic already, so going back keeps nothing new.
+ */
+async function chooseView(view) {
+  const kept = ctx.state ? ctx.state.interface : null;
+  const known = Boolean(kept && kept.stored && kept.view === view);
+  if (!known && !(await keepView(view))) return;
+  ctx.ui.focusView = view === "pro";
+  navigate(view === "basic" ? "basic" : "overview");
+}
+
+/** "Stay in Pro" on the bar of a visit: Pro becomes the view that is kept, and the bar goes. */
+async function stayInPro() {
+  if (await keepView("pro")) ctx.ui.focusId = "main";
+  schedule();
+}
+
+/**
+ * "Set everything up yourself in Pro", at the foot of a step of setting up: Pro becomes
+ * the view that is kept, and Overview opens. Whether setting up is over is not touched.
+ */
+async function setUpInPro() {
+  const kept = ctx.state ? ctx.state.interface : null;
+  const known = Boolean(kept && kept.stored && kept.view === "pro");
+  if (!known && !(await keepView("pro"))) return;
+  navigate("overview");
+  ctx.ui.focusId = "main";
+  schedule();
 }
 
 async function lockNow() {
@@ -599,27 +985,7 @@ async function lockNow() {
 
 // -- starting -----------------------------------------------------------------------
 
-const RELOAD_MARK = "page-reloaded";
-
-function mark(value) {
-  try {
-    if (value) window.sessionStorage.setItem(RELOAD_MARK, "1");
-    else window.sessionStorage.removeItem(RELOAD_MARK);
-    return true;
-  } catch (_error) {
-    return false;
-  }
-}
-
-function marked() {
-  try {
-    return window.sessionStorage.getItem(RELOAD_MARK) === "1";
-  } catch (_error) {
-    return true;
-  }
-}
-
-/** Find out whether this browser is paired, then show the vault or the pairing page. */
+/** Find out whether this page is paired, then show the vault or the pairing page. */
 async function start() {
   let session;
   try {
@@ -636,20 +1002,12 @@ async function start() {
   ctx.session = session;
   ctx.offline = false;
   if (!session.paired) {
-    if (session.pairing === "none") {
-      // Without pairing the session is handed out with the page itself.
-      if (!marked() && mark(true)) {
-        window.location.reload();
-        return;
-      }
-      ctx.phase = "stuck";
-    } else {
-      ctx.phase = "pair";
-    }
+    // Without pairing (the demo) the session comes with the answer itself. When it
+    // did not, there is no code to ask for either.
+    ctx.phase = session.pairing === "none" ? "stuck" : "pair";
     schedule();
     return;
   }
-  mark(false);
   ctx.phase = "ready";
   await fetchState(true);
   schedule();
@@ -669,6 +1027,13 @@ function sessionEnded() {
 }
 
 configure({ unauthorized: sessionEnded, reauth: () => requestReauth(ctx.state ? ctx.state.demo_passphrase : null) });
+
+// The page is drawn again whenever a sheet has opened or closed, in the same turn: where cards
+// lie under the sheet, "Release once" waits again before a press can reach it.
+watchSheets((open) => {
+  ctx.ui.sheets = open;
+  schedule();
+});
 
 window.addEventListener("hashchange", onRoute);
 
@@ -700,6 +1065,7 @@ window.addEventListener(
   { passive: true },
 );
 
+// Until the app has said which view is kept, an address that names no page counts as Overview.
 ctx.route = routeFromHash();
 ctx.ui.focusApproval = ctx.route === "approvals" ? approvalFromHash() : null;
 start();

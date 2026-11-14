@@ -26,8 +26,10 @@ What a call under a client name can get is decided here and nowhere else:
   Beyond it, and in a collection held in ``approve`` mode, a passage is
   released only under an approval the owner gave for exactly that client,
   passage and text. An approval is used once and expires. Until it is given,
-  whether the limits have room for the passage is asked with one figure for
-  all passages, so that a refusal does not tell how long the passage is.
+  the limits refuse the passage only when nothing at all is left in one of
+  them, so that a refusal does not tell how long the passage is; whether it
+  would fit is told to the owner, who is asked. Once it is approved, its real
+  length is measured like that of any result.
 * The strings the owner listed are replaced in everything that leaves, and
   every piece of document text is checked once more before it is recorded.
 
@@ -315,6 +317,25 @@ class _Call:
 
 
 @dataclass(frozen=True)
+class _Place:
+    """Where one passage lies and whether one client may have it without asking.
+
+    All of it is known from the index and the record. Nothing of the document
+    is read for it.
+    """
+
+    ref: str
+    collection: str
+    mode: str
+    span: Span  # widened so that it cuts through no listed string
+    passages: int
+    needs_approval: bool
+    doc_chars: int
+    doc_released: int
+    doc_after: int
+
+
+@dataclass(frozen=True)
 class _Passage:
     """One passage as one client would receive it now."""
 
@@ -471,30 +492,6 @@ def _clean_title(title: str) -> str:
     return line
 
 
-def _longest_read_result(chunk_chars: int) -> int:
-    """No read result in which nothing was replaced is longer than this.
-
-    Everything that depends on the passage, its document or the client is taken
-    at its longest: a body of ``chunk_chars`` characters in as many lines as
-    cleaned text can have (each line gets its prefix), the longest title,
-    collection and client name, and the largest numbers. A result is longer
-    only when listed strings shorter than their marker were replaced in it.
-    """
-    longest = messages.read_ok(
-        doc_id="d-" + "0" * 12,
-        passage=99_999,
-        passages=9_999_999,
-        collection="c" * _COLLECTION_CHARS,
-        body=("x\n\n" * chunk_chars)[:chunk_chars],
-        tag="0" * 6,
-        client="c" * _COLLECTION_CHARS,
-        client_seq=10**10 - 1,
-        left_before=10**9,
-        title="t" * MAX_TITLE_CHARS,
-    )
-    return len(longest.text)
-
-
 def _matches_in(matches: Sequence[Span], span: Span) -> int:
     """How many of ``matches`` share a character with ``span``."""
     return sum(1 for start, end in matches if start < span[1] and end > span[0])
@@ -597,7 +594,6 @@ class Gate:
 
         self._approvals: dict[tuple[str, str], _Approval] = {}
         self._pending: OrderedDict[tuple[str, str], _Waiting] = OrderedDict()
-        self._longest_read = _longest_read_result(store.chunk_chars)
         self._all_calls = _Bucket()
         self._buckets: dict[str, _Bucket] = {}
         self._refused_searches: dict[str, list[datetime]] = {}
@@ -1320,7 +1316,14 @@ class Gate:
             return self._refuse(call, "NOT_FOUND")
         doc_id, number = parsed
         call = replace(call, args={"ref": f"{doc_id}.{number}"})
-        passage = self._passage(name, doc_id, number)
+        place = self._place(name, doc_id, number)
+        if place is None:
+            return self._refuse(call, "NOT_FOUND")
+        if place.needs_approval and self._approval_in_force(name, place.ref, call.now) is None:
+            # Answered before the document is read: how long the refusal takes must not
+            # tell what its text does not, such as how long the passage or its document is.
+            return self._ask_owner(call, place.ref, [place.collection])
+        passage = self._passage(name, doc_id, number, place)
         if passage is None:
             return self._refuse(call, "NOT_FOUND")
         state = self._state()
@@ -1354,12 +1357,13 @@ class Gate:
             extra={"passage": number, "passages": passage.passages},
         )
 
-    def _passage(self, name: str, doc_id: str, number: int) -> _Passage | None:
-        """The passage as ``name`` would get it, or ``None``: no such passage for this client.
+    def _place(self, name: str, doc_id: str, number: int) -> _Place | None:
+        """Where the passage lies for ``name``, or ``None``: no such passage for this client.
 
         ``None`` covers a document that does not exist, a passage number that
         does not, and a collection the client is not granted, without telling
-        which.
+        which. The document itself is not read here, so that a passage which
+        waits for the owner can be refused without its text being touched.
         """
         policy = self._policy
         collection = self._where.get(doc_id)
@@ -1368,18 +1372,9 @@ class Gate:
             return None
         index = self._indexes[collection]
         try:
-            span = index.span(doc_id, number)
+            span = grow(index.span(doc_id, number), index.listed(doc_id))
         except (KeyError, IndexError):
             return None
-        text = self._text(doc_id)
-        if text is None:
-            return None
-        matches = index.listed(doc_id)
-        try:
-            body = render(text, span, matches)
-        except ValueError:
-            raise _UnavailableError("render") from None
-        span = grow(span, matches)
         chars = index.chars(doc_id)
         released = self._state().released_spans(policy.pool_of(name), doc_id)
         before = union_length(released)
@@ -1388,22 +1383,53 @@ class Gate:
         free = mode == MODE_READ and (
             after <= policy.per_document.free_allowance(chars) or after == before
         )
-        return _Passage(
+        return _Place(
             ref=f"{doc_id}.{number}",
-            doc_id=doc_id,
-            number=number,
-            passages=index.passages(doc_id),
             collection=collection,
             mode=mode,
             span=span,
-            body=body,
-            body_sha256=_sha256(body),
-            replaced=_matches_in(matches, span),
-            shown_title=self._shown_title(collection, doc_id),
+            passages=index.passages(doc_id),
             needs_approval=not free,
             doc_chars=chars,
             doc_released=before,
             doc_after=after,
+        )
+
+    def _passage(
+        self, name: str, doc_id: str, number: int, place: _Place | None = None
+    ) -> _Passage | None:
+        """The passage as ``name`` would get it, or ``None``: no such passage for this client.
+
+        ``None`` covers what :meth:`_place` covers, and a document whose file
+        has gone bad. This reads the document and renders the passage.
+        """
+        place = place or self._place(name, doc_id, number)
+        if place is None:
+            return None
+        text = self._text(doc_id)
+        if text is None:
+            return None
+        matches = self._indexes[place.collection].listed(doc_id)
+        try:
+            body = render(text, place.span, matches)
+        except ValueError:
+            raise _UnavailableError("render") from None
+        return _Passage(
+            ref=place.ref,
+            doc_id=doc_id,
+            number=number,
+            passages=place.passages,
+            collection=place.collection,
+            mode=place.mode,
+            span=place.span,
+            body=body,
+            body_sha256=_sha256(body),
+            replaced=_matches_in(matches, place.span),
+            shown_title=self._shown_title(place.collection, doc_id),
+            needs_approval=place.needs_approval,
+            doc_chars=place.doc_chars,
+            doc_released=place.doc_released,
+            doc_after=place.doc_after,
         )
 
     # -- the one way out --------------------------------------------------------
@@ -1429,11 +1455,15 @@ class Gate:
         needs one must have its approval; the record with the exact text is
         appended; and only when that succeeded is the text handed back.
 
-        One exception to "the complete text is measured": for a passage that
-        needs an approval and has none, the limits are asked about one figure
-        that is the same for every passage (:func:`_longest_read_result`), so
-        that the choice between ``OVER_LIMIT`` and ``NEEDS_APPROVAL`` does not
-        depend on the passage. Nothing is released in that case either way.
+        One exception to "the complete text is measured": a passage that needs
+        an approval and has none is refused for the limits only when one of
+        them has nothing left at all (:meth:`_ask_owner`). The choice between
+        ``OVER_LIMIT`` and ``NEEDS_APPROVAL`` then does not depend on the
+        passage, and a limit that still has room never keeps a passage from
+        being put before the owner. Nothing is released in that case either
+        way. A read of such a passage does not even get here when no approval
+        is in force for it: it is answered before its document is read. What
+        gets here is a passage that was approved as other text than it has now.
         """
         name = call.client
         assert name is not None
@@ -1447,17 +1477,12 @@ class Gate:
         except UnicodeEncodeError:
             raise _UnavailableError("encoding") from None
 
+        if approval is not None and not self._approved(name, approval, call.now):
+            return self._ask_owner(call, approval.ref, collections)
         state = self._state()
         uses = self._uses(state, name, call.now)
-        # A passage that still waits for the owner is measured with one figure, the
-        # same for every passage, and not with its own length. The answer would
-        # otherwise turn from NEEDS_APPROVAL to OVER_LIMIT at a point that tells a
-        # caller, who can steer what is left, how long a passage is that it was
-        # never given. Once the owner approved it, its real length is measured.
-        waits = approval is not None and not self._approved(name, approval, call.now)
-        measured = self._longest_read if waits else chars
         for variant, used, limit in uses:
-            if used + measured > limit:
+            if used + chars > limit:
                 if call.tool == messages.TOOL_SEARCH:
                     # Counts as one search, or a caller with little left could
                     # learn at no cost whether a word occurs: a query with hits
@@ -1466,14 +1491,6 @@ class Gate:
                 return self._refuse(call, "OVER_LIMIT", variant, collections=collections)
 
         if approval is not None:
-            if waits:
-                self._wait_for_owner(name, approval.ref, call.now)
-                return self._refuse(
-                    call,
-                    "NEEDS_APPROVAL",
-                    text=messages.needs_approval(approval.ref, name),
-                    collections=collections,
-                )
             rule = RULE_APPROVAL
 
         client = self._policy.clients[name]
@@ -1516,16 +1533,43 @@ class Gate:
 
     # -- approvals ----------------------------------------------------------------
 
-    def _approved(self, name: str, passage: _Passage, now: datetime) -> bool:
-        """Whether the owner approved exactly this text for this client, and it still holds."""
-        approval = self._approvals.get((name, passage.ref))
+    def _approval_in_force(self, name: str, ref: str, now: datetime) -> _Approval | None:
+        """The approval the owner gave this client for this passage, if it still holds."""
+        approval = self._approvals.get((name, ref))
         if approval is None:
-            return False
+            return None
         lifetime = timedelta(minutes=self._policy.approval.ttl_minutes)
         until = min(approval.valid_until, approval.given_at + lifetime)
-        if not approval.given_at <= now < until:
-            return False
-        return approval.body_sha256 == passage.body_sha256
+        return approval if approval.given_at <= now < until else None
+
+    def _approved(self, name: str, passage: _Passage, now: datetime) -> bool:
+        """Whether the owner approved exactly this text for this client, and it still holds."""
+        approval = self._approval_in_force(name, passage.ref, now)
+        return approval is not None and approval.body_sha256 == passage.body_sha256
+
+    def _ask_owner(self, call: _Call, ref: str, collections: Sequence[str]) -> Reply:
+        """Refuse a read of a passage that waits for the owner, and put it before the owner.
+
+        The passage is not measured with its own length: the answer would turn
+        from ``NEEDS_APPROVAL`` to ``OVER_LIMIT`` at a point that tells a
+        caller, who can steer what is left, how long a passage is that it was
+        never given. It counts as one character. So it is refused for the
+        limits only when one of them is used up, and is put before the owner
+        otherwise, who is told whether it fits (``fits_limits`` of the
+        preview). Once approved, its real length is measured.
+        """
+        name = call.client
+        assert name is not None
+        for variant, used, limit in self._uses(self._state(), name, call.now):
+            if used + 1 > limit:
+                return self._refuse(call, "OVER_LIMIT", variant, collections=collections)
+        self._wait_for_owner(name, ref, call.now)
+        return self._refuse(
+            call,
+            "NEEDS_APPROVAL",
+            text=messages.needs_approval(ref, name),
+            collections=collections,
+        )
 
     def _wait_for_owner(self, name: str, ref: str, now: datetime) -> None:
         key = (name, ref)
@@ -1593,7 +1637,13 @@ class Gate:
         session does not serve the client or the passage does not exist for it.
         """
         with self._owner_side():
-            passage = self._owner_passage(client, ref)
+            try:
+                passage = self._owner_passage(client, ref)
+            except UnknownPassageError:
+                # A passage is put on the waiting list without its document being read.
+                # One that then cannot be shown cannot be approved, and does not wait.
+                self._pending.pop((client, ref), None)
+                raise
             state = self._state()
             now = self._clock()
             entry = self._policy.clients[client]

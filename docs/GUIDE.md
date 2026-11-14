@@ -40,10 +40,18 @@ Pick the extras you need:
 | --- | --- | --- |
 | Create keys; seal, unseal, inspect and re-key vaults; use the vault API | `wdva` | `pycryptodome` only |
 | Train adapters and run them | `wdva[ml]` | torch, transformers, peft, safetensors |
-| Train on PDF files | `wdva[ml,pdf]` | pypdf |
+| Train on PDF files | `wdva[ml,pdf]` | pypdf, 7.0.1 or newer |
 | Use the LangChain chat model | `wdva[langchain]` | the `ml` extra plus langchain-core |
-| Everything above | `wdva[all]` | |
+| Run Locktender, the app between your documents and AI apps ([GATE.md](GATE.md)) | `wdva[gate]` | the `mcp` and `pdf` extras: everything the app can use |
+| Only the program that AI apps start to reach Locktender (`wdva gate mcp`) | `wdva[mcp]` | the MCP SDK (mcp, pydantic), on Python 3.11 and newer |
+| Everything above | `wdva[all]` | `ml`, `pdf`, `langchain` and `mcp` |
 | Work on wdva itself | `pip install -e ".[dev]"` in a checkout | everything, plus pytest, ruff, mypy, build and twine |
+
+**PDF files.** The `pdf` extra asks for pypdf 7.0.1 or newer, and so do `gate`
+and `all`, which include it. Older releases of pypdf are named in security
+advisories about crafted PDF files that take very long to read or use up
+memory. pypdf reads the PDFs you train on and the PDFs you add to a Locktender
+vault.
 
 **CPU-only PyTorch.** On Linux, the default PyTorch wheel bundles GPU libraries
 and is a much larger download than the CPU build. If you have no GPU, install
@@ -67,7 +75,9 @@ wdva --version
 
 A core-only installation runs `keygen`, `seal`, `unseal`, `inspect`, `rekey` and
 `destroy-key`. `train`, `query` and `chat` need the `ml` extra and say so if it
-is missing.
+is missing. The `gate` commands are those of Locktender and have a guide of
+their own, [GATE.md](GATE.md); it says why Locktender wants an environment of
+its own and Python 3.11 or newer.
 
 ## Key management
 

@@ -169,6 +169,7 @@ def test_the_sources_are_all_there() -> None:
     names = {name_of(path) for path in SOURCES}
     assert {"core.py", "link.py", "mcp_server.py", "app/httpd.py", "app/service.py"} <= names
     assert {"app/main.py", "app/demo.py", "store.py", "ledger.py", "policy.py"} <= names
+    assert {"hostconfig.py", "hostcheck.py"} <= names
 
 
 def test_only_the_link_and_the_interface_server_open_sockets() -> None:
