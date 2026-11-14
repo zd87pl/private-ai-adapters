@@ -838,61 +838,15 @@ def test_the_tiles_are_four_and_name_the_programs_that_read_a_file() -> None:
         assert hostconfig.same_file(host) == ()
 
 
-def test_the_line_that_opens_a_settings_file_has_the_agreed_forms() -> None:
-    path = "/Users/me/Library/Application Support/Claude/it's.json"
-    text = '{\n  "mcpServers": {"x": "it\'s $HOME `id` %s \\n"}\n}'
-    file, copied = shlex.quote(path), shlex.quote(text)
-    assert shlex.split(file) == [path]
-    assert shlex.split(copied) == [text]
-
-    def line(state: str, platform: str, language: str) -> str | None:
-        return hostconfig.open_line(
-            path, state=state, platform=platform, language=language, text=text
-        )
-
-    copy = f"; printf %s {copied} | pbcopy"
-    assert line("no_file", "macos", "json") == (
-        f'f={file}; [ -e "$f" ] || echo \'{{}}\' > "$f"; open -e "$f"{copy}'
-    )
-    assert line("no_file", "macos", "toml") == (
-        f'f={file}; [ -e "$f" ] || : > "$f"; open -e "$f"{copy}'
-    )
-    assert line("empty", "macos", "json") == f"open -e {file}{copy}"
-    assert line("empty", "macos", "toml") == f"open -e {file}{copy}"
-    assert line("other", "macos", "toml") == f"open -e {file}{copy}"
-    assert line("other", "macos", "json") == f"open -e {file}"
-    # Elsewhere: the system's own opener, and nothing is put on a clipboard.
-    assert line("no_file", "linux", "json") == (
-        f'f={file}; [ -e "$f" ] || echo \'{{}}\' > "$f"; xdg-open "$f"'
-    )
-    assert line("no_file", "linux", "toml") == f'f={file}; [ -e "$f" ] || : > "$f"; xdg-open "$f"'
-    for state in ("empty", "other"):
-        for language in ("json", "toml"):
-            assert line(state, "linux", language) == f"xdg-open {file}"
-    for language in ("json", "toml"):
-        for state in ("differs", "unreadable", "not_read"):
-            assert line(state, "macos", language) == f"open -e {file}"
-            assert line(state, "linux", language) == f"xdg-open {file}"
-        # Nothing to open: the entry is there, or there is no folder, or no such file is known.
-        for state in ("present", "no_folder", "unsupported", "something else"):
-            assert line(state, "macos", language) is None
-            assert line(state, "linux", language) is None
-    with pytest.raises(ValueError, match="platform"):
-        line("no_file", "windows", "json")
-    # Only the line that finds no file makes one, and only behind a test that none is there.
-    for platform in hostconfig.PLATFORMS:
-        for language in ("json", "toml"):
-            for state in ("empty", "other", "differs", "unreadable", "not_read"):
-                made = line(state, platform, language)
-                assert made is not None
-                assert ">" not in made.replace(copied, "")
-            missing = line("no_file", platform, language)
-            assert missing is not None
-            assert missing.replace(copied, "").count(">") == 1
-            assert '[ -e "$f" ] || ' in missing
-            # No line removes, moves or overwrites anything.
-            for word in ("rm ", "mv ", "cp ", ">>", "tee", "sudo", "curl", "&&"):
-                assert word not in missing.replace(copied, "").replace(file, "")
+def test_no_line_for_a_terminal_opens_a_settings_file() -> None:
+    # The module once wrote a line for a terminal that made a settings file where none was and
+    # opened it in the system's editor. It went with the look that offered it: what such a
+    # line does in another program was never tried, and the page now writes the entry itself.
+    assert not hasattr(hostconfig, "open_line")
+    assert "open_line" not in hostconfig.__all__
+    source = Path(hostconfig.__file__).read_text(encoding="utf-8")
+    for word in ("open -e", "xdg-open", "pbcopy", "open_line"):
+        assert word not in source, word
 
 
 # -- what must not be in them -----------------------------------------------------

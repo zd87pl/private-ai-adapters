@@ -170,9 +170,6 @@ class FakeService:
     def connect(self, *, name: str, host: str | None = None) -> Any:
         return self._did("connect", name=name, host=host)
 
-    def connect_check(self, *, name: str, host: str | None = None) -> Any:
-        return self._did("connect_check", name=name, host=host)
-
     def connect_look(self, *, host: str) -> Any:
         return self._did("connect_look", host=host)
 
@@ -948,27 +945,6 @@ ENDPOINTS: list[tuple[str, str, Any, str, dict[str, Any]]] = [
         {"name": "claude-desktop", "host": "claude-code"},
     ),
     ("GET", "/api/apps/lm-studio/connect", None, "connect", {"name": "lm-studio", "host": None}),
-    (
-        "POST",
-        "/api/apps/claude-desktop/connect/check",
-        {"host": "claude-desktop"},
-        "connect_check",
-        {"name": "claude-desktop", "host": "claude-desktop"},
-    ),
-    (
-        "POST",
-        "/api/apps/lm-studio/connect/check",
-        {},
-        "connect_check",
-        {"name": "lm-studio", "host": None},
-    ),
-    (
-        "POST",
-        "/api/apps/lm-studio/connect/check",
-        None,
-        "connect_check",
-        {"name": "lm-studio", "host": None},
-    ),
     # The settings file of an application: the address names it, the body the state shown.
     ("POST", "/api/connect/claude-desktop/look", {}, "connect_look", {"host": "claude-desktop"}),
     ("POST", "/api/connect/grok-build/look", None, "connect_look", {"host": "grok-build"}),
@@ -1337,8 +1313,10 @@ def test_the_page_is_served_with_the_product_name_and_nothing_else_is_changed(
     monkeypatch.setattr(brand, "PRODUCT", 'Fish & <Chips> "Desk"')
     directory = tmp_path / "named"
     directory.mkdir()
+    monkeypatch.setattr(brand, "SLUG", "fish-desk")
     (directory / "index.html").write_text(
         '<!doctype html><meta name="application-name" content="{{product}}">'
+        '<meta name="application-entry" content="{{entry}}">'
         "<title>{{product}}</title><p>{{product}} needs JavaScript.</p>",
         encoding="utf-8",
     )
@@ -1350,8 +1328,11 @@ def test_the_page_is_served_with_the_product_name_and_nothing_else_is_changed(
         escaped = "Fish &amp; &lt;Chips&gt; &quot;Desk&quot;"
         for target in ("/", "/index.html"):
             page = browser.call("GET", target).body.decode("utf-8")
+            # The name of the product's entry in another program's settings file stands
+            # where the page asks for it, and nowhere else.
             assert page == (
                 f'<!doctype html><meta name="application-name" content="{escaped}">'
+                '<meta name="application-entry" content="fish-desk">'
                 f"<title>{escaped}</title><p>{escaped} needs JavaScript.</p>"
             )
         assert browser.call("GET", "/app.js").body == b'const untouched = "{{product}}";'
@@ -1371,10 +1352,12 @@ def test_the_shipped_page_shows_the_name_from_its_first_byte(service: FakeServic
     assert "}}" not in page
     assert f"<title>{PRODUCT}</title>" in page
     assert f'<meta name="application-name" content="{PRODUCT}">' in page
+    assert f'<meta name="application-entry" content="{brand.SLUG}">' in page
     assert f'<p class="boot-name">{PRODUCT}</p>' in page
     # The scripts take the name from the page: none of them spells it out.
     static = Path(httpd.__file__).resolve().parent / "static"
     assert "{{product}}" in (static / "index.html").read_text(encoding="utf-8")
+    assert "{{entry}}" in (static / "index.html").read_text(encoding="utf-8")
     for script in static.glob("*.js"):
         assert PRODUCT not in script.read_text(encoding="utf-8"), script.name
 
@@ -1538,12 +1521,15 @@ def test_changing_methods_on_static_paths_change_nothing(paired: Browser) -> Non
         ("GET", "/api/apps/../state"),
         ("GET", "/api/apps/claude-desktop/connect/"),
         ("POST", "/api/apps/claude-desktop/limit"),
-        # The three newer addresses answer the one method they were given, and no neighbour.
+        # The newer addresses answer the one method they were given, and no neighbour.
         ("GET", "/api/interface"),
         ("DELETE", "/api/interface"),
         ("POST", "/api/interface/view"),
-        ("GET", "/api/apps/claude-desktop/connect/check"),
         ("POST", "/api/apps/claude-desktop/connect"),
+        # The look that came before the three routes of a settings file is gone, with its
+        # address: nothing answers there any more.
+        ("POST", "/api/apps/claude-desktop/connect/check"),
+        ("GET", "/api/apps/claude-desktop/connect/check"),
         ("POST", "/api/apps/claude-desktop/connect/check/"),
         ("POST", "/api/apps/claude-desktop/connect/check/file"),
         ("POST", "/api/apps/..%2F..%2Fetc/connect/check"),
@@ -1620,8 +1606,6 @@ def test_query_strings_that_do_not_fit_are_invalid(
     [
         "/api/interface?view=pro",
         "/api/interface?setup=done",
-        "/api/apps/claude-desktop/connect/check?host=codex",
-        "/api/apps/claude-desktop/connect/check?path=%2Fetc%2Fpasswd",
         "/api/demo/again?app=claude-desktop",
         "/api/try?question=rent",
         "/api/try?ref=d-88b0e1aa9c11.1",
@@ -1712,11 +1696,6 @@ def test_an_upload_needs_its_collection_and_name(
         ("/api/store/create", {"passphrase": "correct horse battery", "language": ["pl"]}),
         ("/api/store/create", {"passphrase": "correct horse battery", "view": "pro"}),
         ("/api/store/create", {"language": "pl"}),
-        # The check takes the kind of application and nothing that could name a file.
-        ("/api/apps/claude-desktop/connect/check", {"host": ["claude-desktop"]}),
-        ("/api/apps/claude-desktop/connect/check", {"host": 7}),
-        ("/api/apps/claude-desktop/connect/check", {"path": "/etc/passwd"}),
-        ("/api/apps/claude-desktop/connect/check", {"host": "codex", "file": "~/.ssh/id_ed25519"}),
         # Asking the played app again takes nothing at all.
         ("/api/demo/again", {"app": "claude-desktop"}),
         ("/api/demo/again", {"times": 3}),
@@ -2604,7 +2583,8 @@ def test_no_route_of_a_settings_file_takes_a_place_or_a_passphrase() -> None:
         "connect_look",
         "connect_remove",
     ]
-    # The route of the look before these stays until the page that calls it is gone.
-    assert "apps/<name>/connect/check" in {route.path for route in httpd._ROUTES}
-    # 33 routes behind the session; the two of pairing are not in this table.
-    assert len(httpd._ROUTES) == 33
+    # The route of the look before these went with the page that called it.
+    assert "apps/<name>/connect/check" not in {route.path for route in httpd._ROUTES}
+    assert not any("check" in route.path for route in httpd._ROUTES)
+    # 32 routes behind the session; the two of pairing are not in this table.
+    assert len(httpd._ROUTES) == 32

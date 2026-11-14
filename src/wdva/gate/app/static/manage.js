@@ -162,6 +162,25 @@ export function sessionFiles(ctx, collection) {
 }
 
 /**
+ * The line of one file that was chosen: its name and what became of it. `group` is the
+ * group it went to, said where the vault has several.
+ */
+export function fileLine(item, key, group = null) {
+  return el(
+    "li",
+    { class: ["upload", `upload-${item.status}`], key },
+    item.status === "sending" ? el("span", { class: "spinner" }) : icon(item.status === "done" ? "check" : item.status === "error" ? "warning" : "clock"),
+    el(
+      "span",
+      { class: "upload-text" },
+      el("span", { class: "upload-name", title: item.name }, item.name),
+      group ? el("span", { class: "upload-group" }, group) : null,
+      el("span", { class: "upload-note" }, item.status === "sending" ? t("docs.status.sealing") : item.words ? item.words() : t("docs.status.waiting")),
+    ),
+  );
+}
+
+/**
  * What is true of the files that were just sealed into one collection: which apps can ask
  * for them from now on. Adding a document never asks for the passphrase, so this is said
  * where the files are added, and it is never left out. Names are the names the apps have
@@ -267,19 +286,8 @@ export function dropZone(ctx, collection, options = {}) {
           lists.map((entry) => [
             entry.list.items.map((item) => {
               index += 1;
-              return el(
-                "li",
-                { class: ["upload", `upload-${item.status}`], key: `u${index - 1}-${item.name}` },
-                item.status === "sending" ? el("span", { class: "spinner" }) : icon(item.status === "done" ? "check" : item.status === "error" ? "warning" : "clock"),
-                el(
-                  "span",
-                  { class: "upload-text" },
-                  el("span", { class: "upload-name", title: item.name }, item.name),
-                  // With several groups each file says which one it went to.
-                  lists.length > 1 ? el("span", { class: "upload-group" }, entry.name) : null,
-                  el("span", { class: "upload-note" }, item.status === "sending" ? t("docs.status.sealing") : item.words ? item.words() : t("docs.status.waiting")),
-                ),
-              );
+              // With several groups each file says which one it went to.
+              return fileLine(item, `u${index - 1}-${item.name}`, lists.length > 1 ? entry.name : null);
             }),
             // Said under the files of each collection, since each has its own apps.
             options.who && sealedCount(entry.list) ? whoLine(ctx, entry.name) : null,
@@ -314,25 +322,55 @@ export function dropZone(ctx, collection, options = {}) {
   );
 }
 
-// -- the invented sample letter ------------------------------------------------------
+// -- the invented sample document ------------------------------------------------------
 
 /**
- * A letter that says of itself that it is invented, for a person who has no file at
- * hand. The page holds it as text and adds it only when its button is pressed.
+ * A rental agreement that says of itself that it is invented, in its title and in its
+ * first paragraph, for a person who has no file at hand: one in each language of the
+ * page. Each has five paragraphs with one empty line between them, which the vault
+ * takes as three passages. The page holds them as text and adds one only when its
+ * button is pressed. They are documents, not texts of the interface, so they stand
+ * here and not in the text tables.
  */
 export const SAMPLE = {
-  file: "invented-sample-letter.txt",
-  title: "invented-sample-letter",
-  text:
-    "SAMPLE DOCUMENT, INVENTED. It was added to try out the vault. Nothing in it is real.\n\n" +
-    "Rental agreement for the flat at 14 Example Lane. Tenant: Sam Sample. The monthly rent is 950 EUR, " +
-    "due on the third working day of each month. The deposit is 1,900 EUR. The rental agreement started on " +
-    "1 March 2025 and ends on 28 February 2027. The notice period is three months.",
+  en: {
+    file: "Sample rental agreement (invented).txt",
+    title: "Sample rental agreement (invented)",
+    text: [
+      "Rental agreement for the flat at 14 Example Lane, second floor, with one cellar room. This is a sample document and it is invented: the landlord, Example Homes Ltd, and the tenant, Sam Sample, do not exist. It was added to try out the vault, and you can remove it at any time under Documents.",
+      "Rent. The monthly rent is 950 EUR. It is due on the third working day of each month and is paid by standing order to the landlord's account. Heating and water are not part of the rent; the tenant pays 120 EUR a month for them in advance, and the difference is settled once a year, in June.",
+      "Deposit. The tenant pays a deposit of 1,900 EUR before the keys are handed over. The landlord keeps the deposit in a separate account and returns it within 30 days after the flat is given back, less the cost of any damage that goes beyond normal wear. No interest is paid on the deposit.",
+      "Term. The rental agreement starts on 1 March 2025. The rental agreement will end on 28 February 2027 without notice from either side. If both sides want to go on after that day, they sign a new rental agreement no later than two months before it, and the rent may then be set anew.",
+      "Notice and house rules. Either side may give three months' notice in writing, to the end of a calendar month. Quiet hours are from 10 pm to 6 am. Pets need the landlord's consent in writing. Smoking is not allowed on the stairs or in the cellar, and bicycles are kept in the yard.",
+    ].join("\n\n"),
+  },
+  pl: {
+    file: "Umowa najmu (zmyślony przykład).txt",
+    title: "Umowa najmu (zmyślony przykład)",
+    text: [
+      "Umowa najmu mieszkania przy ulicy Przykładowej 14, drugie piętro, z jedną komórką w piwnicy. To jest przykładowy dokument i jest zmyślony: wynajmujący, spółka Przykładowe Domy, i najemca, Jan Przykładowy, nie istnieją. Dodano go, żeby wypróbować sejf, i w każdej chwili możesz go usunąć w Dokumentach.",
+      "Czynsz. Czynsz wynosi 950 EUR miesięcznie. Jest płatny do trzeciego dnia roboczego każdego miesiąca stałym zleceniem na rachunek wynajmującego. Ogrzewanie i woda nie wchodzą w skład czynszu; najemca płaci za nie zaliczkę 120 EUR miesięcznie, a różnica jest rozliczana raz w roku, w czerwcu.",
+      "Kaucja. Najemca wpłaca kaucję w wysokości 1900 EUR przed wydaniem kluczy. Wynajmujący trzyma kaucję na osobnym rachunku i zwraca ją w ciągu 30 dni od oddania mieszkania, po potrąceniu kosztów szkód wykraczających poza zwykłe zużycie. Kaucja nie jest oprocentowana i nie zastępuje ostatniego czynszu.",
+      "Okres najmu. Umowa najmu zaczyna się 1 marca 2025. Umowa najmu kończy się 28 lutego 2027 bez wypowiedzenia którejkolwiek ze stron. Jeśli obie strony chcą ją kontynuować po tym dniu, podpisują nową umowę najpóźniej dwa miesiące przed nim, a wysokość czynszu można wtedy ustalić na nowo.",
+      "Wypowiedzenie i regulamin domu. Każda ze stron może wypowiedzieć umowę na piśmie z trzymiesięcznym okresem wypowiedzenia, na koniec miesiąca kalendarzowego. Cisza nocna trwa od 22 do 6. Zwierzęta wymagają pisemnej zgody wynajmującego. Na klatce schodowej i w piwnicy nie wolno palić, a rowery stoją na podwórzu.",
+    ].join("\n\n"),
+  },
 };
 
-/** Whether a document of the vault is that letter: by its title and its number of characters together. */
+/**
+ * Which of the two samples a document of the vault is, by its title and its number of
+ * characters together: "en", "pl", or null for a document that is neither.
+ */
+export function sampleOf(document) {
+  for (const code of Object.keys(SAMPLE)) {
+    if (document.title === SAMPLE[code].title && document.characters === SAMPLE[code].text.length) return code;
+  }
+  return null;
+}
+
+/** Whether a document of the vault is one of the two samples. */
 export function isSample(document) {
-  return document.title === SAMPLE.title && document.characters === SAMPLE.text.length;
+  return sampleOf(document) !== null;
 }
 
 // -- Documents ----------------------------------------------------------------------

@@ -4,6 +4,7 @@
 /* The simple frame and its pages: a narrow sidebar with four entries, one quiet column
    in the middle of the window, and much room around it. At 720 px and narrower the
    sidebar is laid out as a bar at the top and a bar at the bottom of the window.
+   Home, with its box that asks, its tiles and their sheets, comes after the plain pages.
    This file loads nothing. */
 
 /* -- the frame ------------------------------------------------------------------- */
@@ -163,7 +164,7 @@
   margin-top: 8px;
 }
 
-/* Home has no title of its own in this block: its headline is the first thing of its column. */
+/* Home has no title in this block: its parts begin under the same room as a title has above it. */
 .column-top:empty + .page-body {
   margin-top: 44px;
 }
@@ -410,6 +411,541 @@
   text-align: left;
 }
 
+/* -- Home ------------------------------------------------------------------------ */
+
+/* More room between the parts of Home than between the parts of a plain page. */
+.column .page-body[data-key="view-home"] {
+  gap: 40px;
+}
+
+/* One part of Home under its heading. */
+.home-part {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.part-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 24px;
+}
+
+.part-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-l);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.part-link {
+  font-size: var(--fs-m);
+}
+
+/* A sentence of Home: grey, and no wider than is read with ease. */
+.home-say {
+  max-width: 60ch;
+  color: var(--text-2);
+  font-size: var(--fs-m);
+  line-height: 1.55;
+}
+
+.home-foot {
+  padding-top: 4px;
+  font-size: var(--fs-m);
+}
+
+/* The notices: one line each. Amber asks something of the owner; grey only says. */
+.notices {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--amber-soft);
+  font-size: var(--fs-m);
+  line-height: 1.45;
+}
+
+.notice > .icon {
+  margin-top: 2px;
+  color: var(--amber);
+}
+
+.notice-quiet {
+  background: var(--fill-quiet);
+}
+
+.notice-quiet > .icon {
+  color: var(--text-2);
+}
+
+.notice-text {
+  display: grid;
+  flex: 1;
+  gap: 8px;
+  min-width: 0;
+}
+
+.notice > .btn {
+  flex: none;
+}
+
+/* The box that asks: one input and its button in one rounded frame, as wide as the column. */
+.asker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--field);
+  box-shadow: var(--shadow-card);
+}
+
+.asker:focus-within {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.asker.is-off {
+  border-color: var(--line);
+  background: var(--inset);
+  box-shadow: none;
+}
+
+.asker-input {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-l);
+}
+
+/* The frame around it shows where the typing goes. */
+.asker-input:focus,
+.asker-input:focus-visible {
+  outline: none;
+}
+
+.asker-input::placeholder {
+  color: var(--text-3);
+}
+
+.asker .btn {
+  flex: none;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 10px;
+  font-size: var(--fs-m);
+}
+
+.asker-note,
+.asker-count {
+  color: var(--text-3);
+  font-size: var(--fs-s);
+}
+
+/* The answer of the box. It is no approval card: a broken line frames it, and its two buttons are plain. */
+.trial {
+  display: grid;
+  gap: 12px;
+  border-style: dashed;
+  border-color: var(--line-strong);
+  box-shadow: none;
+}
+
+.trial-head {
+  display: flex;
+}
+
+.trial-say {
+  font-size: var(--fs-m);
+  line-height: 1.5;
+}
+
+.trial .code {
+  /* About fourteen lines; a longer passage scrolls inside its box. */
+  max-height: 21em;
+  overflow: auto;
+}
+
+.trial-facts {
+  display: grid;
+  gap: 2px;
+  color: var(--text-2);
+  font-size: var(--fs-s);
+  font-variant-numeric: tabular-nums;
+}
+
+.trial-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.trial-actions .btn {
+  height: 32px;
+  padding: 0 14px;
+}
+
+.trial-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  font-size: var(--fs-m);
+}
+
+.trial-result p {
+  flex: 1 1 260px;
+}
+
+.trial-real,
+.trial-none {
+  color: var(--text-2);
+  font-size: var(--fs-m);
+  line-height: 1.5;
+}
+
+/* The four tiles: each a button with a mark, a name and one line of state. */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.tile {
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: 2px;
+  min-width: 0;
+  min-height: 112px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: var(--shadow-card);
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.tile:hover {
+  border-color: var(--line-strong);
+  background: var(--control-hover);
+}
+
+.tile:active {
+  background: var(--control-active);
+}
+
+.tile-mark {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin-bottom: 12px;
+  border-radius: 9px;
+  background: var(--fill-quiet);
+  color: var(--text-2);
+}
+
+.tile-mark .icon {
+  width: 18px;
+  height: 18px;
+}
+
+/* An app of this name is in the vault. Not green: green is kept for what is sealed. */
+.tile.is-on .tile-mark {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.tile-name {
+  max-width: 100%;
+  font-size: var(--fs-m);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.tile-state {
+  max-width: 100%;
+  color: var(--text-2);
+  font-size: var(--fs-s);
+  line-height: 1.35;
+}
+
+/* Where nothing is connected yet, the line of state is what a press does. */
+.tile:not(.is-on) .tile-state {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+/* "Start here": three numbered cards, which are the parts of Home themselves. */
+.first {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.first-card {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+
+.first-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--fs-l);
+  font-weight: 600;
+}
+
+/* The number of a card in a circle. Once the card's fact holds, a check in the colour of text: not green. */
+.first-num {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--fill-quiet);
+  color: var(--text-2);
+  font-size: var(--fs-s);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.first-num.is-done {
+  background: var(--text);
+  color: var(--surface);
+}
+
+.first-num .icon {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2;
+}
+
+.first-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.first-actions .btn {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 9px;
+  font-size: var(--fs-m);
+}
+
+.first-hint,
+.first-status,
+.first-sealed {
+  color: var(--text-2);
+  font-size: var(--fs-s);
+}
+
+.first-status {
+  font-size: var(--fs-m);
+}
+
+.first-files {
+  margin-top: 0;
+}
+
+/* The demo's card: a chip, a title, one sentence, and where it applies one plain button. */
+.guide {
+  display: grid;
+  gap: 10px;
+}
+
+.guide-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.guide-title {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-l);
+  font-weight: 600;
+  /* It takes the focus when the button that was just pressed has gone, and shows no ring for it. */
+  outline: none;
+}
+
+.guide-say {
+  max-width: 60ch;
+  color: var(--text-2);
+  font-size: var(--fs-m);
+  line-height: 1.5;
+}
+
+.guide-actions {
+  display: flex;
+}
+
+.guide-own {
+  display: grid;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+}
+
+/* -- the sheets of the tiles --------------------------------------------------------- */
+
+.connect {
+  gap: 14px;
+}
+
+.connect .sheet-title {
+  font-size: var(--fs-xl);
+  letter-spacing: -0.01em;
+}
+
+/* A sentence of a sheet. A place in it breaks between its folders. */
+.sheet-say {
+  font-size: var(--fs-m);
+  line-height: 1.5;
+}
+
+/* A fact about the file or the app: smaller, and grey. */
+.sheet-fact {
+  color: var(--text-2);
+  font-size: var(--fs);
+  line-height: 1.5;
+}
+
+.sheet-facts,
+.sheet-details {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sheet-block {
+  min-width: 0;
+}
+
+.sheet-label,
+.copy-label {
+  margin-bottom: 6px;
+  color: var(--text-2);
+  font-size: var(--fs-s);
+  font-weight: 600;
+}
+
+/* What the press brought, where it is shown. The check is in the colour of text: not green. */
+.sheet-result {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--fill-quiet);
+  font-size: var(--fs-m);
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.sheet-result .icon {
+  margin-top: 2px;
+}
+
+.sheet-looking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: var(--fs-m);
+}
+
+/* What stands under the buttons, or unfolds: a quiet button at the start of its line. */
+.sheet-more {
+  display: flex;
+  margin: -4px 0 0 -8px;
+}
+
+.sheet-more .link {
+  margin-left: 8px;
+  font-size: var(--fs-m);
+}
+
+.connect .code {
+  max-height: 220px;
+  overflow: auto;
+}
+
+/* A text to copy under its label, with "Copy" above its right corner. */
+.copy-block {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.copy-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.copy-head .copy-label {
+  margin-bottom: 0;
+}
+
+.copy-head .btn {
+  flex: none;
+  min-width: 82px;
+}
+
+/* The other apps of the vault, in the sheet of the fourth tile. */
+.custom-rows .row {
+  min-height: 40px;
+  padding: 6px 0;
+}
+
+/* A sheet that opened while it had nothing to press holds the focus itself. It is no control:
+   it gets no ring, and the next press on Tab reaches its first button. */
+dialog.sheet:focus-visible {
+  outline: none;
+}
+
+/* Three buttons at the foot of a sheet: the quiet one stands apart, at the left. */
+.connect .sheet-foot > .btn-quiet:first-child {
+  margin-right: auto;
+}
+
 /* -- 720 px and narrower: a bar at the top, the column, a bar at the bottom ------------ */
 
 @media (max-width: 720px) {
@@ -572,5 +1108,60 @@
 
   .setting .segment {
     flex: 1;
+  }
+
+  /* Home: the tiles are two by two, and a card's buttons stand under each other. */
+  .column .page-body[data-key="view-home"] {
+    gap: 32px;
+  }
+
+  .tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .first-card {
+    padding: 16px;
+  }
+
+  .first-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .asker {
+    padding-left: 12px;
+  }
+
+  /* The two answers of the trial card stand side by side, each half its width. */
+  .trial-actions .btn {
+    flex: 1;
+  }
+
+  /* A sheet is a panel that rises from the bottom, as wide as the window. */
+  .sheet {
+    width: 100vw;
+    max-width: none;
+    max-height: calc(100vh - 24px);
+    margin: auto 0 0;
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 16px 16px 0 0;
+  }
+
+  /* Two buttons stand side by side, the filled one at the right. Three stand under each other, the filled one first. */
+  .sheet-foot > .btn {
+    flex: 1;
+  }
+
+  .sheet-foot:has(> :nth-child(3)) {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .sheet-foot:has(> :nth-child(3)) > .btn,
+  .connect .sheet-foot:has(> :nth-child(3)) > .btn-quiet:first-child {
+    flex: none;
+    margin-right: 0;
   }
 }

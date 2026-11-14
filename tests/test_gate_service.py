@@ -399,7 +399,6 @@ LOCKED_CALLS: dict[str, Callable[[GateService], Any]] = {
     "set_grant": lambda s: s.set_grant(app="claude-desktop", collection="home", mode="none"),
     "set_app_limits": lambda s: s.set_app_limits(name="claude-desktop", limits={}),
     "connect": lambda s: s.connect(name="claude-desktop"),
-    "connect_check": lambda s: s.connect_check(name="claude-desktop"),
     "connect_look": lambda s: s.connect_look(host="claude-desktop"),
     "connect_write": lambda s: s.connect_write(host="claude-desktop", expect="no_file"),
     "connect_remove": lambda s: s.connect_remove(host="claude-desktop", expect="no_file"),
@@ -3127,7 +3126,7 @@ def test_a_vault_without_the_file_is_pro_done_and_not_stored(
     assert vault.unlock(passphrase=gs.PASSPHRASE)["interface"] == NO_FILE
     # Nothing writes it: not unlocking, not the state, not any call that only reads.
     every_answer(vault)
-    vault.connect_check(name="claude-desktop")
+    vault.connect_look(host="claude-desktop")
     vault.reauth(passphrase=gs.PASSPHRASE)
     assert vault.language() is None
     vault.lock()
@@ -3900,13 +3899,12 @@ def the_entry(unlocked: GateService, host: str = "claude-desktop") -> dict[str, 
     return {"command": command[0], "args": command[1:]}
 
 
-def test_the_check_answers_one_word_and_nothing_from_the_file(
+def test_the_look_finds_each_state_of_a_json_file_and_tells_nothing_from_it(
     unlocked: GateService, home: Path
 ) -> None:
     place = settings_place(home)
     shown = "~/" + str(place.relative_to(home))
     folder = "~/" + str(place.parent.relative_to(home))
-    here = "macos" if sys.platform == "darwin" else "linux"
     block = unlocked.connect(name="claude-desktop")["blocks"][0]
     ours = the_entry(unlocked)
     assert json.loads(block["text"]) == {"mcpServers": {SLUG: ours}}
@@ -3914,17 +3912,15 @@ def test_the_check_answers_one_word_and_nothing_from_the_file(
     record = record_and_files(unlocked)
 
     def look(expected: str, section: str | None = None) -> dict[str, Any]:
-        """One check: its answer is a function of the state, the place and the gate's own text."""
+        """One look: its answer is a function of the state, the place and the gate's own text."""
         before = tree(home) if home.exists() else {}
-        answer = unlocked.connect_check(name="claude-desktop")
-        assert (tree(home) if home.exists() else {}) == before, "the check changed the home folder"
-        assert list(answer) == ["state", "path", "folder", "open_line", "section"]
+        answer = unlocked.connect_look(host="claude-desktop")
+        assert (tree(home) if home.exists() else {}) == before, "the look changed the home folder"
+        assert list(answer) == LOOK_FIELDS
         assert answer["state"] in hostcheck.STATES
         assert (answer["state"], answer["section"]) == (expected, section)
-        assert (answer["path"], answer["folder"]) == (shown, folder)
-        assert answer["open_line"] == hostconfig.open_line(
-            place, state=expected, platform=here, language="json", text=block["text"]
-        )
+        assert (answer["path"], answer["folder"], answer["format"]) == (shown, folder, "JSON")
+        assert answer["command"] == [ours["command"], *ours["args"]]
         for marker in MARKERS:
             assert marker not in json.dumps(answer), f"{marker} reached the answer"
         return answer
@@ -3933,15 +3929,20 @@ def test_the_check_answers_one_word_and_nothing_from_the_file(
         place.write_text(json.dumps(value, indent=2), encoding="utf-8")
 
     # No folder: the application was never opened here. Nothing is made.
-    assert look("no_folder")["open_line"] is None
+    look("no_folder")
     assert not home.exists()
     # The folder, and no file.
     place.parent.mkdir(parents=True)
-    assert "echo '{}'" in look("no_file")["open_line"]
+    look("no_file")
     # A file with nothing in it, with white space only, or with no settings.
-    for nothing in (b"", b" \n\t\r\n", b"{}", b"{ }\n", b'{"mcpServers": {}}'):
+    for nothing in (b"", b" \n\t\r\n"):
         place.write_bytes(nothing)
         look("empty")
+    for nothing in (b"{}", b"{ }\n"):
+        place.write_bytes(nothing)
+        look("empty", "none")
+    place.write_bytes(b'{"mcpServers": {}}')
+    look("empty", "empty")
     # Other settings, without the section, with an empty one, and with entries of other tools.
     holds({"theme": "dark", "apiKey": key, secret: True})
     look("other", "none")
@@ -3953,11 +3954,11 @@ def test_the_check_answers_one_word_and_nothing_from_the_file(
     look("other", "filled")
     # The right entry: alone, among others, and with more beside the two things compared.
     holds({"mcpServers": {SLUG: ours}})
-    assert look("present")["open_line"] is None
+    look("present")
     holds({"key": key, "mcpServers": {"another-tool": {"command": secret}, SLUG: ours}})
     look("present")
     holds({"mcpServers": {SLUG: {**ours, "env": {"TOKEN": token}}}})
-    look("present")
+    look("present_more")
     # An entry under the gate's name that points somewhere else: another vault, another
     # name, another program, or nothing an application could start.
     elsewhere = [*ours["args"][:-1], str(home / "another vault")]
@@ -4021,35 +4022,26 @@ def test_the_check_answers_one_word_and_nothing_from_the_file(
     # The folder itself a file: there is no settings folder then.
     shutil.rmtree(place.parent)
     place.parent.write_text(secret, encoding="utf-8")
-    assert look("no_folder")["open_line"] is None
+    look("no_folder")
 
-    # The request cannot name a file: it names the app, and the kind of application.
+    # The request cannot name a file: it names one of the three applications, and nothing else.
     for host in ("/etc/passwd", "../../etc/passwd", str(target), "~/.ssh/id_ed25519", ""):
         with refused(404, "not_found"):
-            unlocked.connect_check(name="claude-desktop", host=host)
-    with refused(404, "not_found"):
-        unlocked.connect_check(name="nobody")
-    with refused(404, "not_found"):
-        unlocked.connect_check(name="../../etc/passwd")
+            unlocked.connect_look(host=host)
     with pytest.raises(TypeError):
-        unlocked.connect_check(name="claude-desktop", path=str(target))  # type: ignore[call-arg]
-    # An application the app knows no settings file of, and one that cannot be connected.
-    for host in ("claude-code", "openclaw", "generic", "claude-web", "grok-bot"):
-        answer = unlocked.connect_check(name="claude-desktop", host=host)
-        assert answer == {
-            "state": "unsupported",
-            "path": None,
-            "folder": None,
-            "open_line": None,
-            "section": None,
-        }
-    # An app under a name of its own is looked for under that name, in the form it was given.
-    assert unlocked.connect_check(name="lm-studio")["state"] == "unsupported"  # "Another app"
+        unlocked.connect_look(host="claude-desktop", path=str(target))  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        unlocked.connect_look(host="claude-desktop", name="lm-studio")  # type: ignore[call-arg]
+    # An application the app writes no settings file of, and one that cannot be connected:
+    # there is no look for it at all.
+    for host in ("claude-code", "codex", "openclaw", "generic", "claude-web", "grok-bot"):
+        with refused(404, "not_found"):
+            unlocked.connect_look(host=host)
     # In all of it nothing was recorded and nothing was sealed, and the app needed no owner mode.
     assert record_and_files(unlocked) == record
 
 
-def test_the_check_does_not_wait_for_a_named_pipe_and_needs_no_owner_mode(
+def test_the_look_does_not_wait_for_a_named_pipe_and_needs_no_owner_mode(
     unlocked: GateService, home: Path, gate_clock: FakeClock
 ) -> None:
     expire_owner_mode(gate_clock)
@@ -4058,16 +4050,16 @@ def test_the_check_does_not_wait_for_a_named_pipe_and_needs_no_owner_mode(
     os.mkfifo(place)
     answers: list[Any] = []
     thread = threading.Thread(
-        target=lambda: answers.append(unlocked.connect_check(name="claude-desktop")), daemon=True
+        target=lambda: answers.append(unlocked.connect_look(host="claude-desktop")), daemon=True
     )
     thread.start()
     thread.join(timeout=30)
-    assert not thread.is_alive(), "the check waits for somebody to write into the pipe"
+    assert not thread.is_alive(), "the look waits for somebody to write into the pipe"
     assert answers[0]["state"] == "not_read"
     assert stat.S_ISFIFO(place.lstat().st_mode)
 
 
-def test_the_check_reads_one_fixed_file_and_only_when_asked(
+def test_the_look_reads_one_fixed_file_and_only_when_asked(
     unlocked: GateService, home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     place = settings_place(home)
@@ -4098,7 +4090,7 @@ def test_the_check_reads_one_fixed_file_and_only_when_asked(
     assert [path for path, _ in opened if path.startswith(str(home))] == []
     # On the one request: the one file of that application, once, for reading, reached
     # through its own folders and no other.
-    assert unlocked.connect_check(name="claude-desktop")["state"] == "present"
+    assert unlocked.connect_look(host="claude-desktop")["state"] == "present"
     under_home = [(path, folder) for path, folder in opened if path.startswith(str(home))]
     assert [path for path, folder in under_home if not folder] == [str(place)]
     on_the_way = [home]
@@ -4119,46 +4111,42 @@ def test_the_check_reads_one_fixed_file_and_only_when_asked(
             looked if os.fspath(path) == place.name else real_lstat(path, *a, **k)
         ),
     )
-    assert unlocked.connect_check(name="claude-desktop")["state"] == "not_read"
+    assert unlocked.connect_look(host="claude-desktop")["state"] == "not_read"
     place.unlink()
     os.mkfifo(place)
-    assert unlocked.connect_check(name="claude-desktop")["state"] == "not_read"
+    assert unlocked.connect_look(host="claude-desktop")["state"] == "not_read"
 
 
-@pytest.mark.parametrize("host", ["chatgpt-desktop", "codex"])
-def test_the_check_reads_toml_only_where_it_can(
+@pytest.mark.parametrize("host", ["chatgpt-desktop", "grok-build"])
+def test_the_look_reads_toml_only_where_it_can(
     host: str, unlocked: GateService, home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    unlocked.add_app(name=host, hosted=True, destination="OpenAI")
-    place = settings_place(home, host)
-    here = "macos" if sys.platform == "darwin" else "linux"
+    for variable in ("GROK_HOME", "CODEX_HOME"):
+        monkeypatch.delenv(variable, raising=False)
+    unlocked.add_app(name=host, hosted=True, destination="its maker")
+    folder = ".codex" if host == "chatgpt-desktop" else ".grok"
+    place = home / folder / "config.toml"
     text = next(b["text"] for b in unlocked.connect(name=host)["blocks"] if b["language"] == "toml")
-    unsupported = {
-        "state": "unsupported",
-        "path": None,
-        "folder": None,
-        "open_line": None,
-        "section": None,
-    }
     if sys.version_info < (3, 11):
         # No TOML reader in this Python: the file is not looked at, whatever is there.
-        assert unlocked.connect_check(name=host) == unsupported
+        answer = unlocked.connect_look(host=host)
+        assert (answer["state"], answer["section"], answer["copies"]) == ("unsupported", None, [])
         assert not home.exists()
         return
 
     def look(expected: str) -> dict[str, Any]:
         before = tree(home) if home.exists() else {}
-        answer = unlocked.connect_check(name=host)
+        answer = unlocked.connect_look(host=host)
         assert (tree(home) if home.exists() else {}) == before
-        assert answer == {
-            "state": expected,
-            "path": "~/.codex/config.toml",
-            "folder": "~/.codex",
-            "open_line": hostconfig.open_line(
-                place, state=expected, platform=here, language="toml", text=text
-            ),
-            "section": None,  # a section is told for JSON only: TOML is added at the end
-        }
+        assert list(answer) == LOOK_FIELDS
+        assert (answer["state"], answer["path"], answer["folder"], answer["format"]) == (
+            expected,
+            f"~/{folder}/config.toml",
+            f"~/{folder}",
+            "TOML",
+        )
+        # A section is told for JSON only: TOML is added at the end.
+        assert answer["section"] is None
         for marker in MARKERS:
             assert marker not in json.dumps(answer)
         return answer
@@ -4167,7 +4155,7 @@ def test_the_check_reads_toml_only_where_it_can(
     look("no_folder")
     assert not home.exists()
     place.parent.mkdir(parents=True)
-    assert ": > " in look("no_file")["open_line"]
+    look("no_file")
     for nothing in ("", "\n \n", f"# {secret}\n", "[mcp_servers]\n"):
         place.write_text(nothing, encoding="utf-8")
         look("empty")
@@ -4179,7 +4167,7 @@ def test_the_check_reads_toml_only_where_it_can(
     )
     look("other")
     place.write_text(f'api_key = "{key}"\n\n{text}\n', encoding="utf-8")
-    assert look("present")["open_line"] is None
+    look("present")
     place.write_text(
         text.replace(str(unlocked.path), str(home / "another vault")), encoding="utf-8"
     )
@@ -4207,126 +4195,9 @@ def test_the_check_reads_toml_only_where_it_can(
     place.write_text(text, encoding="utf-8")
     look("present")
     monkeypatch.setattr(hostcheck, "_toml_loads", lambda: None)
-    assert unlocked.connect_check(name=host) == unsupported
+    assert unlocked.connect_look(host=host)["state"] == "unsupported"
     # The JSON file of the other application is read all the same.
-    assert unlocked.connect_check(name=host, host="claude-desktop")["state"] == "no_folder"
-
-
-OPEN_STUB = '#!/bin/sh\nfor word in "$@"; do printf \'%s\\n\' "$word"; done >> "$STUB_OUT/{name}"\n'
-PBCOPY_STUB = '#!/bin/sh\ncat > "$STUB_OUT/clipboard"\n'
-SHELLS = ["/bin/sh", *filter(None, (shutil.which(name) for name in ("bash", "zsh", "dash")))]
-OPEN_LINE_CASES = [
-    ("claude-desktop", "json", "macos"),
-    ("claude-desktop", "json", "linux"),
-    ("codex", "toml", "macos"),
-    ("codex", "toml", "linux"),
-]
-
-
-@pytest.mark.parametrize("shell", SHELLS)
-@pytest.mark.parametrize(("host", "language", "platform"), OPEN_LINE_CASES)
-def test_the_open_line_never_changes_a_file_that_exists(
-    host: str,
-    language: str,
-    platform: str,
-    shell: str,
-    unlocked: GateService,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    if language == "toml" and sys.version_info < (3, 11):
-        pytest.skip("this Python has no reader for TOML, so such a file is not looked at")
-    # A home with a space and a quote in its name: the path must survive the shell.
-    home = tmp_path / "it's a home"
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
-    stubs = tmp_path / "stubs"
-    out = tmp_path / "out"
-    stubs.mkdir()
-    for name in ("open", "xdg-open"):
-        (stubs / name).write_text(OPEN_STUB.format(name=name), encoding="utf-8")
-    (stubs / "pbcopy").write_text(PBCOPY_STUB, encoding="utf-8")
-    for stub in stubs.iterdir():
-        stub.chmod(0o755)
-    environment = {
-        "PATH": os.pathsep.join([str(stubs), "/usr/bin", "/bin"]),
-        "STUB_OUT": str(out),
-        "HOME": str(home),
-    }
-    place = settings_place(home, host, platform)
-    place.parent.mkdir(parents=True)
-    config = hostconfig.render(host, client=host, store=unlocked.path, platform=platform)
-    text = next(block.text for block in config.blocks if block.language == language)
-    editor = "open" if platform == "macos" else "xdg-open"
-
-    def look(expected: str) -> str | None:
-        answer = hostcheck.check(host, client=host, store=unlocked.path, platform=platform)
-        assert answer["state"] == expected
-        line: str | None = answer["open_line"]
-        return line
-
-    def opened(line: str | None, *, copies: bool) -> None:
-        """Run the line as a person does: it opens this one file and changes none that exists."""
-        assert line is not None
-        before = place.read_bytes() if place.exists() else None
-        shutil.rmtree(out, ignore_errors=True)
-        out.mkdir()
-        done = subprocess.run(
-            [shell, "-c", line],
-            env=environment,
-            cwd=tmp_path,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-        assert (done.returncode, done.stdout, done.stderr) == (0, "", ""), line
-        if before is not None:
-            assert place.read_bytes() == before, f"the line changed the file: {line}"
-        given = {item.name: item.read_text(encoding="utf-8") for item in out.iterdir()}
-        # The system's editor was given this one file ...
-        arguments = given.pop(editor).splitlines()
-        assert arguments == (["-e", str(place)] if platform == "macos" else [str(place)])
-        # ... and on a Mac the block's text is on the clipboard, byte for byte, where the
-        # whole text is what gets pasted. Elsewhere the line copies nothing.
-        assert given == ({"clipboard": text} if copies and platform == "macos" else {})
-
-    # The file is not there: the line makes it, holding what an empty settings file of
-    # that kind holds, and opens it.
-    line = look("no_file")
-    opened(line, copies=True)
-    assert place.read_bytes() == (b"{}\n" if language == "json" else b"")
-    made = place.stat().st_mtime_ns
-    # Run again, the same line finds the file and leaves it alone.
-    opened(line, copies=True)
-    assert place.stat().st_mtime_ns == made
-    # And it does not touch a file that somebody made in between.
-    place.write_bytes(b"made in between, by somebody else\n")
-    opened(line, copies=True)
-    assert place.read_bytes() == b"made in between, by somebody else\n"
-    # What the line made is a file the check calls empty; then the whole text is pasted.
-    place.write_bytes(b"{}\n" if language == "json" else b"")
-    opened(look("empty"), copies=True)
-    # Other settings: opened and kept. JSON needs a place inside the file, so nothing is
-    # copied; TOML is added at the end, so the text is.
-    place.write_bytes(b'{"theme": "dark"}\n' if language == "json" else b'model = "o9"\n')
-    opened(look("other"), copies=language == "toml")
-    # An entry that differs, a file that cannot be read, one that is not read: opened only.
-    if language == "json":
-        place.write_text(json.dumps({"mcpServers": {SLUG: {"command": "x"}}}), encoding="utf-8")
-    else:
-        place.write_text(f'[mcp_servers.{SLUG}]\ncommand = "x"\n', encoding="utf-8")
-    opened(look("differs"), copies=False)
-    place.write_bytes(b'{"theme": ' if language == "json" else b"= 1\n")
-    opened(look("unreadable"), copies=False)
-    place.write_bytes(b" " * (hostcheck.MAX_BYTES + 1))
-    opened(look("not_read"), copies=False)
-    # With the entry in place there is nothing to open, and no line. Nor without the folder.
-    place.write_text(text, encoding="utf-8")
-    assert look("present") is None
-    shutil.rmtree(place.parent)
-    assert look("no_folder") is None
-    # The app ran none of these lines: this test did, with stand-ins on its PATH.
+    assert unlocked.connect_look(host="claude-desktop")["state"] == "no_folder"
 
 
 # -- the demo's played app, told to ask again ------------------------------------------------
@@ -5994,3 +5865,83 @@ def test_activity_says_what_a_release_was_in_fields(unlocked: GateService) -> No
         (None, 7, None),
         (None, None, None),
     ]
+
+
+# -- the two sample documents of the page ------------------------------------------------------
+
+
+def page_samples() -> dict[str, tuple[str, str, str]]:
+    """The two sample documents the page holds, by language: file name, title and text."""
+    static = Path(service_module.__file__).resolve().parent / "static"
+    source = (static / "manage.js").read_text(encoding="utf-8")
+    block = source[source.index("export const SAMPLE = {") :]
+    block = block[: block.index("\n};\n")]
+    one = re.compile(
+        r'  (\w+): \{\n    file: ("[^\n]*"),\n    title: ("[^\n]*"),\n    text: \[\n'
+        r'((?:      "[^\n]*",\n)+)    \]\.join\("\\n\\n"\),\n  \},'
+    )
+    found: dict[str, tuple[str, str, str]] = {}
+    for code, file, title, lines in one.findall(block):
+        paragraphs = [json.loads(line.strip().rstrip(",")) for line in lines.splitlines()]
+        found[code] = (json.loads(file), json.loads(title), "\n\n".join(paragraphs))
+    return found
+
+
+def page_text(language: str, key: str) -> str:
+    """One text of the page's table of ``language``, as the page would show it."""
+    from .test_gate_interface_texts import read_table
+
+    value = read_table(language)[0][key]
+    assert isinstance(value, str)
+    return value
+
+
+def test_the_sample_question_finds_the_sample(fresh: GateService) -> None:
+    samples = page_samples()
+    assert sorted(samples) == ["en", "pl"]
+    invented = {"en": "invented", "pl": "zmyślony"}
+    found_by = {
+        "en": ["the", "rental", "agreement", "end"],
+        "pl": ["kończy", "się", "umowa", "najmu"],
+    }
+    for code, (file, title, text) in samples.items():
+        # It says in its title and in its first paragraph that it is invented: a middle
+        # passage does not hold the first lines.
+        paragraphs = text.split("\n\n")
+        assert len(paragraphs) == 5
+        assert file == f"{title}.txt", "the vault makes the title from the name of the file"
+        assert invented[code] in title
+        assert invented[code] in paragraphs[0]
+        # The page tells the sample by its title and its number of characters together, and
+        # counts as a script does: no character of it is counted twice there.
+        assert len(text.encode("utf-16-le")) == 2 * len(text)
+        document = fresh.add_document(collection="documents", name=file, data=text.encode())[
+            "document"
+        ]
+        assert (document["title"], document["characters"]) == (title, len(text))
+        assert document["passages"] >= 3
+        # The sample question finds the second passage, by the search an app gets.
+        answer = fresh.try_question(question=page_text(code, "ask.sample.question"))
+        assert answer["found"] is True
+        passage = answer["passage"]
+        assert (passage["title"], passage["passage"], passage["passages"]) == (
+            title,
+            2,
+            document["passages"],
+        )
+        assert passage["words"] == found_by[code]
+        assert passage["body"] in text
+        assert paragraphs[0] not in passage["body"]
+        if code == "pl":
+            # The search finds whole words as they stand: another case form finds nothing,
+            # although the text speaks of the deposit.
+            assert "Kaucja nie jest oprocentowana" in text
+            assert fresh.try_question(question="Ile kaucji zapłaciłem?") == {
+                "found": False,
+                "reason": "no_match",
+            }
+        # Each sample is asked while it is the vault's only document.
+        fresh.remove_document(id=document["id"])
+    assert samples["en"][0] == "Sample rental agreement (invented).txt"
+    assert samples["pl"][0] == "Umowa najmu (zmyślony przykład).txt"
+    assert (len(samples["en"][2]), len(samples["pl"][2])) == (1437, 1494)

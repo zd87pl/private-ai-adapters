@@ -61,9 +61,11 @@ htmlcov/
 dmypy.json
 .ruff_cache/
 
-# The browser walk-throughs (tests/browser/): their screenshots, and the
+# The browser walk-throughs (tests/browser/): their screenshots, the folder each
+# run keeps its vaults and its home in (removed when the run ends), and the
 # Playwright that "npm install --no-save" puts beside the repository's files
 /tests/browser/shots/
+/tests/browser/.run/
 /node_modules/
 
 # -----------------------------------------------------------------------------

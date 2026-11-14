@@ -291,7 +291,7 @@ def test_every_fixed_text_an_agent_can_receive_carries_the_new_name(renamed: Pat
     for name, text in texts.items():
         assert_renamed(text, f"the text {name!r}")
     assert "in the Example Desk app on this computer" in texts["locked"]
-    assert 'open "Approvals" in the Example Desk app' in texts["needs approval"]
+    assert "open the Example Desk page in their browser" in texts["needs approval"]
     assert "then call desk_read again with the same ref" in texts["needs approval"]
     assert (
         "Use a ref returned by desk_search, or a collection name from desk_status."

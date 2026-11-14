@@ -109,13 +109,21 @@ jobs:
     # The package is installed the way a user installs it, not in editable mode,
     # so the interface that is walked is the one inside the built package.
     #
-    # On a development machine the three take about 1, 2 and 2 minutes in
+    # It is installed into a virtual environment under the checkout. The third
+    # walk-through has the app write an entry into a settings file (in a home
+    # the run owns), and the app writes no entry that names a Python in a
+    # folder everybody may write: the tool cache of a hosted runner may be one.
+    # A Python under the checkout is in a place of the runner's own. Should the
+    # app refuse all the same, the walk-through says so in a line that begins
+    # with "#####" and fails; it never skips by itself.
+    #
+    # On a development machine the three take about 2, 2 and 3 minutes in
     # Chromium. Each ends itself with a failure when it has not finished in 6,
-    # 10 and 12 minutes, so the limit of the job leaves room for all three to
+    # 10 and 20 minutes, so the limit of the job leaves room for all three to
     # say what went wrong.
     name: Browser (${{ matrix.os }}, ${{ matrix.browser }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 35
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -128,10 +136,10 @@ jobs:
             playwright-install: webkit
     env:
       GATE_BROWSER: ${{ matrix.browser }}
+      GATE_PYTHON: ${{ github.workspace }}/.venv/bin/python
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
-        id: python
         with:
           python-version: "3.13"
           cache: pip
@@ -139,8 +147,10 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
-      - name: Install (gate extras)
-        run: python -m pip install '.[gate]'
+      - name: Install (gate extras, into a virtual environment under the checkout)
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install '.[gate]'
       # Playwright is pinned: each release drives one build of each engine.
       - name: Install Playwright
         run: npm install --no-save playwright@1.63.0
@@ -148,21 +158,15 @@ jobs:
         run: npx playwright install ${{ matrix.playwright-install }}
       - name: Walk through the demo
         id: demo
-        env:
-          GATE_PYTHON: ${{ steps.python.outputs.python-path }}
         run: node tests/browser/journey_demo.js
-      - name: Walk through a new vault
+      - name: Walk through a new vault on the six pages
         # Also when the demo failed, so that one run shows everything that fails;
         # not when the installation failed and the demo did not run at all.
         if: ${{ !cancelled() && steps.demo.outcome != 'skipped' }}
-        env:
-          GATE_PYTHON: ${{ steps.python.outputs.python-path }}
         run: node tests/browser/journey_real.js
-      - name: Walk through the first run and the Basic view
+      - name: Walk through Home, its tiles and the plain pages
         if: ${{ !cancelled() && steps.demo.outcome != 'skipped' }}
-        env:
-          GATE_PYTHON: ${{ steps.python.outputs.python-path }}
-        run: node tests/browser/journey_basic.js
+        run: node tests/browser/journey_home.js
       - name: Upload the screenshots
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7

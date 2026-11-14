@@ -7,9 +7,11 @@ same places for values, a budget of two sentences of explanation per screen, the
 sentences that must stand word for word, the Polish glossary, and no claim about
 another program that nobody checked.
 
-The tables grow stage by stage. A key of the specification that no stage has
-built yet is named in ``NOT_BUILT_YET``; the tests fail when such a key appears
-while it is still listed there, so the list shrinks as the page grows.
+The tables grew stage by stage. A key of the specification that no stage had
+built yet was named in ``NOT_BUILT_YET``; the tests fail when such a key appears
+while it is still listed there. Every part of the page is built now and the list
+is empty: it stays, with its check, so that a key can only be named here while
+the tables really lack it.
 """
 
 from __future__ import annotations
@@ -130,11 +132,20 @@ def test_a_table_is_one_frozen_object_and_imports_nothing() -> None:
         assert "`" not in code, f"{name} holds a text that is worked out"
 
 
+# The beginning of a message for an AI app: the person's own question is written after it,
+# so it ends with the one space that stands between the two.
+ENDS_WITH_A_SPACE = {"connect.ask.start"}
+
+
 def test_a_text_is_plain_text_with_the_quotation_marks_of_its_language() -> None:
     for language, table in tables().items():
+        assert set(table) >= ENDS_WITH_A_SPACE
         for key, value in table.items():
             for text in texts(value):
                 where = f"{TABLES[language]} {key}"
+                if key in ENDS_WITH_A_SPACE:
+                    assert text == text.strip() + " ", f"{where} must end with one space"
+                    text = text.strip()
                 assert text == text.strip(), f"{where} begins or ends with a space"
                 assert text, f"{where} is empty"
                 assert "\n" not in text, where
@@ -511,26 +522,9 @@ REQUIRED_TEXTS = {
 }
 
 # Keys the tests name that belong to a part of the page no stage has built yet. Each stage
-# takes out what it builds; at the end of the work this set is empty.
-NOT_BUILT_YET = {
-    "ask.say.1",
-    "ask.say.1.connect",
-    "ask.say.1.read",
-    "ask.say.1.none",
-    "ask.say.2",
-    "home.new.say.1",
-    "home.wait.title",
-    "connect.offer.say.2",
-    "connect.offer.say.2.read",
-    "connect.offer.say.2.groups",
-    "connect.done.say.1",
-    "connect.done.status.tried",
-    "connect.hand.say.1",
-    "custom.say.1",
-    "custom.say.2",
-    "home.connect.say.1",
-    "how.connect.6",
-}
+# took out what it built; the last part, Home with its tiles and sheets, is built, and the set
+# is empty.
+NOT_BUILT_YET: set[str] = set()
 
 
 def built(key: str, table: dict[str, Value]) -> bool:
@@ -544,7 +538,7 @@ def built(key: str, table: dict[str, Value]) -> bool:
 
 def test_the_required_texts_are_there_word_for_word() -> None:
     read = tables()
-    assert NOT_BUILT_YET - set(REQUIRED_TEXTS) == {"home.wait.title"}
+    assert not NOT_BUILT_YET, "every part of the page is built: no key may be left out"
     for key, text in REQUIRED_TEXTS.items():
         if not built(key, read["en"]):
             continue

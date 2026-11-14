@@ -9,11 +9,11 @@
 // setting, under "#/pro/…", which keeps its English.
 
 import { ApiError, api, configure } from "./api.js";
-import { basicView, freshGuide, settleSetup } from "./basic.js";
 import { PRODUCT } from "./brand.js";
 import { el, icon, render } from "./dom.js";
 import { at, clock, num, parseTime } from "./format.js";
-import { bootScreen, createScreen, freshFirstRun, lockedScreen, offlineScreen, openStep, pairingScreen, setupScreen, stepApp } from "./gateway.js";
+import { bootScreen, createScreen, lockedScreen, offlineScreen, pairingScreen } from "./gateway.js";
+import { freshHome, homePage, leaveHome, settleFirst } from "./home.js";
 import { appsView, documentsView, vaultView } from "./manage.js";
 import { activityPage, documentsPage, howPage, settingsPage } from "./pages.js";
 import { button, chip, closeAllSheets, languageSwitch, problemBar, toast, toastError, watchSheets } from "./parts.js";
@@ -23,13 +23,10 @@ import { activityView, approvalCardKey, approvalsView, detailPanel, overviewView
 
 const POLL_MS = 2000;
 const PAGE = 50;
-/** Home: how many answers that left it shows at first, and how many "Show more" adds. */
-const LEFT_FIRST = 5;
-const LEFT_MORE = 20;
+/** Home: how many of the newest things that were given to apps it asks for. */
+const LEFT_FIRST = 3;
 /** The page Activity: how many rows it asks for at a time. */
 const ROWS_PAGE = 20;
-/** The step "First question": how many of the newest calls of the app that is being connected it lists. */
-const ASKED_FIRST = 5;
 /** How the stopped calls of the last 24 hours are asked for: a page, and how many older pages at most. */
 const STOPS_PAGE = 20;
 const STOPS_MORE_PAGES = 5;
@@ -82,18 +79,14 @@ const NEEDS = {
   "pro/documents": ["documents"],
   "pro/apps": ["apps", "settings"],
   "pro/vault": ["settings"],
-  // Home shows, for now, what the page that was called Basic showed, and needs what that needed.
-  home: ["apps", "approvals", "settings", "documents", "left", "stops"],
+  // The documents are asked for on Home too: its first card adds one, and its box that asks
+  // has to know whether the invented sample is the only one.
+  home: ["apps", "approvals", "documents", "left", "stops"],
   documents: ["documents", "apps"],
   activity: ["apps", "rows"],
   settings: [],
   how: [],
-  // The step "First question" also needs what its app asked for: see `needs`.
-  setup: ["apps", "approvals", "settings", "documents", "stops"],
 };
-
-/** The steps of setting up that are addresses: "#/setup/app" and so on. */
-const SETUP_STEPS = ["app", "documents", "connect"];
 
 function freshActivity() {
   return { items: new Map(), order: [], nextBefore: null, filters: { app: "", kind: "" }, loaded: false, loadingMore: false, error: "", latest: null };
@@ -110,7 +103,7 @@ function freshRows(tab = "release") {
 }
 
 function freshUi() {
-  return Object.assign(freshFirstRun(), {
+  return {
     // `refused`: the code the app refused last, which is not sent again as it stands. `failed`: another error, as it came.
     pair: { code: "", busy: false, wrong: false, refused: "", failed: null, disabled: false, expired: false },
     // `waited`: how many passages were waiting when this page saw the vault lock.
@@ -141,14 +134,14 @@ function freshUi() {
     // about how many wait, what is unfolded, and which "Copy" was just pressed.
     allApprovals: false,
     waitingCount: null,
-    waitingSaid: "",
+    waitingSaid: null,
     panelMore: false,
     copied: null,
     // How many sheets lie over the page. Home has its cards and its sheets on one page.
     sheets: 0,
-    // The demo's guide on Home: what was hidden, unfolded and answered.
-    guide: freshGuide(),
-  });
+    // What Home remembers: the box that asks and its answer, "Start here", the demo's card.
+    home: freshHome(),
+  };
 }
 
 const ctx = {
@@ -157,19 +150,13 @@ const ctx = {
   phase: "boot", // boot, pair, stuck, ready
   offline: false,
   route: "pro/overview",
-  // The step of setting up that the address names, and on its last step the app it is about.
-  setupStep: "app",
-  setupApp: "",
   data: { apps: null, approvals: null, documents: null, settings: null },
   activity: freshActivity(),
-  // What Home lists: the answers that left, and the calls that were stopped.
+  // What Home lists: the newest things that were given to apps, and the calls that were stopped.
   left: freshLeft(),
   stops: null,
   // What the page Activity lists: what was given to apps, and what was stopped.
   rows: freshRows(),
-  // The newest calls under the name of the app that is being connected, for the step "First question":
-  // the app's name, the entries, and whether the app has older ones.
-  asked: null,
   // What the page has learned about passages, by reference: title, number, collection.
   passages: new Map(),
   panel: null,
@@ -184,11 +171,9 @@ const ctx = {
   closePanel,
   setActivityFilters,
   loadMoreActivity,
-  loadMoreLeft,
   showRows,
   moreRows,
   keepView,
-  setUpInPro,
   start,
   chooseLanguage: pressLanguage,
 };
@@ -294,7 +279,6 @@ function sidebar() {
 
 /** The lists the screen that is shown needs. */
 function needs() {
-  if (ctx.route === "setup" && ctx.setupStep === "connect") return NEEDS.setup.concat("asked");
   return NEEDS[ctx.route];
 }
 
@@ -392,8 +376,8 @@ function simpleSidebar() {
  */
 function simpleShell() {
   const problem = loadProblem();
-  // Home shows, for now, the body of the page that was called Basic: its headline is its title.
-  const page = ctx.route === "home" ? { title: null, aside: null, body: basicView(ctx, problem) } : PAGES[ctx.route](ctx);
+  // Home is told what is wrong with the page: its cards wait again when the bar above them comes or goes.
+  const page = ctx.route === "home" ? homePage(ctx, problem) : PAGES[ctx.route](ctx);
   return el(
     "div",
     { class: ["simple", ctx.panel && "has-panel"], key: "simple" },
@@ -441,8 +425,6 @@ function screen() {
   if (!ctx.state) return ctx.offline ? offlineScreen(ctx) : bootScreen();
   if (!ctx.state.store.exists) return createScreen(ctx);
   if (ctx.state.locked) return lockedScreen(ctx);
-  // A step of setting up is an address. Nothing of the first run lives in this page's memory.
-  if (ctx.route === "setup") return setupScreen(ctx, loadProblem());
   if (ctx.route.startsWith("pro/")) return shell();
   return simpleShell();
 }
@@ -485,7 +467,7 @@ function paint() {
   const tabIcon = document.querySelector('link[rel="icon"]');
   const wanted = waiting > 0 ? "favicon-waiting.svg" : "favicon.svg";
   if (tabIcon && tabIcon.getAttribute("href") !== wanted) tabIcon.setAttribute("href", wanted);
-  const showsCards = ctx.route === "pro/approvals" || ctx.route === "home" || ctx.route === "setup";
+  const showsCards = ctx.route === "pro/approvals" || ctx.route === "home";
   if (ctx.ui.focusApproval && showsCards && ctx.data.approvals) {
     focusApproval(ctx.ui.focusApproval);
     ctx.ui.focusApproval = null;
@@ -523,9 +505,8 @@ function focusApproval(wanted) {
   }
   const target = card ? card.querySelector('[data-key="dismiss"]') : null;
   if (!target) {
-    // The last card was decided. On Home the headline says so and takes the focus; on
-    // the step "First question" the outcome does. Never a button.
-    const headline = document.getElementById("basic-status") || document.getElementById("ask-end-title");
+    // The last card was decided. On Home the title of the page takes the focus. Never a button.
+    const headline = document.getElementById("home-title");
     if (headline && typeof wanted.after === "number") headline.focus({ preventScroll: true });
     return;
   }
@@ -550,20 +531,11 @@ const fetchers = {
   stops: loadStops,
   // The list of the page Activity that is shown, by its kind: what was given to apps, or what was stopped.
   rows: loadRows,
-  // What one app asked for, by its name: for the step that waits for the first request of that app.
-  asked: loadAsked,
 };
 
 async function loadRows() {
   const tab = ctx.rows.tab;
   return { tab, page: await api.activity({ limit: ROWS_PAGE, kind: tab }) };
-}
-
-async function loadAsked() {
-  const app = ctx.setupApp;
-  if (!app) return null;
-  const page = await api.activity({ limit: ASKED_FIRST, app });
-  return { app, items: page.items || [], more: page.next_before !== null && page.next_before !== undefined };
 }
 
 /**
@@ -640,25 +612,7 @@ const adopt = {
   },
   // The answer belongs to the list it was asked for, whichever of the two is shown by now.
   rows: (value) => mergeHead(ctx.rows[value.tab], value.page),
-  asked: (value) => {
-    ctx.asked = value;
-  },
 };
-
-/**
- * Which app the step "First question" is about, once the list of apps is in. The name
- * is written into the address, so that a reload shows the same app, and what that app
- * asked for is loaded.
- */
-function settleSetupApp() {
-  if (ctx.route !== "setup" || ctx.setupStep !== "connect" || !ctx.data.apps) return;
-  const name = stepApp(ctx);
-  if (name === ctx.setupApp) return;
-  ctx.setupApp = name;
-  ctx.asked = null;
-  if (name) window.history.replaceState(null, "", `#/setup/connect?app=${encodeURIComponent(name)}`);
-  load(["asked"]);
-}
 
 async function load(names) {
   await Promise.all(
@@ -680,11 +634,9 @@ async function load(names) {
       }
     }),
   );
-  if (ctx.state && !ctx.state.locked) {
-    settleSetupApp();
-    // Setting up ends by itself once the vault has an app, a document and a first request.
-    settleSetup(ctx);
-  }
+  // The first steps end by themselves once the vault holds a document, a passage was seen
+  // or an app has asked, and an app is registered.
+  if (ctx.state && !ctx.state.locked) settleFirst(ctx);
   schedule();
 }
 
@@ -700,7 +652,6 @@ function forget() {
   ctx.left = freshLeft();
   ctx.stops = null;
   ctx.rows = freshRows(ctx.rows.tab);
-  ctx.asked = null;
   ctx.passages = new Map();
   ctx.panel = null;
   ctx.loadErrors = {};
@@ -735,10 +686,8 @@ function applyState(next, force = false) {
   if (next.interface) keptLanguage(next.interface.language);
   // Which page an address opens that names none is decided by the view that is kept, once the app has said it.
   if (next.interface && !(previous && previous.interface)) settleRoute();
-  // Whenever Home opens, the focus goes to its headline, never to a button of a card.
-  // A step of setting up starts on its title.
-  if (isOpen && !wasOpen && ctx.route === "home") ctx.ui.focusId = "basic-status";
-  if (isOpen && !wasOpen && ctx.route === "setup") ctx.ui.focusId = "setup-title";
+  // Whenever Home opens, the focus goes to its title, never to a button of a card.
+  if (isOpen && !wasOpen && ctx.route === "home") ctx.ui.focusId = "home-title";
   const retry = Object.keys(ctx.loadErrors).length > 0;
   if (isOpen && (force || retry || !wasOpen || previous.cursor !== next.cursor)) lastLoad = loadRoute();
   schedule();
@@ -807,26 +756,6 @@ async function loadMoreActivity() {
     toastError(error);
   }
   activity.loadingMore = false;
-  schedule();
-}
-
-/** "Show more" on Home: the next answers that left, older than the oldest shown. */
-async function loadMoreLeft() {
-  const left = ctx.left;
-  if (left.loadingMore || left.nextBefore === null || !left.order.length) return;
-  left.loadingMore = true;
-  schedule();
-  try {
-    const page = await api.activity({ limit: LEFT_MORE, kind: "release", before: left.order[left.order.length - 1] });
-    if (ctx.left === left) {
-      for (const item of page.items || []) left.items.set(item.seq, item);
-      left.nextBefore = page.next_before === undefined ? null : page.next_before;
-      sortList(left);
-    }
-  } catch (error) {
-    toastError(error);
-  }
-  left.loadingMore = false;
   schedule();
 }
 
@@ -916,37 +845,39 @@ function defaultRoute() {
   return kept && kept.view === "basic" ? "home" : "pro/overview";
 }
 
+/** The addresses from before that lead to Home: the page that was called Basic, and the steps of the first run. */
+const HOME_BEFORE = ["basic", "setup"];
+
 /**
  * The route the address names. "#/home", "#/documents", "#/activity", "#/settings"
  * and "#/how" are the simple pages, and "#/pro/…" the six pages with every setting,
  * whatever the app keeps. An address from before leads where its page is now:
- * "#/basic" is Home, and "#/overview", "#/approvals", "#/apps" and "#/vault" are
- * pages under "#/pro/". "#/setup/…" names a step of setting up; its second part is
- * kept in `ctx.setupStep`. Only an address that names no page is decided by what the
- * app keeps.
+ * "#/basic", "#/setup" and "#/setup/…" are Home, and "#/overview", "#/approvals",
+ * "#/apps" and "#/vault" are pages under "#/pro/". Only an address that names no
+ * page is decided by what the app keeps.
  */
 function routeFromHash() {
-  const { name, step, query } = hashParts();
+  const { name, step } = hashParts();
   if (name === "home" || Object.prototype.hasOwnProperty.call(PAGES, name)) return name;
   if (name === "pro") return Object.prototype.hasOwnProperty.call(VIEWS, step) ? `pro/${step}` : "pro/overview";
-  if (name === "basic") return "home";
+  if (HOME_BEFORE.includes(name)) return "home";
   if (OLD_ADDRESSES.includes(name)) return `pro/${name}`;
-  if (name === "setup") {
-    ctx.setupStep = SETUP_STEPS.includes(step) ? step : "app";
-    ctx.setupApp = ctx.setupStep === "connect" ? query.get("app") || "" : "";
-    return "setup";
-  }
   return defaultRoute();
 }
 
 /**
  * Where the address named a page by an address from before, the address becomes the
- * one the page has now, with what followed its "?". An address that names no page
- * is left as it is. Nothing is loaded for it and no entry is added to the history.
+ * one the page has now: for one of the six pages with what followed its "?", for
+ * Home without. An address that names no page is left as it is. Nothing is loaded
+ * for it and no entry is added to the history.
  */
 function settleAddress() {
   const { name } = hashParts();
-  if (name !== "basic" && !OLD_ADDRESSES.includes(name)) return;
+  if (HOME_BEFORE.includes(name)) {
+    window.history.replaceState(null, "", "#/home");
+    return;
+  }
+  if (!OLD_ADDRESSES.includes(name)) return;
   const query = window.location.hash.includes("?") ? window.location.hash.slice(window.location.hash.indexOf("?")) : "";
   window.history.replaceState(null, "", `#/${ctx.route}${query}`);
 }
@@ -958,18 +889,13 @@ function settleRows() {
   if (tab !== ctx.rows.tab) ctx.rows.tab = tab;
 }
 
-/** The screen the address names, in one text: the route and, for a step of setting up, the step and its app. */
-function placeNow() {
-  return ctx.route === "setup" ? `setup/${ctx.setupStep}?${ctx.setupApp}` : ctx.route;
-}
-
 /** The first state with the view is in: an address that names no page now has one. */
 function settleRoute() {
-  const before = placeNow();
+  const before = ctx.route;
   const name = routeFromHash();
   ctx.route = name;
   settleRows();
-  if (placeNow() === before) return;
+  if (name === before) return;
   ctx.panel = null;
   ctx.ui.focusApproval = null;
   ctx.ui.approvalSignature = null;
@@ -983,14 +909,13 @@ function approvalFromHash() {
 }
 
 function onRoute() {
-  const before = placeNow();
   const from = ctx.route;
   const shown = ctx.rows.tab;
   const name = routeFromHash();
   ctx.route = name;
   settleAddress();
   settleRows();
-  if (placeNow() === before) {
+  if (name === from) {
     if (name === "pro/approvals" && hashParts().query.get("ref")) {
       ctx.ui.focusApproval = approvalFromHash();
       schedule();
@@ -1014,17 +939,14 @@ function onRoute() {
     ctx.ui.focusApproval = approvalFromHash();
     ctx.ui.approvalSignature = null;
   }
-  if (name === "home" || name === "setup") {
-    // Here too the cards appear anew. The focus goes to the headline, never to a button of a card.
+  if (name === "home") {
+    // Here too the cards appear anew. The focus goes to the title, never to a button of a card.
     ctx.ui.approvalSignature = null;
     ctx.ui.allApprovals = false;
-    if (name === "home") ctx.ui.focusId = "basic-status";
-    if (name === "setup") {
-      // What an app asked for belongs to the app the step is about.
-      ctx.asked = null;
-      openStep(ctx);
-    }
+    ctx.ui.focusId = "home-title";
   }
+  // The answer of the box that asks is gone with the page it stood on.
+  if (from === "home") leaveHome(ctx);
   ctx.ui.limits = null;
   window.scrollTo(0, 0);
   schedule();
@@ -1032,9 +954,8 @@ function onRoute() {
 }
 
 /**
- * Open a page by its address without the "#/": "home", "pro/overview",
- * "setup/documents", "setup/connect?app=…". The route changes at once, not when the
- * browser has told of the new address.
+ * Open a page by its address without the "#/": "home", "pro/overview". The route
+ * changes at once, not when the browser has told of the new address.
  */
 function navigate(address) {
   const [path] = address.split("?");
@@ -1057,20 +978,6 @@ async function keepView(view) {
     toastError(error);
     return false;
   }
-}
-
-/**
- * "Set everything up yourself in Pro", at the foot of a step of setting up: the six
- * pages become where the app opens, and Overview opens. Whether setting up is over is
- * not touched.
- */
-async function setUpInPro() {
-  const kept = ctx.state ? ctx.state.interface : null;
-  const known = Boolean(kept && kept.stored && kept.view === "pro");
-  if (!known && !(await keepView("pro"))) return;
-  navigate("pro/overview");
-  ctx.ui.focusId = "main";
-  schedule();
 }
 
 // -- the language ---------------------------------------------------------------------
@@ -1163,7 +1070,8 @@ function sessionEnded() {
   start();
 }
 
-configure({ unauthorized: sessionEnded, reauth: () => requestReauth(ctx.state ? ctx.state.demo_passphrase : null) });
+// The sheet that asks for the passphrase is told which refusal opened it, and hands that on.
+configure({ unauthorized: sessionEnded, reauth: (scope) => requestReauth(ctx.state ? ctx.state.demo_passphrase : null, scope) });
 
 // The page is drawn again whenever a sheet has opened or closed, in the same turn: where cards
 // lie under the sheet, "Release once" waits again before a press can reach it.

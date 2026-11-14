@@ -203,14 +203,6 @@ class Service(Protocol):
         """The configuration that connects one agent application under this app's name."""
         ...
 
-    def connect_check(self, *, name: str, host: str | None = None) -> JSONObject:
-        """Whether one application's settings file holds this app's entry, in one word.
-
-        The look before :meth:`connect_look`, for a registered app. It stays
-        for the page that still calls it.
-        """
-        ...
-
     # -- the settings file of an agent application ---------------------------------
 
     def connect_look(self, *, host: str) -> JSONObject:

@@ -8,9 +8,8 @@ an application's configuration so that it does. It is data and formatting only:
 it writes no file, changes no application's configuration and starts no program.
 That holds for what it says about a settings file too: where the file of an
 application lies on this computer (:func:`settings_file`) is a path worked out
-from the home directory, and the line that opens it in a text editor
-(:func:`open_line`) is text for the owner to read and run. The one module that
-reads such a file is :mod:`wdva.gate.hostcheck`, and the one that writes one is
+from the home directory. The one module that reads such a file is
+:mod:`wdva.gate.hostcheck`, and the one that writes one is
 :mod:`wdva.gate.hostwrite`.
 
 The command is the same for every application (:func:`host_command`). It names
@@ -65,7 +64,6 @@ __all__ = [
     "install_line",
     "known_host",
     "missing_sdk_error",
-    "open_line",
     "platform_name",
     "render",
     "render_text",
@@ -274,14 +272,8 @@ _WHY_NOT = {
 _LOCAL_ALTERNATIVE = {
     "chatgpt-web": "Use the ChatGPT desktop app or Codex on this computer instead",
     "claude-web": "Use Claude Desktop or Claude Code on this computer instead",
-    "grok-web": (
-        "Use Grok Build on this computer instead (according to xAI's documentation it takes "
-        "the configuration shown for Codex, in ~/.grok/config.toml)"
-    ),
-    "grok-bot": (
-        "Use Grok Build on this computer instead (according to xAI's documentation it takes "
-        "the configuration shown for Codex, in ~/.grok/config.toml)"
-    ),
+    "grok-web": 'Use Grok Build on this computer instead: the tile "Grok" on Home connects it',
+    "grok-bot": 'Use Grok Build on this computer instead: the tile "Grok" on Home connects it',
 }
 
 PLATFORMS = ("macos", "linux")
@@ -735,35 +727,6 @@ def _where_here(entry: KnownHost, block: Block, platform: str) -> str | None:
         place = settings_file(entry.id, platform)
         return None if place is None else shown_path(place[0])
     return block.where[0] if len(block.where) == 1 else None
-
-
-def open_line(
-    path: str | os.PathLike[str], *, state: str, platform: str, language: str, text: str
-) -> str | None:
-    """One shell line that opens a settings file in the system's text editor, as text.
-
-    ``path`` is the absolute path of the file, ``state`` what a look at it found
-    (a state of :mod:`wdva.gate.hostcheck`), ``language`` its format (``"json"``
-    or ``"toml"``) and ``text`` the block that belongs into it. Where the file is
-    not there the line makes it first, holding ``{}`` for JSON and nothing for
-    TOML, and only then: it never changes a file that exists. On macOS it also
-    puts ``text`` on the clipboard where the whole text is what gets pasted.
-    ``None`` for a state in which there is nothing to open.
-
-    The line is for the owner to read and to run. This program runs none of it.
-    """
-    system = _platform(platform)
-    place = shlex.quote(os.fspath(path))
-    editor = "open -e" if system == "macos" else "xdg-open"
-    copy = f"; printf %s {shlex.quote(text)} | pbcopy" if system == "macos" else ""
-    if state == "no_file":
-        first = "echo '{}'" if language == "json" else ":"
-        return f'f={place}; [ -e "$f" ] || {first} > "$f"; {editor} "$f"{copy}'
-    if state == "empty" or (state == "other" and language == "toml"):
-        return f"{editor} {place}{copy}"
-    if state in ("other", "differs", "unreadable", "not_read"):
-        return f"{editor} {place}"
-    return None
 
 
 def _blocks(entry: KnownHost, command: Sequence[str]) -> tuple[tuple[Block, ...], tuple[str, ...]]:

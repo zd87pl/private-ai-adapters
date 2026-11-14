@@ -9,7 +9,9 @@ reads claim nothing the gate cannot do.
 
 from __future__ import annotations
 
+import json
 import re
+import unicodedata
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -55,7 +57,10 @@ API_CALLS = {
     ("POST", "/api/grants"),
     ("POST", "/api/apps/<>/limits"),
     ("GET", "/api/apps/<>/connect"),
-    ("POST", "/api/apps/<>/connect/check"),
+    ("POST", "/api/try"),
+    ("POST", "/api/connect/<>/look"),
+    ("POST", "/api/connect/<>"),
+    ("POST", "/api/connect/<>/remove"),
     ("GET", "/api/settings"),
     ("POST", "/api/settings"),
     ("POST", "/api/replaced-strings"),
@@ -96,11 +101,6 @@ REQUIRED_SENTENCES = [
     "strings. Add each one you want replaced.",
     "Add a word or number that must never leave",
     "unverified",
-    "After you release a passage, the app gets it when it asks again. If it does not ask by "
-    "itself, tell it: \u201ctry again\u201d.",
-    "A name is a label: ${PRODUCT} cannot check which program is really asking.",
-    # Where the first run sends the owner to another program.
-    "Nothing is changed for you: you copy the text and put it where the app reads it.",
 ]
 
 # Words that belong to the engine and stay out of what the owner reads. "MCP" may
@@ -145,6 +145,43 @@ def read(path: Path) -> str:
 
 def scripts() -> dict[str, str]:
     return {path.name: read(path) for path in files(".js")}
+
+
+# The two text tables. Every text the simple interface shows is a value of one of them.
+TABLES = ("text-en.js", "text-pl.js")
+
+
+def table(name: str) -> dict[str, list[str]]:
+    """One text table as its keys, each with its texts: one, or one for each plural form."""
+    found: dict[str, list[str]] = {}
+    key = ""
+    for line in read(STATIC / name).splitlines():
+        entry = re.fullmatch(r'  "([^"]+)": (?:("(?:[^"\\]|\\.)*"),|\{)', line)
+        if entry:
+            key = entry.group(1)
+            found[key] = [json.loads(entry.group(2))] if entry.group(2) else []
+            continue
+        form = re.fullmatch(r'    [a-z]+: ("(?:[^"\\]|\\.)*"),', line)
+        if form:
+            found[key].append(json.loads(form.group(1)))
+    assert len(found) > 400, name
+    return found
+
+
+def samples() -> dict[str, tuple[str, str, str]]:
+    """The two sample documents the page holds, by language: file name, title and text."""
+    source = read(STATIC / "manage.js")
+    block = source[source.index("export const SAMPLE = {") :]
+    block = block[: block.index("\n};\n")]
+    one = re.compile(
+        r'  (\w+): \{\n    file: ("[^\n]*"),\n    title: ("[^\n]*"),\n    text: \[\n'
+        r'((?:      "[^\n]*",\n)+)    \]\.join\("\\n\\n"\),\n  \},'
+    )
+    found: dict[str, tuple[str, str, str]] = {}
+    for code, file, title, lines in one.findall(block):
+        paragraphs = [json.loads(line.strip().rstrip(",")) for line in lines.splitlines()]
+        found[code] = (json.loads(file), json.loads(title), "\n\n".join(paragraphs))
+    return found
 
 
 def without_comments(source: str) -> str:
@@ -539,7 +576,8 @@ def test_a_passphrase_is_only_ever_typed_into_a_password_field_and_sent() -> Non
     )
     api = without_comments(scripts()["api.js"])
     senders = re.findall(
-        r"(\w+): \(passphrase(?:, language)?\) => call\(\"POST\", \"(/api/[a-z/]+)\"", api
+        r"(\w+): \(passphrase(?:, language|, scope)?\) =>\s+call\(\"POST\", \"(/api/[a-z/]+)\"",
+        api,
     )
     assert sorted(path for _name, path in senders) == [
         "/api/reauth",
@@ -589,7 +627,7 @@ def test_a_release_cannot_be_pressed_through() -> None:
     assert "releaseArmedAt: Number.POSITIVE_INFINITY," in main
     # Opening a page with cards counts as the cards appearing anew.
     route = function_body(main, "function onRoute() {")
-    for opened in ('if (name === "pro/approvals") {', 'if (name === "home" || name === "setup") {'):
+    for opened in ('if (name === "pro/approvals") {', 'if (name === "home") {'):
         after = route[route.index(opened) :]
         assert "ctx.ui.approvalSignature = null;" in after[: after.index("\n  }\n")], opened
     wait = re.search(r"const ARM_MS = (\d+);", views)
@@ -615,12 +653,12 @@ def test_a_release_cannot_be_pressed_through() -> None:
         assert "api.release(" not in code, f"{name} releases a passage itself"
         assert "api.dismiss(" not in code, f"{name} decides about a passage itself"
         assert "approval-actions" not in code, f"{name} draws the buttons of a card itself"
-    # Home and the step "First question" show cards, and get them from that module.
-    for name in ("basic.js", "gateway.js"):
-        code = without_comments(scripts()[name])
-        assert re.search(r'import \{[^}]*\bapprovalCards\b[^}]*\} from "\./views\.js";', code), name
-    # The plain pages show none.
-    assert "approvalCards" not in without_comments(scripts()["pages.js"])
+    # Home shows cards, and gets them from that module.
+    home = without_comments(scripts()["home.js"])
+    assert re.search(r'import \{[^}]*\bapprovalCards\b[^}]*\} from "\./views\.js";', home)
+    # The plain pages, the sheets of the tiles and the screens before the vault show none.
+    for name in ("pages.js", "connect.js", "gateway.js"):
+        assert "approvalCards" not in without_comments(scripts()[name]), name
 
 
 def test_approval_cards_are_drawn_by_one_function() -> None:
@@ -630,16 +668,15 @@ def test_approval_cards_are_drawn_by_one_function() -> None:
     cards = function_body(views, "export function approvalCards(ctx, ")
     assert "approvalCard(ctx, entry.item, index)" in cards
     assert "decidedLine(ctx, entry.done)" in cards
-    assert 'card("Approved, not read yet"' in cards
+    assert 'card(t("home.granted.title")' in cards
     # The Approvals page of Pro gets its cards from there and draws none itself.
     page = function_body(views, "export function approvalsView(ctx) {")
     assert "approvalCards(ctx, {" in page
     assert "approvalCard(" not in page
     assert "decidedLine(" not in page
     assert views.count("approvalCard(ctx,") == 2  # where it is defined, and inside approvalCards
-    # So do the Basic page and the step "First question".
-    for name in ("basic.js", "gateway.js"):
-        assert "approvalCards(ctx, {" in sources[name], f"{name} does not show the cards"
+    # So does Home, under "Waiting for you", and in one place.
+    assert sources["home.js"].count("approvalCards(ctx, {") == 1, "Home does not show the cards"
     # No other script gives an element the class of a card.
     assert "approval" in class_names(views)
     for name, code in sources.items():
@@ -661,24 +698,41 @@ def test_the_name_is_written_in_no_file_of_the_interface() -> None:
     # The server puts the name into the page; brand.js reads it there; everything
     # else imports it from brand.js. So no file may spell it out, in any form.
     forms = [brand.PRODUCT, brand.SLUG, f"{brand.TOOL_PREFIX}_", brand.SLUG.replace("-", "_")]
+    assert {"text-en.js", "text-pl.js"} <= {path.name for path in STATIC.iterdir()}
     for path in sorted(STATIC.iterdir()):
         text = read(path)
         for form in forms:
             assert form not in text, f"{path.name} spells out the name: {form!r}"
+            assert form.lower() not in text.lower(), f"{path.name} spells out the name: {form!r}"
     page = read(STATIC / "index.html")
     assert "<title>{{product}}</title>" in page
     assert '<meta name="application-name" content="{{product}}">' in page
+    # The name an entry in another program's settings carries comes the same way: the page How
+    # names it, and no file of the page spells it out.
+    assert '<meta name="application-entry" content="{{entry}}">' in page
     assert '<p class="boot-name">{{product}}</p>' in page
     assert re.search(r"<noscript>\s*<p[^>]*>\{\{product\}\} needs JavaScript", page)
     source = without_comments(scripts()["brand.js"])
     assert 'meta[name="application-name"]' in source
     assert re.search(r"export const PRODUCT\b", source)
+    assert 'meta[name="application-entry"]' in source
+    assert re.search(r"export const ENTRY\b", source)
     assert "import" not in source, "the one module every other may import imports nothing"
     # Whoever shows the name got it from there.
     for name, script in scripts().items():
         code = without_comments(script)
         if name != "brand.js" and re.search(r"\bPRODUCT\b", code):
-            assert 'import { PRODUCT } from "./brand.js";' in code, name
+            assert re.search(r'import \{ (?:ENTRY, )?PRODUCT \} from "\./brand\.js";', code), name
+    # The name of the entry is put into a text by the one function that fills places, and by
+    # nothing else: a sentence says "{entry}" and never the name itself.
+    users = {
+        name
+        for name, script in scripts().items()
+        if name != "brand.js" and re.search(r"\bENTRY\b", without_comments(script))
+    }
+    assert users == {"texts.js"}
+    for name in TABLES:
+        assert "{entry}" in read(STATIC / name), name
 
 
 def test_the_demo_passphrase_is_shown_only_as_the_app_sent_it() -> None:
@@ -705,7 +759,7 @@ def test_the_demo_passphrase_is_shown_only_as_the_app_sent_it() -> None:
         "sheets.js": ["demoPassphrase"],
     }
     main = without_comments(scripts()["main.js"])
-    assert "requestReauth(ctx.state ? ctx.state.demo_passphrase : null)" in main
+    assert "requestReauth(ctx.state ? ctx.state.demo_passphrase : null, scope)" in main
     # It reaches the page through the state and no other way.
     for name, script in scripts().items():
         for use in re.findall(r"[\w.]*demo_passphrase", without_comments(script)):
@@ -816,15 +870,29 @@ def css_rules(name: str, selector: str) -> list[str]:
 
 
 def test_on_the_steps_of_setting_up_green_is_kept_for_what_is_sealed() -> None:
-    # A check on these screens says "done", "found" or "arrived", never "sealed": the part of
-    # the stepper that is done, the number of the first line once the entry is in the settings
-    # file, the mark beside the first request. None of them is drawn in green. (The check
-    # beside a file that was sealed is.)
-    for selector in (".step-dot", ".step.is-done .step-dot", ".ask-num", ".ask-wait-glyph"):
-        rules = css_rules("app.css", selector)
+    # A check on Home says "done" or "an app of this name is registered", never "sealed": the
+    # number of a card of "Start here" once its fact holds, the mark of a tile. None of them is
+    # drawn in green. (The check beside a file that was sealed is.)
+    for selector in (
+        ".first-num",
+        ".first-num.is-done",
+        ".first-num .icon",
+        ".tile",
+        ".tile-mark",
+        ".tile.is-on .tile-mark",
+        ".tile-state",
+    ):
+        rules = css_rules("home.css", selector)
         assert rules, selector
         assert all("--green" not in rule for rule in rules), selector
-    assert ["var(--green)" in rule for rule in css_rules("app.css", ".upload-done .icon")] == [True]
+    home = without_comments(scripts()["home.js"])
+    head = function_body(home, "function cardHead(number, done, title) {")
+    assert 'class: ["first-num", done && "is-done"]' in head
+    assert 'icon("check")' in head
+    assert 'class: ["tile", on && "is-on"],' in function_body(
+        home, "function tile(ctx, entry, apps) {"
+    )
+    assert css_rules("app.css", ".upload-done .icon") == ["  color: var(--green);\n"]
 
 
 def test_the_bar_that_says_what_is_wrong_stands_above_the_title_and_covers_nothing() -> None:
@@ -947,14 +1015,15 @@ def test_a_new_vault_is_told_what_to_do_next_in_order() -> None:
     assert card.count('index === next ? el("a"') == 1
 
 
-# -- the Basic page and the two views -----------------------------------------------
+# -- Home, the sheets of its tiles, and the two views --------------------------------
 
 
-def test_basic_changes_only_what_it_can_express() -> None:
+def test_home_changes_only_what_it_can_express() -> None:
     # Limits, the settings of the vault, which kinds of apps are answered, pausing, the words
-    # to replace and removing a collection are Pro's. Home says them and has no call for them,
-    # and neither have the plain pages.
-    for name in ("basic.js", "pages.js"):
+    # to replace and removing a collection are Pro's. Home and the sheets of its tiles have no
+    # call for them, and neither have the plain pages.
+    asked: dict[str, set[str]] = {}
+    for name in ("home.js", "connect.js", "pages.js"):
         code = without_comments(scripts()[name])
         for call in (
             "api.setAppLimits(",
@@ -962,23 +1031,81 @@ def test_basic_changes_only_what_it_can_express() -> None:
             "api.setServing(",
             "api.addReplacedString(",
             "api.removeCollection(",
+            "api.setInterface({ view",
         ):
             assert call not in code, f"{name} calls {call}"
-    # The plain pages give no app access at all.
-    assert "setGrant" not in without_comments(scripts()["pages.js"])
+        asked[name] = set(re.findall(r"\bapi\.(\w+)\(", code))
+        # No figure of the vault is written into these scripts: what a limit is, is an answer
+        # of the app. (The numbers that stand here are times in milliseconds, a length of an
+        # input and the size the app names when it has not answered yet.)
+        figures = {int(found) for found in re.findall(r"(?<![\w.#-])\d{3,}(?![\w.])", code)}
+        assert figures <= {500, 2000, 20971520, 86400000}, f"{name} holds a figure: {figures}"
+        assert re.search(r"\b\d{1,3},\d{3}\b", "\n".join(quoted_texts(scripts()[name]))) is None
+    # What each of them asks the app to do, in full.
+    assert asked == {
+        # A document is added; the app is told that the first steps are done; the owner's own
+        # question is asked; in a demo the played app is told to ask once more.
+        "home.js": {"addDocument", "setInterface", "tryQuestion", "demoAgain"},
+        # A look, a write, a removal; the text to paste; and for the way by hand and the
+        # fourth tile the three requests that add an app with "ask me each time".
+        "connect.js": {
+            "connectLook",
+            "connectWrite",
+            "connectRemove",
+            "connect",
+            "addApp",
+            "setCollection",
+            "setGrant",
+            "removeApp",
+        },
+        "pages.js": set(),
+    }
+    # The one access these scripts give is "ask me each time", to the one group of the vault,
+    # and a group is only ever opened, never closed.
+    connect = without_comments(scripts()["connect.js"])
+    assert re.findall(r"api\.setGrant\(([^)]*)\)", connect) == ['name, group, "approve"']
+    assert re.findall(r"api\.setCollection\(([^)]*)\)", connect) == [
+        "{ name: group, allow_hosted: true }"
+    ]
+    assert re.findall(r"api\.addApp\(([^)]*)\)", connect) == ["{ name, hosted: true, destination }"]
+    add = function_body(connect, "async function addWithAccess(ctx, name, destination) {")
+    assert add.index("if (groups.length > 1) return;") < add.index("api.setCollection(")
+    assert connect.count("addWithAccess(") == 3  # its definition, the way by hand, the fourth tile
+    home = without_comments(scripts()["home.js"])
+    assert re.findall(r"api\.setInterface\(([^)]*)\)", home) == ['{ setup: "done" }']
 
 
-def test_basic_attributes_to_stored_names() -> None:
-    # A row, a sum or a rule names an app by the name it has in the vault. The readable name of
-    # a listed program ("Claude Desktop") is for the list of apps and for instructions only.
-    basic = without_comments(scripts()["basic.js"])
-    assert re.search(r"\.label\b", basic) is None, "the Basic page reads the label of something"
-    assert re.search(r"\.known\b", basic) is None, "the Basic page reads the list of programs"
-    # So on the plain pages: a row of Activity, a document's line and the sentence that says
-    # where text goes name an app by `name`. (Quoted texts are left out: keys hold ".label".)
-    pages = re.sub(r'"[^"\n]*"', '""', without_comments(scripts()["pages.js"]))
+def test_home_attributes_to_stored_names() -> None:
+    # A row, a card or a sentence about what happened names an app by the name it has in the
+    # vault. The readable name of a listed program ("Claude Desktop") is for a tile, for the
+    # sentences of its sheet that say what a press will do, and for instructions only.
+    def code_of(name: str) -> str:
+        # (Quoted texts are left out: keys hold ".label".)
+        return re.sub(r'"[^"\n]*"', '""', without_comments(scripts()[name]))
+
+    pages = code_of("pages.js")
     assert re.search(r"\.label\b", pages) is None, "a plain page reads the label of something"
     assert re.search(r"\.known\b", pages) is None, "a plain page reads the list of programs"
+    home = code_of("home.js")
+    assert re.search(r"\.known\b", home) is None, "Home reads the list of programs"
+    drawn = function_body(home, "function tile(ctx, entry, apps) {")
+    assert home.count(".label") == drawn.count(".label") == 1, "Home reads a label outside a tile"
+    assert "custom ? name : entry.label" in drawn
+    # Who could ask for a passage is said by stored names; so is what the cards of Home say.
+    trial = function_body(
+        without_comments(scripts()["home.js"]), "function trialSentence(passage) {"
+    )
+    assert ".map((app) => app.name);" in trial
+    connect = without_comments(scripts()["connect.js"])
+    places = function_body(connect, "function values(view, more = {}) {")
+    assert "label: tile.label," in places
+    assert "name: tile.name," in places
+    # The name an app has in the vault is said where two names could be taken for each other:
+    # an entry that connects the program under another name, an app that is set up differently.
+    for name in TABLES:
+        texts = table(name)
+        for key in ("connect.as.say.1", "connect.as.say.2", "connect.refused.say.1.other_kind"):
+            assert "{name}" in texts[key][0], f"{name} {key}"
     sentence = function_body(
         without_comments(scripts()["sheets.js"]), "export function basicGrantSentence(app) {"
     )
@@ -986,173 +1113,75 @@ def test_basic_attributes_to_stored_names() -> None:
     assert 't("docs.say.2.local", { app: app.name })' in sentence
 
 
-def test_basic_says_what_pro_set_from_answers_of_the_app() -> None:
-    basic = without_comments(scripts()["basic.js"])
-    # Whether a limit is an app's own is read by comparing two answers, and whether the vault's
-    # figures are those of a new vault is an answer too: the page holds no copy of such values.
-    assert "app.limits[key] !== settings.defaults[key]" in basic
-    assert "settings.changed_from_new.length > 0" in basic
-    assert re.search(r"\b\d{1,3},\d{3}\b", "\n".join(quoted_texts(scripts()["basic.js"]))) is None
-    numbers = {int(found) for found in re.findall(r"(?<![\w.])\d{3,}(?![\w.])", basic)}
-    assert numbers <= {2000, 86400000}, "a figure of the vault is written into the Basic page"
-    # A control for an app's access stands only where one value describes the whole vault, and
-    # an app is added on the page only where that will stay so.
-    assert 'groups.length > 1 ? proLink("Change in Pro", "#/pro/apps"' in basic
-    assert "const expressible = groups.length <= 1 && !apps.some((app) => !app.hosted);" in basic
-    assert 'proLink("Add an app (in Pro)", "#/pro/apps", { id: "basic-add-app" })' in basic
-    # A link into Pro is an address and nothing else.
-    link = function_body(basic, "function proLink(text, href, props = {}) {")
-    assert "onclick" not in link
-    assert 'return el("a", Object.assign({ class: "link", href }, props), text);' in link
-
-
 def test_the_sentence_is_drawn_before_access_is_given() -> None:
     sources = {name: without_comments(source) for name, source in scripts().items()}
     # Whoever gives an app access also has the sentence that says where the text goes.
     for name, code in sources.items():
-        if "api.setGrant(" in code:
-            assert "basicGrantSentence(" in code or "grantSentence(" in code, name
-    # On the Basic page "Save" does nothing for a choice other than "No access" unless the
-    # sentence is on the sheet at that moment.
-    basic = sources["basic.js"]
-    save = function_body(basic, "async function saveAccess(ctx, sheet, form, mode) {")
-    guard = 'if (!form.sentenceShown && mode !== "none") return;'
-    assert save.splitlines()[1].strip() == guard, "the guard is not the first thing Save does"
-    assert basic.count("api.setGrant(") == 1
-    assert basic.count("api.setCollection(") == 1
-    assert save.index(guard) < save.index("api.setCollection(") < save.index("api.setGrant(")
-    # Only drawing the sentence says that it is shown; every draw of the sheet starts without it.
-    note = function_body(basic, "function accessSentence(form) {")
-    assert "form.sentenceShown = true;" in note
-    assert "basicGrantSentence(form.app)" in note
-    assert 'id: "basic-sentence"' in note
-    assert 'role: "note"' in note
-    assert basic.count("sentenceShown = true") == 1
-    sheet = function_body(basic, "async function openAppSheet(ctx, name) {")
-    assert sheet.index("form.sentenceShown = false;") < sheet.index("accessSentence(form)")
-    # It stands in the sheet itself whenever the choice is not "No access": no press unfolds it.
-    assert 'form.mode !== "none" ? accessSentence(form) : null,' in sheet
-    assert basic.count("accessSentence(form)") == 2  # where it is defined, and in the sheet
-    # The first run: the press that adds an app and gives it access does nothing unless the
-    # sentence of that app is on the screen, and nothing but drawing it says that it is.
-    gateway = sources["gateway.js"]
-    add = function_body(gateway, "async function addFirstApp(ctx) {")
-    guard = "if (!form.sentenceShown) return;"
-    assert add.splitlines()[2].strip() == guard, "the guard is not the first thing the press does"
-    assert (
-        add.index(guard)
-        < add.index("api.addApp(")
-        < add.index("api.setCollection(")
-        < add.index("api.setGrant(")
-    )
-    drawn = function_body(gateway, "function firstSentence(form, described) {")
-    assert "form.sentenceShown = true;" in drawn
-    assert "text = basicGrantSentence(described);" in drawn
-    assert 'return amber("first-sentence", text);' in drawn
-    assert gateway.count("sentenceShown = true") == 1
-    assert 'role: "note"' in function_body(gateway, "function amber(id, text) {")
-    step = function_body(gateway, "function appStep(ctx) {")
-    assert step.index("form.sentenceShown = false;") < step.index("firstSentence(form, described)")
-    assert "form.sentenceShown = false;" in function_body(
-        gateway, "function chooseApp(ctx, entry) {"
-    )
-    # It is the sentence of the app only once the app is chosen and described; until then the
-    # one that holds for every app stands there, and the press cannot count.
-    assert "let text = generalSentence();" in drawn
-    assert drawn.index("if (described) {") < drawn.index("form.sentenceShown = true;")
-    assert gateway.count("addFirstApp(") == 2  # where it is defined, and when the form is sent
-    assert "if (ready && !form.busy) addFirstApp(ctx);" in step
-
-
-def test_basic_changes_access_only_where_the_vault_has_one_group() -> None:
-    basic = without_comments(scripts()["basic.js"])
-    # What Home asks the app to change, in full. Removing an app goes through today's sheet of
-    # Pro. The third call changes nothing of the vault: it says that setting up is over, a word
-    # kept beside the vault. The fourth changes nothing of the owner's at all: in a demo it has
-    # the played app ask once more
-    # (see test_the_demo_guide_makes_the_played_app_ask_again_only_on_a_press).
-    assert set(re.findall(r"\bapi\.(\w+)\(", basic)) == {
-        "setCollection",
-        "setGrant",
-        "setInterface",
-        "demoAgain",
-    }
-    assert re.findall(r"api\.setInterface\(([^)]*)\)", basic) == ['{ setup: "done" }']
-    assert 'from "./api.js"' in basic
-    assert "removeApp(ctx, app)" in basic
-    # Documents are added and removed on their own page, which calls the app for nothing
-    # itself: a file goes through the one function that adds files, a removal through today's
-    # sheet, which asks first.
-    pages = without_comments(scripts()["pages.js"])
-    assert re.findall(r"\bapi\.(\w+)\(", pages) == []
-    assert 'from "./api.js"' not in pages
-    for call in ("removeDocument(ctx, document)", "removeDocument(ctx, sample.document)"):
-        assert call in pages, call
-    assert "removeDocument(" not in basic
-    manage = without_comments(scripts()["manage.js"])
+        if "api.setGrant(" in code or "api.connectWrite(" in code:
+            assert (
+                "basicGrantSentence(" in code
+                or "grantSentence(" in code
+                or "function whereTextGoes(view, id, text) {" in code
+            ), name
+    connect = sources["connect.js"]
+    # Only drawing the sentence says that it is shown, and every draw of a sheet starts without.
+    told = function_body(connect, "function whereTextGoes(view, id, text) {")
+    assert told.splitlines()[1].strip() == "view.told = true;"
+    assert connect.count("view.told = true;") == 1
+    assert 'role: "note"' in function_body(connect, "function amberNote(id, text) {")
     for head in (
-        "export async function removeDocument(ctx, document) {",
-        "export async function removeApp(ctx, app) {",
+        "function drawConnect(ctx, sheet, view) {",
+        "function drawCustom(ctx, sheet, view) {",
     ):
-        assert "await confirmSheet({" in function_body(manage, head), "removing asks first"
-    # The sheet is opened by "Change" alone, "Change" stands only where the vault has one group
-    # or none, and the sheet itself refuses a vault with several: one press never changes
-    # access for several groups.
-    assert basic.count("openAppSheet(") == 2  # where it is defined, and behind "Change"
-    assert "onclick: () => openAppSheet(ctx, app.name)," in function_body(
-        basic, "function changeButton(ctx, app, settings) {"
-    )
-    assert basic.count("changeButton(") == 2
+        draw = function_body(connect, head)
+        assert draw.index("view.told = false;") < draw.index("whereTextGoes(view, "), head
+        assert draw.count("view.told = false;") == 1, head
+    # What is drawn is the sentence of the table for this app and this vault: one of the three
+    # of the offer, or the one of the fourth tile, which names the app and the receiver.
+    goes = function_body(connect, "function goesSentence(ctx, view) {")
+    assert re.findall(r'return t\("([^"]+)", values\(view\)\);', goes) == [
+        "connect.offer.say.2.read",
+        "connect.offer.say.2.groups",
+        "connect.offer.say.2",
+    ]
+    drawn = re.findall(r"whereTextGoes\(view, \"([a-z0-9-]+)\", ([^\n]*)", connect)
+    assert [(ident, what.split("(")[0]) for ident, what in drawn] == [
+        ("connect-say-2", "goesSentence"),  # the way by hand
+        ("connect-say-2", "goesSentence"),  # the offer
+        ("custom-say-2", "t"),
+    ]
+    assert 'whereTextGoes(view, "custom-say-2", t("custom.say.2", {' in connect
+    # "Connect": nothing is sent unless the sentence is on the sheet at that moment.
+    press = function_body(connect, "async function connect(ctx, sheet, view) {")
+    guard = "if (!view.told || view.busy) return;"
+    assert press.splitlines()[1].strip() == guard, "the guard is not the first thing Connect does"
+    assert press.index(guard) < press.index("api.connectWrite(")
+    # "Add the app and show the text": the same, before an app is added.
+    show = function_body(connect, "async function showText(ctx, sheet, view) {")
+    guard = "if (!view.told || hand.busy) return;"
+    assert show.splitlines()[2].strip() == guard
+    assert show.index(guard) < show.index("addWithAccess(") < show.index("api.connect(")
+    # "Add" on the fourth tile: the same, and only the sentence of this app counts. While a
+    # field is empty the sentence that holds for every app stands there, and it allows nothing.
+    add = function_body(connect, "async function addCustom(ctx, sheet, view) {")
+    guard = "if (!view.told || form.busy || !NAME_PATTERN.test(name) || !destination) return;"
+    assert add.splitlines()[4].strip() == guard
+    assert add.index(guard) < add.index("addWithAccess(")
+    custom = function_body(connect, "function drawCustom(ctx, sheet, view) {")
     assert (
-        'groups.length > 1 ? proLink("Change in Pro", "#/pro/apps", '
-        '{ key: `change-${app.name}`, class: "link basic-app-change" }) '
-        ": changeButton(ctx, app, settings),"
-    ) in basic
-    sheet = function_body(basic, "async function openAppSheet(ctx, name) {")
-    assert "if (!app || !settings || data.collections.length > 1) return;" in sheet
-    # It starts on what is in force and offers the three choices in the order of care.
-    assert 'inForce: group ? grantOf(app, group.name) : "none",' in sheet
-    assert 'mode: group ? grantOf(app, group.name) : "none",' in sheet
-    assert '["approve", "read", "none"].map((mode) =>' in sheet
-    assert 'name: "basic-mode",' in sheet
-    assert "checked: form.mode === mode," in sheet
-    assert "GRANT_LABEL[mode]" in sheet
-    buttons = sheet[sheet.index("sheetFoot(") :]
-    assert buttons.index('button("Cancel", {') < buttons.index('"Save", {')
-    assert "autofocus: true" in buttons[: buttons.index('"Save", {')]
-    assert "disabled: form.mode === form.inForce," in buttons
-    # Nothing but the press on "Save" saves: the sheet is no form that a key could send.
-    assert "onclick: () => saveAccess(ctx, self, form, form.mode)," in buttons
-    assert basic.count("saveAccess(") == 2  # where it is defined, and behind "Save"
-    assert "onsubmit" not in basic
-    assert '"submit"' not in basic
-    # The two figures of "Can read" are the vault's own.
-    lines = function_body(basic, "function accessLines(settings) {")
-    assert "percent(settings.per_document.max_fraction)" in lines
-    assert "settings.per_document.max_chars" in lines
-    # "Save" opens the documents to apps that send text to a provider only when the sheet says so.
-    save = function_body(basic, "async function saveAccess(ctx, sheet, form, mode) {")
-    assert "if (form.opensShown) body.allow_hosted = true;" in save
-    assert save.count("allow_hosted") == 1
-    assert "await api.setGrant(form.app.name, form.group, mode);" in save
-    said = function_body(basic, "function opensLine(form) {")
-    assert "form.opensShown = true;" in said
-    assert (
-        "Saving also opens your documents to apps that send text to a provider. "
-        "No other app gets access by that."
-    ) in said
-    assert basic.count("opensShown = true") == 1
-    assert 'form.mode !== "none" && form.closed ? opensLine(form) : null,' in sheet
-    # When the owner closes the sheet that asks for the passphrase, the choice goes back to what
-    # is in force, and the sheet never says "nothing was changed" after something was.
-    failed = save[save.index("} catch (error) {") :]
-    assert 'const gaveUp = error.code === "cancelled";' in failed
-    assert "if (gaveUp) form.mode = form.inForce;" in failed
-    assert failed.index("if (opened) {") < failed.index("form.error = error.message;")
-    assert 'id: "basic-error", key: "error", role: "alert"' in sheet
-    api = without_comments(scripts()["api.js"])
-    # ("Nothing was changed.", common.error.cancelled in the text tables.)
-    assert 'throw new ApiError(403, "cancelled", t("common.error.cancelled"));' in api
+        'ready ? whereTextGoes(view, "custom-say-2", t("custom.say.2", '
+        "{ name: form.name, destination })) : "
+        'amberNote("custom-say-2", t("docs.say.2.general")),'
+    ) in custom
+    # The three requests that give access are made by one function, which these two call.
+    assert connect.count("api.setGrant(") == connect.count("api.addApp(") == 1
+    giving = function_body(connect, "async function addWithAccess(ctx, name, destination) {")
+    assert "api.setGrant(" in giving
+    assert "api.addApp(" in giving
+    # Home itself gives no access and writes no file: a tile only opens its sheet.
+    home = sources["home.js"]
+    for call in ("setGrant", "addApp", "connectWrite", "connectRemove", "connectLook"):
+        assert call not in home, f"Home calls {call}"
 
 
 def test_adding_to_one_of_several_groups_chooses_no_group_for_the_owner() -> None:
@@ -1234,9 +1263,10 @@ def test_after_a_sealed_file_the_page_says_which_apps_can_ask_for_it() -> None:
 
 
 def test_a_sheet_that_opens_or_closes_over_the_cards_makes_release_wait_again() -> None:
-    # The Basic page has its cards and its sheets on one page. When a sheet closes, a second
-    # press that was meant for one of its buttons meets what is under it; that must not be an
-    # armed "Release once".
+    # Home has its cards and its sheets on one page. When a sheet closes, a second press that
+    # was meant for one of its buttons meets what is under it; that must not be an armed
+    # "Release once". So for the answer of the box that asks, which comes and goes with a press
+    # and whose two buttons look like those of a card.
     parts = without_comments(scripts()["parts.js"])
     opening = function_body(parts, "export function openSheet(build, options = {}) {")
     closing = opening[opening.index('dialog.addEventListener("close", () => {') :]
@@ -1253,9 +1283,15 @@ def test_a_sheet_that_opens_or_closes_over_the_cards_makes_release_wait_again() 
         r"watchSheets\(\(open\) => \{\s*ctx\.ui\.sheets = open;\s*schedule\(\);\s*\}\);", main
     )
     assert "queueMicrotask(() => {" in function_body(main, "function schedule() {")
-    basic = without_comments(scripts()["basic.js"])
-    around = basic[basic.index("const around = [") :]
-    assert 'ctx.ui.sheets > 0 ? "sheet" : "",' in around[: around.index("].join(")]
+    home = without_comments(scripts()["home.js"])
+    around = home[home.index("const around = [") :]
+    around = around[: around.index("].join(")]
+    assert 'ctx.ui.sheets > 0 ? "sheet" : "",' in around
+    assert 'box.answer ? "trial" : "",' in around
+    assert "noticesSignature(ctx)," in around
+    assert home.count("const around = [") == 1
+    waiting = function_body(home, "function waitingPart(ctx, problem) {")
+    assert "approvalCards(ctx, { limit: all ? null : CARDS_AT_FIRST, around });" in waiting
 
 
 def test_pro_reads_what_belongs_to_a_group_by_that_group_alone() -> None:
@@ -1271,16 +1307,18 @@ def test_pro_reads_what_belongs_to_a_group_by_that_group_alone() -> None:
     assert "notes: Object.create(null)," in read["main.js"]
 
 
-def test_basic_reads_what_belongs_to_a_group_by_that_group_alone() -> None:
+def test_the_simple_pages_read_what_belongs_to_a_group_by_that_group_alone() -> None:
     # A group may be named by a word that every object of the page answers to ("constructor").
     # Read carelessly, such a name gives something that is neither an access nor a list of files,
-    # and the page that draws from it shows nothing at all. So on Home and on the page Documents.
-    for name in ("basic.js", "pages.js"):
-        code = without_comments(scripts()[name])
-        read = function_body(code, "function grantOf(app, group) {")
-        assert "Object.prototype.hasOwnProperty.call(grants, group)" in read, name
-        assert 'return mode === "approve" || mode === "read" ? mode : "none";' in read, name
-        assert re.search(r"\.grants\[", code) is None, f"{name} reads an access without that check"
+    # and the page that draws from it shows nothing at all. So on the page Documents; Home and
+    # the sheets of its tiles never read an access by the name of a group at all.
+    code = without_comments(scripts()["pages.js"])
+    read = function_body(code, "function grantOf(app, group) {")
+    assert "Object.prototype.hasOwnProperty.call(grants, group)" in read
+    assert 'return mode === "approve" || mode === "read" ? mode : "none";' in read
+    for name in ("pages.js", "home.js", "connect.js"):
+        found = re.search(r"\.grants\[", without_comments(scripts()[name]))
+        assert found is None, f"{name} reads an access without that check"
     manage = without_comments(scripts()["manage.js"])
     state = function_body(manage, "function uploadState(ctx, collection) {")
     assert "if (!Object.prototype.hasOwnProperty.call(ctx.ui.uploads, collection))" in state
@@ -1294,6 +1332,15 @@ def test_basic_reads_what_belongs_to_a_group_by_that_group_alone() -> None:
     assert readers.count('grantOf(app, name) !== "none"') == 1
     line = function_body(manage, "export function whoLine(ctx, collection) {")
     assert '["approve", "read"].includes(app.grants[collection])' in line
+    # A word the app answers with picks a text only where the page knows that word.
+    home = without_comments(scripts()["home.js"])
+    assert "own.call(NOTICE, warning.code) ? t(NOTICE[warning.code], " in home
+    assert "own.call(TILE_NAME, entry.tile) ? TILE_NAME[entry.tile] : " in home
+    connect = without_comments(scripts()["connect.js"])
+    assert "own.call(REFUSED, word) ? REFUSED[word] : " in connect
+    assert (
+        "Object.prototype.hasOwnProperty.call(said, answer.file) ? said[answer.file] : " in connect
+    )
 
 
 def test_what_the_product_cannot_do_is_one_list_in_both_views() -> None:
@@ -1319,9 +1366,9 @@ def test_what_the_product_cannot_do_is_one_list_in_both_views() -> None:
     assert 'href: "#/how" }, t("how.title")' in function_body(
         pages, "export function settingsPage(ctx) {"
     )
-    basic = without_comments(scripts()["basic.js"])
-    assert 'id: "home-how", href: "#/how" }, t("home.button.how")' in basic
-    assert "openCannot" not in basic
+    home = without_comments(scripts()["home.js"])
+    assert 'id: "home-how", href: "#/how" }, t("home.button.how")' in home
+    assert "openCannot" not in home
     # Neither the statements nor the line about the version are written a second time: the
     # scripts name each key once, and each table holds each text once.
     pages = {name: code for name, code in scripts().items() if not name.startswith("text-")}
@@ -1340,32 +1387,33 @@ def test_what_the_product_cannot_do_is_one_list_in_both_views() -> None:
     assert english.count("Take text back.") == 1
 
 
-def test_the_sample_letter_is_recognised_by_its_title_and_its_length() -> None:
+def test_the_samples_are_recognised_by_title_and_length() -> None:
+    held = samples()
+    assert sorted(held) == ["en", "pl"]
+    assert held["en"][0] == "Sample rental agreement (invented).txt"
+    assert held["pl"][0] == "Umowa najmu (zmyślony przykład).txt"
+    for code, (file, title, text) in held.items():
+        assert file == f"{title}.txt", "the vault makes the title from the name of the file"
+        assert "\\" not in text, code
+        # The page tells a sample by its title and its number of characters together. So the
+        # vault must count the text exactly as the page does: nothing in it is changed when it
+        # is sealed. (A character outside the basic plane would count twice on the page.)
+        assert textproc.sanitize(text).strip("\n") == text, code
+        assert all(ord(character) < 0x10000 for character in text), code
+        assert unicodedata.normalize("NFC", text) == text, code
+        # It is long enough to be more than one passage: the box that asks shows one of them.
+        assert len(textproc.chunk_spans(text)) >= 3, code
+    assert held["en"][2] != held["pl"][2]
+    assert len(held["en"][2]) != len(held["pl"][2]), "the two could be taken for each other"
     manage = without_comments(scripts()["manage.js"])
-    sample = re.search(
-        r'export const SAMPLE = \{\s*file: "([^"]+)",\s*title: "([^"]+)",\s*'
-        r'text:((?:\s*"[^"\n]*"\s*\+?)+),\s*\};',
-        manage,
-    )
-    assert sample is not None
-    file, title, pieces = sample.groups()
-    assert file == "invented-sample-letter.txt"
-    assert title == "invented-sample-letter"
-    assert file == f"{title}.txt", "the vault makes the title from the name of the file"
-    text = "".join(re.findall(r'"([^"\n]*)"', pieces)).replace("\\n", "\n")
-    assert "\\" not in text
-    assert text.startswith("SAMPLE DOCUMENT, INVENTED. ")
-    assert "Nothing in it is real." in text
-    # The page tells the letter by its title and its number of characters together. So the vault
-    # must count the text exactly as the page does: nothing in it is changed when it is sealed,
-    # and it is one passage.
-    assert text.isascii()
-    assert textproc.sanitize(text).strip("\n") == text
-    assert len(textproc.chunk_spans(text)) == 1
-    recognised = function_body(manage, "export function isSample(document) {")
+    which = function_body(manage, "export function sampleOf(document) {")
     assert (
-        "return document.title === SAMPLE.title && document.characters === SAMPLE.text.length;"
-    ) in recognised
+        "if (document.title === SAMPLE[code].title && "
+        "document.characters === SAMPLE[code].text.length) return code;"
+    ) in which
+    assert "return sampleOf(document) !== null;" in function_body(
+        manage, "export function isSample(document) {"
+    )
     # The page Documents says that it is there, and offers to remove it through today's sheet.
     # ("One of them is the invented sample document.", "Remove it": docs.status.sample and
     # docs.button.sample.remove.)
@@ -1377,10 +1425,36 @@ def test_the_sample_letter_is_recognised_by_its_title_and_its_length() -> None:
         'button(t("docs.button.sample.remove"), { small: true, id: "sample-remove", '
         "onclick: () => removeDocument(ctx, sample.document) })"
     ) in page
+    # The box that asks holds the sample's question only while the sample of the language the
+    # page shows is the vault's one document, and only until something was typed.
+    home = without_comments(scripts()["home.js"])
+    shown = function_body(home, "function shownQuestion(ctx) {")
+    assert "if (box.typed) return box.question;" in shown
+    assert 'return onlySample(ctx) === language() ? t("ask.sample.question") : "";' in shown
+    assert "return held.length === 1 ? sampleOf(held[0]) : null;" in function_body(
+        home, "function onlySample(ctx) {"
+    )
 
 
-def test_first_run_and_basic_name_no_protocol() -> None:
-    for name in ("gateway.js", "basic.js", "pages.js"):
+def test_the_protocol_is_named_only_on_the_custom_tile() -> None:
+    # A new person reads "Claude", "ChatGPT", "Grok" and "Other app". The protocol's name
+    # stands where it helps the one who knows it: on the fourth tile, in its sheet, and in the
+    # notice about the package of that name. No text of either table holds an address.
+    may = ("tile.status.custom.connect", "notice.no_sdk.say.1")
+    for name in TABLES:
+        naming = set()
+        for key, texts in table(name).items():
+            for text in texts:
+                assert "://" not in text, f"{name} {key} holds an address"
+                assert "Model Context Protocol" not in text, f"{name} {key}"
+                if re.search(r"\bMCP\b", text):
+                    naming.add(key)
+        assert naming
+        for key in naming:
+            assert key in may or key.startswith("custom."), f"{name} {key} names the protocol"
+        assert "tile.status.custom.connect" in naming
+    # The scripts of the simple interface hold no text of their own that names it.
+    for name in ("gateway.js", "home.js", "connect.js", "pages.js"):
         for text in quoted_texts(scripts()[name]):
             for word in ("MCP", "Model Context Protocol", "://"):
                 assert word not in text, f"{name} shows {word!r}: {text[:80]!r}"
@@ -1393,8 +1467,17 @@ def test_sentences_that_are_not_true_are_absent() -> None:
     for name, source in scripts().items():
         shown = "\n".join(quoted_texts(source)).lower()
         assert shown.count("nothing can leave") == standing.get(name, 0), name
-        for phrase in ("always replaced", "ran out unused", "is connected", "recommended"):
+        for phrase in (
+            "always replaced",
+            "ran out unused",
+            "is connected",
+            "recommended",
+            "jest połączona",
+            "jest połączony",
+            "zalecan",
+        ):
             assert phrase not in shown, f"{name} says {phrase!r}"
+    assert {"text-en.js", "text-pl.js"} <= set(scripts())
 
 
 def test_no_browser_permission_is_asked() -> None:
@@ -1460,7 +1543,7 @@ def test_the_start_page_is_kept_without_a_word() -> None:
     assert "applyState(await api.setInterface({ view }));" in kept
     assert "toast" not in kept
     assert "toastError(error);" in failed
-    assert "toast" not in function_body(main, "async function setUpInPro() {")
+    assert "setUpInPro" not in main
     assert "  keepView," in main[main.index("const ctx = {") : main.index("let queued = false;")]
     # The switch "View", the bar of a visit to Pro and "Stay in Pro" are gone, with their words.
     for gone in ("VIEW_OPTIONS", "viewChoice", "viewSwitch", "visitBar", "stayInPro", "chooseView"):
@@ -1485,7 +1568,9 @@ def test_the_six_pages_are_pro_whatever_view_is_kept() -> None:
     main = without_comments(scripts()["main.js"])
     route = function_body(main, "function routeFromHash() {")
     # The addresses, in the order they are tried: the simple pages; the six pages under "pro";
-    # the addresses from before; a step of setting up; and only then what the app keeps.
+    # the addresses Home had before ("#/basic", and "#/setup" with whatever followed it, the
+    # three steps that are gone); the addresses from before of four of the six pages; and only
+    # then what the app keeps.
     simple = route.index(
         'if (name === "home" || Object.prototype.hasOwnProperty.call(PAGES, name)) return name;'
     )
@@ -1493,9 +1578,14 @@ def test_the_six_pages_are_pro_whatever_view_is_kept() -> None:
         'if (name === "pro") return Object.prototype.hasOwnProperty.call(VIEWS, step) ? '
         '`pro/${step}` : "pro/overview";'
     )
-    basic = route.index('if (name === "basic") return "home";')
+    before = route.index('if (HOME_BEFORE.includes(name)) return "home";')
     old = route.index("if (OLD_ADDRESSES.includes(name)) return `pro/${name}`;")
-    assert simple < pro < basic < old < route.index("return defaultRoute();")
+    assert simple < pro < before < old < route.index("return defaultRoute();")
+    assert 'const HOME_BEFORE = ["basic", "setup"];' in main
+    # No screen is a step any more: the route "setup" is gone, with everything that drew it.
+    assert '"setup"' not in main.replace('const HOME_BEFORE = ["basic", "setup"];', "")
+    for gone in ("setupScreen", "SETUP_STEPS", "setup/", "loadMoreLeft", "placeNow"):
+        assert gone not in main, gone
     pages = re.search(r"const PAGES = \{(.*?)\};", main, re.S)
     assert pages is not None
     assert re.findall(r"^\s+(\w+): \w+,$", pages.group(1), re.M) == [
@@ -1520,7 +1610,9 @@ def test_the_six_pages_are_pro_whatever_view_is_kept() -> None:
     # An address from before becomes the address its page has now; one that names no page is
     # left as it is.
     settle = function_body(main, "function settleAddress() {")
-    assert 'if (name !== "basic" && !OLD_ADDRESSES.includes(name)) return;' in settle
+    home = settle[settle.index("if (HOME_BEFORE.includes(name)) {") :]
+    assert 'window.history.replaceState(null, "", "#/home");' in home[: home.index("}")]
+    assert "if (!OLD_ADDRESSES.includes(name)) return;" in settle
     assert 'window.history.replaceState(null, "", `#/${ctx.route}${query}`);' in settle
     # Only an address that names no page is decided by what the app keeps.
     fallback = function_body(main, "function defaultRoute() {")
@@ -1534,7 +1626,7 @@ def test_the_six_pages_are_pro_whatever_view_is_kept() -> None:
     for name, source in scripts().items():
         for address in re.findall(r'"#/([a-z/]*)', without_comments(source)):
             first = address.split("/")[0]
-            assert first in ("home", "documents", "activity", "settings", "how", "pro", "setup"), (
+            assert first in ("home", "documents", "activity", "settings", "how", "pro"), (
                 f"{name} links to #/{address}"
             )
     for name in ("views.js", "manage.js", "sheets.js"):
@@ -1547,7 +1639,10 @@ def test_the_six_pages_are_pro_whatever_view_is_kept() -> None:
     assert 'api.activity({ limit: STOPS_PAGE, kind: "refusal" })' in main
     assert "page: await api.activity({ limit: ROWS_PAGE, kind: tab })" in main
     assert "const ROWS_PAGE = 20;" in main
-    assert 'home: ["apps", "approvals", "settings", "documents", "left", "stops"],' in main
+    assert "const LEFT_FIRST = 3;" in main
+    # Home asks for the documents too: its first card adds one, and its box has to know whether
+    # the invented sample is the vault's only document. It asks for no settings of the vault.
+    assert 'home: ["apps", "approvals", "documents", "left", "stops"],' in main
     # What each plain page loads.
     for needs in (
         'documents: ["documents", "apps"],',
@@ -1685,472 +1780,690 @@ def test_the_details_fold_the_record_on_every_page_that_is_not_one_of_the_six() 
     # Each entry starts folded, and opening or closing the details is told to the cards.
     main = without_comments(scripts()["main.js"])
     assert "ctx.ui.panelMore = false;" in function_body(main, "function openPanel(seq, ")
-    basic = without_comments(scripts()["basic.js"])
-    around = basic[basic.index("const around = [") :]
+    home = without_comments(scripts()["home.js"])
+    around = home[home.index("const around = [") :]
     assert 'ctx.panel ? "panel" : "",' in around[: around.index("].join(")]
 
 
-# -- setting up: three steps that are addresses -------------------------------------
+# -- the first steps: three cards of Home, and no screen of their own ----------------
 
 
-def test_the_first_run_lives_in_the_address_and_the_vault_not_in_the_page() -> None:
+def test_the_samples_say_that_they_are_invented_and_are_sent_apart() -> None:
+    # Each of the two says in its title and in its first paragraph that it is invented, in its
+    # language: the title stands on every row and card, and the first paragraph is what a
+    # reader of the document meets first.
+    invented = {"en": ("invented", "do not exist"), "pl": ("zmyślony", "nie istnieją")}
+    for code, (file, title, text) in samples().items():
+        word, nobody = invented[code]
+        first = text.split("\n\n")[0]
+        assert word in title, code
+        assert word in file, code
+        assert word in first, code
+        assert nobody in first, code
     sources = {name: without_comments(source) for name, source in scripts().items()}
-    for name, code in sources.items():
-        assert "onboarding" not in code, f"{name} keeps the first run in the page's memory"
-    main = sources["main.js"]
-    assert 'const SETUP_STEPS = ["app", "documents", "connect"];' in main
-    route = function_body(main, "function routeFromHash() {")
-    assert 'ctx.setupStep = SETUP_STEPS.includes(step) ? step : "app";' in route
-    assert route.index('return "setup";') < route.index("return defaultRoute();")
-    screen = function_body(main, "function screen() {")
-    step = 'if (ctx.route === "setup") return setupScreen(ctx, loadProblem());'
-    assert screen.index("return lockedScreen(ctx);") < screen.index(step)
-    assert screen.index(step) < screen.index('if (ctx.route.startsWith("pro/"))')
-    # What a step loads, and what the step "First question" loads besides: the calls of its app,
-    # asked for by the app's name.
-    assert 'setup: ["apps", "approvals", "settings", "documents", "stops"],' in main
-    needs = function_body(main, "function needs() {")
-    assert (
-        'if (ctx.route === "setup" && ctx.setupStep === "connect") '
-        'return NEEDS.setup.concat("asked");'
-    ) in needs
-    asked = function_body(main, "async function loadAsked() {")
-    assert "const page = await api.activity({ limit: ASKED_FIRST, app });" in asked
-    # A step that opens has cards that appear anew, an empty form and its title in focus.
-    opened = function_body(main, "function onRoute() {")
-    assert "openStep(ctx);" in opened
-    gateway = sources["gateway.js"]
-    opening = function_body(gateway, "export function openStep(ctx) {")
-    assert "ctx.ui.setup = freshFirstRun().setup;" in opening
-    assert 'ctx.ui.focusId = "setup-title";' in opening
-    # After "Create my vault" the address names the step that adds an app, or Overview of the
-    # six pages.
-    created = function_body(gateway, "async function createVault(ctx) {")
-    assert (
-        'ctx.navigate(state.interface && state.interface.view === "basic" ? '
-        '"setup/app" : "pro/overview");'
-    ) in created
-    assert created.index("ctx.navigate(") < created.index("ctx.applyState(state);")
-    # Four parts, and pairing is not one of them. A part carries a check only when it is true of
-    # the vault.
-    assert 'const STEPS = ["Passphrase", "App", "Documents", "First question"];' in gateway
-    stepper = function_body(gateway, "function stepper(current, done = []) {")
-    assert "const checked = done[index] === true && !here;" in stepper
-    head = function_body(gateway, "function stepsHead(ctx, current) {")
-    assert "return stepper(current, [true, facts.app, facts.document, facts.asked]);" in head
-    assert "if (!ctx.ui.steps.guided) return null;" in head
-    # The cards keep the keys the walk-throughs know; the card that only showed a configuration
-    # and the three-way choice of access are gone.
-    for key in ('key: "step-3"', 'key: "step-2"', 'key: "step-4"'):
-        assert key in gateway, key
-    for gone in ("step-3-done", "Open the vault", "goes-to", "connectBlocks(", "connectTitle("):
-        assert gone not in gateway, gone
-    frame = function_body(gateway, 'export function setupScreen(ctx, problem = "") {')
-    assert '"You can stop at any point. What you have done stays. ",' in frame
-    assert '"Set everything up yourself in Pro",' in frame
-    assert "bar: problemBar(ctx, problem)," in frame
-    # The foot link has the app open on the six pages, through the one function that keeps
-    # that choice.
-    pro = function_body(main, "async function setUpInPro() {")
-    assert 'if (!known && !(await keepView("pro"))) return;' in pro
-    assert 'navigate("pro/overview");' in pro
-
-
-def test_the_app_step_ticks_nothing_and_gives_ask_me_each_time() -> None:
-    gateway = without_comments(scripts()["gateway.js"])
-    fresh = function_body(gateway, "export function freshFirstRun() {")
-    assert "setup: { choice: null, " in fresh
-    step = function_body(gateway, "function appStep(ctx) {")
-    assert 'name: "first-app-known",' in step
-    # A row is ticked when it is the owner's choice, and for no other reason. Only the press on
-    # a row makes a choice.
-    assert re.findall(r"\bchecked: ([^,\n]+),", step) == ["form.choice === entry.id"]
-    assert gateway.count("form.choice = ") == 1
-    assert "form.choice = entry.id;" in function_body(gateway, "function chooseApp(ctx, entry) {")
-    assert "onchange: () => chooseApp(ctx, entry)," in step
-    assert gateway.count("chooseApp(") == 2
-    # The rows are the programs that can be connected. "Another app" is one of them only while
-    # the vault has no app.
-    assert (
-        "known.filter((entry) => entry.local_program && "
-        '(entry.id !== "generic" || data.apps.length === 0));'
-    ) in step
-    # What the app may do is stated and not asked: "Ask me each time", for every app.
-    assert re.findall(r"api\.setGrant\(([^)]*)\)", gateway) == ['app.name, group, "approve"']
-    for absent in ("first-mode", '"read"', "segmented(", "GRANT_LABEL"):
-        assert absent not in gateway, absent
-    assert 'el("strong", null, "Ask me each time."),' in step
-    assert "`Let ${form.name} ask me each time`" in step
-    assert '"Choose an app"' in step
-    assert "disabled: !ready," in step
-    # The size of a passage is the vault's own figure.
-    assert "num(settings.ceilings.passage_chars)" in step
-    assert re.search(r"(?<![\w.])\d{3,}(?![\w.])", step) is None
-    # Where one value would not describe what a new app may do, the step adds none.
-    assert "if (data.collections.length > 1 || data.apps.some((app) => !app.hosted)) {" in step
-    # A name that is taken is said, and no other name is made up.
-    add = function_body(gateway, "async function addFirstApp(ctx) {")
-    assert 'form.taken = error.code === "conflict" ? form.name : "";' in add
-    assert add.count("api.addApp(") == 1
-
-
-def test_the_sample_letter_says_that_it_is_invented_and_is_sent_apart() -> None:
-    sources = {name: without_comments(source) for name, source in scripts().items()}
-    manage = sources["manage.js"]
-    assert 'file: "invented-sample-letter.txt",' in manage
-    assert '"SAMPLE DOCUMENT, INVENTED. It was added to try out the vault. ' in manage
-    gateway = sources["gateway.js"]
-    send = function_body(gateway, "async function addSample(ctx, group) {")
-    assert "const answer = await api.addDocument(group, SAMPLE.file, SAMPLE.text);" in send
+    home = sources["home.js"]
+    send = function_body(home, "async function addSample(ctx, group) {")
+    # The sample of the language the page shows; English where a language has none.
+    assert "const sample = SAMPLE[language()] || SAMPLE.en;" in send
+    assert "await api.addDocument(group, sample.file, sample.text);" in send
     # It is sent by its own function and never through the one that sends the owner's files, so
     # it is not among the files of which the page says that they are still where they were.
-    assert gateway.count("api.addDocument(") == 1
-    assert "uploadFiles(" not in gateway
-    # Never without a press: the one call stands in the handler of its button.
-    assert gateway.count("addSample(") == 2
-    step = function_body(gateway, "function documentsStep(ctx) {")
-    assert "onclick: () => addSample(ctx, group)," in step
-    assert 'id: "sample-add",' in step
-    # No other script sends the letter.
-    for name, code in sources.items():
-        if name != "gateway.js":
-            assert "SAMPLE.file" not in code, name
-    # The step's zone says who can ask for a file, and the step says where text goes.
+    assert home.count("api.addDocument(") == 1
+    assert "uploadFiles(" not in send
+    said = function_body(home, "function addCard(ctx, facts) {")
+    assert 't("home.new.result.sample")' in said
+    assert 'sealed.length ? el("li", { class: "upload-said", key: "outside" }' in said
+    assert 'const sealed = chosen.filter((entry) => entry.item.status === "done");' in said
+    # Never without a press: the one call stands in the handler of its button, which is not
+    # the filled one. Where the vault has several groups, none is chosen for the owner.
+    assert home.count("addSample(") == 2
     assert (
-        "dropZone(ctx, group, { large: true, who: true, filled: total === 0 && !refused })," in step
+        'groups.length === 1\n                ? button(t("home.new.card1.button.sample"), '
+        '{ kind: "quiet", id: "first-sample", busy: first.sampleBusy, '
+        "onclick: () => addSample(ctx, groups[0]) })"
+    ) in said
+    # No other script sends a sample: the one other place that adds a document sends a file
+    # the owner chose, with the text read from that file.
+    senders = {name for name, code in sources.items() if "api.addDocument(" in code}
+    assert senders == {"home.js", "manage.js"}
+    assert sources["manage.js"].count("api.addDocument(") == 1
+    upload = function_body(
+        sources["manage.js"], "export async function uploadFiles(ctx, collection, files) {"
     )
-    assert (
-        'senders.length ? amber("docs-sentence", senders.length === 1 ? '
-        "basicGrantSentence(senders[0]) : generalSentence()) : null,"
-    ) in step
+    assert "api.addDocument(" in upload
+    assert "SAMPLE" not in upload
+    for name, code in sources.items():
+        if name not in ("home.js", "manage.js"):
+            assert "SAMPLE" not in code, name
+    # Who can ask for a file that was sealed is said on the card, and what can be read stands
+    # where the choice is made.
+    assert "who.map((name) => whoLine(ctx, name))," in said
+    assert 't("docs.status.types", { size: megabytes(rules.max_bytes) })' in said
 
 
 def test_no_sentence_about_another_program_is_shown_that_nobody_checked() -> None:
-    # The app can write a line for a terminal that opens a settings file in the system's editor.
-    # What that line does in another program was not tried with that program, so the page shows
-    # neither the line nor a sentence about it: the file is opened in whatever editor the owner has.
+    # The app once wrote a line for a terminal that opened a settings file in the system's
+    # editor. What such a line does in another program was never tried with that program: the
+    # line is gone, and no script shows a sentence about another program's menus or keys. What
+    # the tables may say about other programs is a fixed list of keys
+    # (test_what_is_said_about_other_programs in test_gate_interface_texts.py).
     for name, source in scripts().items():
         assert "open_line" not in without_comments(source), f"{name} reads the line"
         shown = "\n".join(quoted_texts(source))
-        for word in ("TextEdit", "xdg-open", "pbcopy", "\u2318Q", "\u2318A", "\u2318V", "\u2318S"):
+        for word in ("TextEdit", "xdg-open", "pbcopy", "⌘Q", "⌘A", "⌘V", "⌘S"):
             assert word not in shown, f"{name} says {word!r}"
-    gateway = without_comments(scripts()["gateway.js"])
-    steps = function_body(gateway, "function fileSteps(ctx, ask, app, connect, block, check) {")
-    assert '"Open this file in a plain-text editor:"' in steps
-    assert '"Make this file in a plain-text editor:"' in steps
-    assert '"Copy the path"' in function_body(gateway, "function pathLine(ctx, path) {")
-    # The three places an entry can go in a file that holds other settings.
-    for where in (
-        "Inside \u201cmcpServers\u201d, after its last entry, type a comma, then paste this:",
-        "Between the braces after \u201cmcpServers\u201d, paste this:",
-        "Right after the first \u201c{\u201d, paste this, then type a comma:",
-        "Replace that entry with this one:",
-    ):
-        assert where in steps, where
+    # The way by hand says where in the file the text goes in one of four fixed lines, chosen
+    # by what the look found; where the file could not be read, no line claims a place.
+    connect = without_comments(scripts()["connect.js"])
+    where = function_body(connect, "function whereToPaste(look, block) {")
+    assert sorted(set(re.findall(r'key: "(connect\.hand\.status\.[a-z]+)"', where))) == [
+        "connect.hand.status.empty",
+        "connect.hand.status.end",
+        "connect.hand.status.inside",
+        "connect.hand.status.none",
+    ]
+    assert where.rstrip().endswith("return { key: null, text: whole };")
 
 
 def test_a_settings_file_is_looked_at_only_on_a_press() -> None:
     sources = {name: without_comments(source) for name, source in scripts().items()}
     for name, code in sources.items():
-        if name not in ("api.js", "gateway.js"):
-            assert "checkConnect" not in code, f"{name} looks at a settings file"
-    gateway = sources["gateway.js"]
-    assert gateway.count("api.checkConnect(") == 1
-    look = function_body(gateway, "async function checkFile(ctx, ask, name, host) {")
-    assert "ask.check = await api.checkConnect(name, host);" in look
-    # The one call stands in the handler of the button, and this module has no timer at all.
-    assert gateway.count("checkFile(") == 2
-    button = function_body(gateway, "function checkButton(ctx, ask, app, connect, filled) {")
-    assert "onclick: () => checkFile(ctx, ask, app.name, connect.host)," in button
-    assert "setTimeout" not in gateway
-    assert "setInterval" not in gateway
-    # What was found is one of the app's words, and each has its sentence.
-    found = function_body(gateway, "function foundWords(check, label, block) {")
-    for state in (
-        "present",
+        assert "checkConnect" not in code, f"{name} names the look that is gone"
+        if name not in ("api.js", "connect.js"):
+            assert "connectLook" not in code, f"{name} looks at a settings file"
+    connect = sources["connect.js"]
+    assert connect.count("api.connectLook(") == 1
+    look = function_body(connect, "async function lookAt(ctx, sheet, view) {")
+    assert "settle(ctx, view, await api.connectLook(view.tile.host));" in look
+    # The one call is reached from the function a press on a tile runs and from "Look again",
+    # and from nowhere else.
+    calls = re.findall(r"^.*\blookAt\(ctx, sheet, view\).*$", connect, re.M)
+    assert len(calls) == 5  # its definition; the press on a tile; "Look again" in three states
+    assert calls[0].startswith("async function lookAt(")
+    assert sum("if (!demo) lookAt(ctx, sheet, view);" in line for line in calls) == 1
+    assert (
+        sum(
+            'button(t("connect.button.look"), { kind: "primary", id: "connect-look", '
+            "onclick: () => lookAt(ctx, sheet, view) })" in line
+            for line in calls
+        )
+        == 3
+    )
+    opened = function_body(connect, "export function openConnect(ctx, tile) {")
+    assert "if (!demo) lookAt(ctx, sheet, view);" in opened
+    # A press on a tile is the one thing that opens its sheet.
+    home = sources["home.js"]
+    assert home.count("openConnect(") == 1  # the handler of a tile
+    assert "onclick: () => (custom ? openCustom(ctx) : openConnect(ctx, entry))," in home
+    # No timer in the script of the sheets, and no load or draw that looks.
+    assert "setTimeout" not in connect
+    assert "setInterval" not in connect
+    for head in ("function drawConnect(ctx, sheet, view) {", "function settle(ctx, view, look) {"):
+        assert "api." not in function_body(connect, head), head
+    # In a demo no look is asked at all.
+    assert 'state: demo ? "refused" : "looking", word: demo ? "demo" : "",' in opened
+    # What was found is one of the app's words, and each leads to a state of the sheet.
+    settle = function_body(connect, "function settle(ctx, view, look) {")
+    for word in (
         "no_folder",
-        "no_file",
-        "empty",
-        "other",
-        "differs",
+        "linked",
+        "no_access",
         "unreadable",
         "not_read",
+        "unsupported",
+        "present_as",
+        "present",
+        "present_more",
+        "expands",
+        "unstable",
+        "moved",
     ):
-        assert f'case "{state}":' in found, state
-
-
-def test_the_first_question_says_a_name_and_never_who_asked() -> None:
-    gateway = without_comments(scripts()["gateway.js"])
-    step = function_body(gateway, "function connectStep(ctx, problem) {")
-    waiting = "`Waiting for the first request under the name ${name}. "
-    assert waiting + "This page notices it by itself.`" in step
-    assert "`A first request arrived under the name ${name} ${at(first, ctx.now)}.`" in step
-    assert ", unverified.`" in step
-    # A name is all the page knows: no sentence says that a program called or is connected.
-    shown = "\n".join(quoted_texts(scripts()["gateway.js"]))
-    assert re.search(r"\b(connected|called|calling)\b", shown) is None
-    # The cards come from the one function that draws cards, with what stands around them: the
-    # words of the line above, a bar, a sheet.
-    assert "approvalCards(ctx, { limit: all ? null : 3, around });" in step
-    around = step[step.index("const around = [") :]
-    around = around[: around.index("].join(")]
-    for part in (
-        "words,",
-        'ctx.offline ? "offline" : problem,',
-        'ctx.ui.sheets > 0 ? "sheet" : ""',
-    ):
-        assert part in around, part
-    # Setting up is finished by the first request, never by a release: the three endings have
-    # the same buttons, and "Don't release" is one of the endings.
-    assert "const endButtons = (seq) =>" in step
-    assert step.count("endButtons(") == 3  # the first request, a release that was read, a no
-    assert '"Not released"' in step
-    assert (
-        "`Nothing from that passage left. If ${name} asks again, the passage waits here again.`"
-    ) in step
-    # While a passage waits no button of the screen is the filled one.
-    assert "const filled = anyWaiting === 0;" in step
-    # The way out while nothing has come stores nothing.
-    later = step[step.index('button("Finish later", {') :]
-    assert 'onclick: () => ctx.navigate("home")' in later[:200]
+        assert f'"{word}"' in settle, word
+    assert settle.rstrip().endswith('else view.state = "offer";')
 
 
 def test_setting_up_ends_by_itself_only_where_the_app_keeps_that_word() -> None:
     sources = {name: without_comments(source) for name, source in scripts().items()}
-    basic = sources["basic.js"]
-    still = function_body(basic, "function setupOpen(ctx) {")
-    assert 'return Boolean(kept && kept.stored && kept.setup === "open");' in still
-    done = function_body(basic, "export async function setupDone(ctx) {")
-    assert done.splitlines()[1].strip() == "if (!setupOpen(ctx)) return null;"
+    home = sources["home.js"]
+    still = function_body(home, "function firstOpen(ctx) {")
+    assert (
+        'return Boolean(kept && kept.stored && kept.setup === "open") && ctx.state.demo !== true;'
+    ) in still
+    done = function_body(home, "async function firstDone(ctx) {")
+    assert done.splitlines()[1].strip() == "if (!firstOpen(ctx)) return null;"
     assert 'ctx.applyState(await api.setInterface({ setup: "done" }));' in done
-    # Once the vault has an app, a document and a first request, the page says so once, on
-    # whatever screen it is: after each load.
-    settle = function_body(basic, "export function settleSetup(ctx) {")
-    assert "!setupOpen(ctx) || ctx.ui.setupSaid" in settle
-    assert "if (!facts || !facts.app || !facts.document || !facts.asked) return;" in settle
-    assert settle.index("ctx.ui.setupSaid = true;") < settle.index("setupDone(ctx);")
-    assert "settleSetup(ctx);" in function_body(sources["main.js"], "async function load(names) {")
+    # Once the vault holds a document, the owner has seen a passage or an app has asked, and an
+    # app is registered, the page says so once, on whatever screen it is: after each load.
+    settle = function_body(home, "export function settleFirst(ctx) {")
+    assert "!firstOpen(ctx) || ctx.ui.home.first.said" in settle
+    assert "if (!facts || !facts.document || !facts.asked || !facts.app) return;" in settle
+    assert settle.index("ctx.ui.home.first.said = true;") < settle.index("firstDone(ctx);")
+    assert "settleFirst(ctx);" in function_body(sources["main.js"], "async function load(names) {")
+    facts = function_body(home, "function firstFacts(ctx) {")
+    assert "document: documentsHeld(ctx) > 0," in facts
+    assert "asked: ctx.ui.home.ask.saw || data.apps.some((app) => Boolean(app.last_seen))," in facts
+    assert "app: data.apps.length > 0," in facts
     # Nobody else keeps that word.
     for name, code in sources.items():
-        if name not in ("api.js", "basic.js", "main.js"):
+        if name not in ("api.js", "home.js", "main.js"):
             assert "setInterface" not in code, name
-    # The card on the Basic page: never in a demo, one line, and "Hide" ends it.
-    card = function_body(basic, "function setupCard(ctx) {")
-    assert "if (ctx.state.demo || !setupOpen(ctx)) return null;" in card
-    for words in (
-        '"Next: choose your AI app."',
-        '"Next: add a document."',
-        '"Next: ask your AI app a first question."',
-        '"Finish setting up"',
-        "`${num(done)} of 4 done`",
+    assert home.count("firstDone(") == 3  # its definition, by itself, and "Hide"
+    # The three cards: never in a demo, drawn in place of the parts they hold, and "Hide" ends
+    # them for good. Nothing is drawn twice: card 2 is the box that asks, card 3 the tiles.
+    page = function_body(home, "export function homePage(ctx, problem) {")
+    assert "const first = firstOpen(ctx);" in page
+    assert page.index("? firstSteps(ctx)") < page.index('part("home-ask", ')
+    assert home.count("asker(ctx)") == 3  # its definition, card 2, the part of an ordinary day
+    assert home.count("tiles(ctx, ") == 3  # its definition, card 3, the part of an ordinary day
+    cards = function_body(home, "function firstSteps(ctx) {")
+    assert 'id: "first-hide",' in cards
+    assert "const failed = await firstDone(ctx);" in cards
+    assert 'toast(t("home.new.result.hidden"), "plain");' in cards
+    assert re.findall(r"cardHead\(\d, facts\.\w+, t\(\"([^\"]+)\"\)\)", home) == [
+        "home.new.card1.title",
+        "home.ask.title",
+        "home.new.card3.title",
+    ]
+    # The one filled button of the page: "Choose a file" while the vault holds no document,
+    # "Ask" once it does, and neither while a passage waits for the owner.
+    add = function_body(home, "function addCard(ctx, facts) {")
+    assert "const filled = !somethingWaits(ctx);" in add
+    assert (
+        '{ class: ["btn", filled ? "btn-primary" : "btn-default", "file-button"], '
+        'for: "first-file" }'
+    ) in add
+    box = function_body(home, "function asker(ctx) {")
+    assert 'kind: none || somethingWaits(ctx) ? "default" : "primary",' in box
+    filled = re.findall(r'kind: "primary"|btn-primary', home)
+    assert len(filled) == 1, "Home has a third button that could be filled"
+
+
+# -- the box that asks, the tiles and their sheets ----------------------------------
+
+
+def test_a_trial_sends_nothing_when_it_is_answered() -> None:
+    sources = {name: without_comments(source) for name, source in scripts().items()}
+    home = sources["home.js"]
+    card = function_body(home, "function trialCard(ctx) {")
+    # The two answers of a real card, named by the same keys, the safe one first.
+    assert re.findall(r'button\(t\("(card\.button\.\w+)"\), \{', card) == [
+        "card.button.no",
+        "card.button.yes",
+    ]
+    # Their handlers call no function of the app: a press says what would have happened.
+    assert "api." not in card
+    for word in ("await", "async", "fetch", "decide(", "release(", "dismiss("):
+        assert word not in card, word
+    handlers = re.findall(
+        r'id: "trial-(no|yes)",\s*onclick: \(\) => \{(.*?)\n        \},', card, re.S
+    )
+    assert [which for which, _body in handlers] == ["no", "yes"]
+    for which, body in handlers:
+        assert f'box.pressed = "{which}";' in body
+        assert set(re.findall(r"\b(\w+)\(", body)) == {"render"}, which
+    # It is no approval card: a class of its own, neither button filled, neither waiting.
+    assert (
+        '{ class: "card trial", id: "trial", key: "trial", "aria-label": t("ask.chip.trial") }'
+        in card
+    )
+    assert "approval" not in class_names(home)
+    assert "kind:" not in card
+    assert "releaseArmed" not in home
+    # While a real passage waits for the owner it has no buttons at all, and says why: a press
+    # that is harmless here must not train the hand for the card above.
+    assert (
+        "const real = ctx.data.approvals ? ctx.data.approvals.waiting.length > 0 "
+        ": somethingWaits(ctx);"
+    ) in card
+    foot = card[card.index("let foot;") : card.index('return el(\n    "article",')]
+    branches = foot.split("} else ")
+    assert len(branches) == 3
+    assert branches[0].lstrip().startswith("let foot;\n  if (real) {")
+    assert 't("ask.status.real")' in branches[0]
+    assert "button(" not in branches[0]
+    assert branches[1].startswith("if (box.pressed) {")
+    assert 't(box.pressed === "yes" ? "ask.result.yes" : "ask.result.no")' in branches[1]
+    assert "card.button." in branches[2]
+    # The question is sent from the handler of "Ask" and from nowhere else, and only there.
+    for name, code in sources.items():
+        if name not in ("api.js", "home.js"):
+            assert "tryQuestion" not in code, name
+    assert home.count("api.tryQuestion(") == 1
+    ask = function_body(home, "async function ask(ctx) {")
+    assert "const answer = await api.tryQuestion(question);" in ask
+    assert re.findall(r"^.*(?<![\w.])ask\(ctx\).*$", home, re.M) == [
+        "async function ask(ctx) {",
+        "          ask(ctx);",
+    ]
+    box = function_body(home, "function asker(ctx) {")
+    submit = box[box.index("onsubmit: (event) => {") :]
+    assert "ask(ctx);" in submit[: submit.index("},")]
+    # Nothing is asked for an empty question or while the vault holds no document.
+    assert "if (box.busy || !question || documentsHeld(ctx) === 0) return;" in ask
+    # The answer is this page's memory: leaving Home drops it, and nothing keeps it elsewhere.
+    leave = function_body(home, "export function leaveHome(ctx) {")
+    assert "ctx.ui.home.ask = freshHome().ask;" in leave
+    assert 'if (from === "home") leaveHome(ctx);' in sources["main.js"]
+    for storage in ("sessionStorage", "localStorage", "indexedDB"):
+        assert storage not in home
+
+
+def test_the_trials_first_sentence_follows_the_answer() -> None:
+    home = without_comments(scripts()["home.js"])
+    chosen = function_body(home, "function trialSentence(passage) {")
+    # It reads who can ask for the document that was found, and how; it is never fixed.
+    assert "const apps = passage.apps || [];" in chosen
+    assert 'apps.filter((app) => app.mode === "read")' in chosen
+    assert "passage.groups > 1" in chosen
+    assert re.findall(r't\("(ask\.say\.1[a-z.]*)"', chosen) == [
+        "ask.say.1.read",
+        "ask.say.1",
+        "ask.say.1.none",
+        "ask.say.1.connect",
+    ]
+    order = [
+        'if (readers.length) return t("ask.say.1.read", { apps: readers });',
+        'if (apps.length) return t("ask.say.1");',
+        'return passage.groups > 1 ? t("ask.say.1.none") : t("ask.say.1.connect");',
+    ]
+    places = [chosen.index(line) for line in order]
+    assert places == sorted(places)
+    # No draw of the card uses a first sentence without it.
+    card = function_body(home, "function trialCard(ctx) {")
+    assert 'el("p", { class: "trial-say", id: "trial-say-1" }, trialSentence(passage)),' in card
+    outside = home.replace(chosen, "")
+    assert re.findall(r'"ask\.say\.1[a-z.]*"', outside) == ['"ask.say.1.nodocs"']
+    assert home.count("trialSentence(") == 2
+    # The second sentence is the same for every answer: nothing was sent and nothing recorded.
+    assert 'el("p", { class: "trial-say", id: "trial-say-2" }, t("ask.say.2")),' in card
+    # By which words it was found is said under the passage.
+    assert 't("ask.status.words", { words: passage.words.join(", ") })' in card
+
+
+def test_a_tile_says_nothing_about_a_file() -> None:
+    home = without_comments(scripts()["home.js"])
+    drawn = function_body(home, "function tile(ctx, entry, apps) {")
+    # The line of a tile is read from the vault: whether an app of the tile's name is
+    # registered, whether it is paused, when it last asked. Nothing of a look is read.
+    assert "const app = apps.find((one) => one.name === entry.name);" in drawn
+    for word in ("look", "state ===", ".path", "connected", "present", "api."):
+        assert word not in drawn, f"a tile reads {word!r}"
+    assert re.findall(r't\("(tile\.status\.[a-z.]+)"', drawn) == [
+        "tile.status.custom",
+        "tile.status.custom.connect",
+        "tile.status.connect",
+        "tile.status.paused",
+        "tile.status.seen",
+        "tile.status.never",
+    ]
+    # The word "Connected" needs a look at a file: it is the title of the sheet's state
+    # "connected" and stands nowhere else, in no script and under no other key.
+    connect = without_comments(scripts()["connect.js"])
+    everything = "\n".join(
+        without_comments(source) for name, source in scripts().items() if name not in TABLES
+    )
+    assert everything.count('"connect.done.title"') == 1
+    state = connect[connect.index('} else if (view.state === "connected") {') :]
+    state = state[: state.index('} else if (view.state === "on") {')]
+    assert 'head = sheetHead(t("connect.done.title"));' in state
+    for name in TABLES:
+        texts = table(name)
+        assert texts["connect.done.title"][0] in ("Connected", "Połączono"), name
+        # No word of a tile says it, in any state.
+        for key, values in texts.items():
+            if key.startswith("tile."):
+                for text in values:
+                    assert "onnected" not in text, f"{name} {key}"
+                    assert "ołączon" not in text, f"{name} {key}"
+
+
+def test_connect_sends_what_the_owner_read() -> None:
+    connect = without_comments(scripts()["connect.js"])
+    # The state that is sent is the one the sheet was drawn from.
+    assert re.findall(r"api\.connectWrite\(([^)]*)\)", connect) == ["host, look.state"]
+    assert re.findall(r"api\.connectRemove\(([^)]*)\)", connect) == ["host, look.state"]
+    for head in (
+        "async function connect(ctx, sheet, view) {",
+        "async function disconnect(ctx, sheet, view) {",
     ):
-        assert words in card, words
-    assert 'id: "setup-hide",' in card
-    assert "const failed = await setupDone(ctx);" in card
-    # Its button is the one filled button of the page, and not while a passage waits.
-    assert 'class: ["btn", waits ? "btn-default" : "btn-primary"], id: "setup-continue"' in card
-    # An app is added from the Basic page through the step that states its access.
-    apps = function_body(basic, "function appsSection(ctx, stops) {")
-    assert 'id: "basic-add-app", href: "#/setup/app"' in apps
+        body = function_body(connect, head)
+        assert "const host = view.tile.host;" in body, head
+        assert "const look = view.look;" in body, head
+    api = without_comments(scripts()["api.js"])
+    assert (
+        'connectWrite: (host, expect) => call("POST", `/api/connect/${part(host)}`, '
+        "{ body: { expect } }),"
+    ) in api
+    assert (
+        "connectRemove: (host, expect) => "
+        'call("POST", `/api/connect/${part(host)}/remove`, { body: { expect } }),'
+    ) in api
+    # A look sends the name of the program in the address and nothing else: never a path.
+    assert 'connectLook: (host) => call("POST", `/api/connect/${part(host)}/look`),' in api
+    assert "const part = encodeURIComponent;" in api
+    # A file that changed since the look is said, and the next thing is another look.
+    press = function_body(connect, "async function connect(ctx, sheet, view) {")
+    assert 'if (error.code === "changed" || error.code === "demo") {' in press
+    assert '"changed"' in connect[connect.index("const LOOK_AGAIN = [") :][:120]
+    # "Connect" is drawn in the state "offer" and in no other: not where the program is not
+    # installed, not after a refusal, not where the command would be rewritten, not under
+    # another name, not where the app is on already.
+    draw = function_body(connect, "function drawConnect(ctx, sheet, view) {")
+    assert connect.count('t("connect.button.connect")') == 1
+    press = re.compile(r"(?<![\w.])connect\(ctx, sheet, view\)")
+    assert len(press.findall(connect)) == 2  # its definition, and the one button
+    states = re.split(r'\} else if \(view\.state === "(\w+)"\) ', draw)
+    drawn_in = [
+        states[index] for index in range(1, len(states), 2) if press.search(states[index + 1])
+    ]
+    assert drawn_in == ["offer"]
+    assert [states[index] for index in range(1, len(states), 2)] == [
+        "failed",
+        "offer",
+        "connected",
+        "on",
+        "as",
+        "nofolder",
+        "expands",
+        "hand",
+    ]
+    for head in (
+        "function refusedState(ctx, sheet, view) {",
+        "function handState(ctx, sheet, view) {",
+    ):
+        assert press.search(function_body(connect, head)) is None, head
+    # What stands in the way of every connect is said before the press, and the press is off.
+    offer = states[states.index("offer") + 1]
+    assert "disabled: Boolean(blocked)," in offer
+    assert (
+        'look.answered_change ? amberNote("connect-notice", t("notice.choice_ahead.say.1"))'
+        in offer
+    )
 
 
-# -- the demo's guide ---------------------------------------------------------------
+def test_disconnect_asks_first() -> None:
+    sources = {name: without_comments(source) for name, source in scripts().items()}
+    for name, code in sources.items():
+        if name not in ("api.js", "connect.js"):
+            assert "connectRemove" not in code, name
+            assert "connectWrite" not in code, name
+    connect = sources["connect.js"]
+    assert connect.count("api.connectRemove(") == 1
+    body = function_body(connect, "async function disconnect(ctx, sheet, view) {")
+    asked = body.index("const agreed = await confirmSheet({")
+    stop = body.index("if (!agreed) return;")
+    sent = body.index("api.connectRemove(")
+    assert asked < stop < sent
+    assert "api." not in body[:stop]
+    # The second sheet says what will happen to the file, by what the look found, and its
+    # button is the red one.
+    question = body[asked:stop]
+    assert 'title: t("disconnect.title", values(view)),' in question
+    assert "text: sentence(first, values(view))," in question
+    assert 'confirmLabel: t("connect.button.disconnect"),' in question
+    assert "danger: true," in question
+    assert re.findall(r'"(disconnect\.say\.1[a-z.]*)"', body) == [
+        "disconnect.say.1.vault",
+        "disconnect.say.1",
+        "disconnect.say.1.more",
+    ]
+    # What became of the file is said in a message, by the word the app answers with.
+    assert re.findall(r'(\w+): "(disconnect\.result\.\w+)"', body) == [
+        ("removed", "disconnect.result.done"),
+        ("no_entry", "disconnect.result.vault"),
+        ("differs", "disconnect.result.differs"),
+    ]
+    assert '"disconnect.result.kept"' in body
+    # "Remove this app" on the fourth tile asks first as well.
+    remove = function_body(connect, "async function removeCustom(ctx, sheet, view) {")
+    assert (
+        remove.index("await confirmSheet({")
+        < remove.index("if (!agreed) return;")
+        < remove.index("api.removeApp(")
+    )
+    assert connect.count("api.removeApp(") == 1
+
+
+def test_the_passphrase_for_the_box_is_sent_with_its_scope() -> None:
+    sources = {name: without_comments(source) for name, source in scripts().items()}
+    api = sources["api.js"]
+    # After 403 `trial_reauth_required` the sheet is asked for the passphrase of the box, after
+    # 403 `reauth_required` for the one that allows a change; what it sends says which.
+    call = function_body(api, "async function call(method, path, options = {}) {")
+    assert 'const trial = error.code === "trial_reauth_required";' in call
+    assert (
+        'if ((trial || error.code === "reauth_required") && hooks.reauth && !options.plain) {'
+    ) in call
+    assert 'const accepted = await hooks.reauth(trial ? "trial" : null);' in call
+    assert (
+        'reauth: (passphrase, scope) => call("POST", "/api/reauth", '
+        "{ body: scope ? { passphrase, scope } : { passphrase }, plain: true }),"
+    ) in api
+    main = sources["main.js"]
+    assert (
+        "reauth: (scope) => requestReauth(ctx.state ? ctx.state.demo_passphrase : null, scope) "
+    ) in main
+    sheet = function_body(
+        sources["sheets.js"], "export function requestReauth(demoPassphrase = null, scope = null) {"
+    )
+    assert "await api.reauth(form.passphrase, scope);" in sheet
+    # No other script sends a passphrase again, and no script names the scope but as that word.
+    for name, code in sources.items():
+        if name not in ("api.js", "sheets.js"):
+            assert "api.reauth(" not in code, name
+    assert sources["sheets.js"].count("api.reauth(") == 1
+    # The word of the scope is written in one place, where the refusal is told apart.
+    assert api.count('"trial"') == 1
+    for name in ("sheets.js", "main.js", "connect.js", "parts.js"):
+        assert '"trial"' not in sources[name], name
+    # The box itself never asks for the passphrase and never sees it.
+    home = sources["home.js"]
+    for word in ("passphrase", "reauth", "requestReauth"):
+        assert word not in home, word
+
+
+def test_the_result_says_that_nothing_was_tried() -> None:
+    connect = without_comments(scripts()["connect.js"])
+    state = connect[connect.index('} else if (view.state === "connected") {') :]
+    state = state[: state.index('} else if (view.state === "on") {')]
+    # Where the result is shown, the sheet says in the same place that the entry was written
+    # and read back and that this was not tried with the program itself; or, where nothing had
+    # to be written, that the entry was there already. One of the two is always drawn.
+    line = (
+        'el("p", { class: "sheet-result", id: "connect-result", key: "result" }, icon("check"), '
+        'el("span", null, t(kept ? "connect.done.status.kept" : "connect.done.status.tried", '
+        "values(view)))),"
+    )
+    assert line in state
+    before = state[: state.index(line)]
+    assert "?" not in before[before.rindex("say(") :].split("\n", 1)[1], (
+        "the line stands under a condition"
+    )
+    assert connect.count('"connect.done.status.tried"') == 1
+    assert connect.count('"connect.done.status.kept"') == 1
+    for name in TABLES:
+        texts = table(name)
+        for key in ("connect.done.status.tried", "connect.done.status.kept"):
+            assert "{label}" in texts[key][0], f"{name} {key}"
+    english = table("text-en.js")
+    assert english["connect.done.status.tried"] == [
+        "Written and read back; not tried with {label} itself."
+    ]
+    assert "not tried with {label} itself" in english["connect.done.status.kept"][0]
+    # The check beside it says "written", not "sealed": it is not green.
+    rules = css_rules("home.css", ".sheet-result .icon")
+    assert rules
+    assert all("--green" not in rule for rule in rules)
+
+
+# -- the demo's card ----------------------------------------------------------------
 
 
 def test_the_demo_guide_makes_the_played_app_ask_again_only_on_a_press() -> None:
     sources = {name: without_comments(source) for name, source in scripts().items()}
-    basic = sources["basic.js"]
+    home = sources["home.js"]
     # One request, without a body: nothing tells the played app what the owner decided, so the
     # demo is not better than the product. A real app has to be told "try again" as well.
     assert 'demoAgain: () => call("POST", "/api/demo/again"),' in sources["api.js"]
     for name, code in sources.items():
-        if name not in ("api.js", "basic.js"):
+        if name not in ("api.js", "home.js"):
             assert "demoAgain" not in code, name
-    assert re.findall(r"api\.demoAgain\(([^)]*)\)", basic) == [""]
-    ask = function_body(basic, "async function askAgain(ctx) {")
+    assert re.findall(r"api\.demoAgain\(([^)]*)\)", home) == [""]
+    ask = function_body(home, "async function askAgain(ctx) {")
     sent = "await api.demoAgain();"
     assert sent in ask
     # Up to the request the function looks at nothing but whether it is already asking.
     for told in ("decision", "release", "decided", "granted", "waiting", "approvals", "guideBeat"):
         assert told not in ask[: ask.index(sent)], f"asking again reads {told} first"
     # It is sent by a press on the one button, and by nothing else: no timer, no load, no draw.
-    assert basic.count("askAgain(") == 2  # where it is defined, and behind the button
-    guide = function_body(basic, "function demoGuide(ctx, stops) {")
-    assert "onclick: () => askAgain(ctx) })," in guide
-    assert guide.count('id: "demo-again"') == 1
-    assert basic.count('id: "demo-again"') == 1
-    assert "Have the played app ask again" in guide
-    # The page has one filled button at most, and the guide has none.
+    assert home.count("askAgain(") == 2  # where it is defined, and behind the button
+    card = function_body(home, "function demoCard(ctx) {")
+    assert "onclick: () => askAgain(ctx) })," in card
+    assert card.count('id: "demo-again"') == 1
+    assert 'guide.asking ? t("guide.button.busy") : t("guide.button.again")' in card
+    # The page has one filled button at most, and the card has none.
     for filled in ('kind: "primary"', "btn-primary"):
-        assert filled not in guide
-    # The guide never leads to one answer: after either, the same button.
-    words = function_body(basic, "function guideWords(ctx, beat) {")
-    for beat, title in (("released", "You released it once"), ("kept", "You did not release it")):
-        said = words[words.index(f'if (beat === "{beat}") {{') :]
-        said = said[: said.index("\n  }\n")]
-        assert f'title: "{title}",' in said
-        assert "again: true," in said
-    assert "Either answer is fine." in words
-    assert words.count("Either answer is fine.") == 2  # one passage waits, or several
-    for beat in ("turn", "read"):
-        said = words[words.index(f'if (beat === "{beat}") {{') :]
-        assert "again: false," in said[: said.index("\n  }\n")]
-    assert words.rstrip().endswith("again: false,\n  };")  # nothing was asked for yet: no button
+        assert filled not in card
+    # The card never leads to one answer: after either, the same button.
+    moments = re.search(r"const GUIDE = \{(.*?)\n\};", home, re.S)
+    assert moments is not None
+    assert re.findall(
+        r"(\w+): \{ title: \"([\w.]+)\", say: \"([\w.]+)\", again: (\w+) \},", moments.group(1)
+    ) == [
+        ("watch", "guide.watch.title", "guide.watch.say.1", "false"),
+        ("turn", "guide.turn.title", "guide.turn.say.1", "false"),
+        ("released", "guide.released.title", "guide.released.say.1", "true"),
+        ("kept", "guide.kept.title", "guide.kept.say.1", "true"),
+        ("read", "guide.read.title", "guide.read.say.1", "false"),
+        ("asked", "guide.asked.title", "guide.asked.say.1", "true"),
+    ]
+    assert "words && words.again" in card
 
 
 def test_the_demo_guide_reads_the_lists_and_the_owners_own_press() -> None:
-    basic = without_comments(scripts()["basic.js"])
-    # It is drawn in a demo and nowhere else, under the notices, where the card of setting up is
-    # in a vault of one's own. The approval cards stand above it and are complete without it.
-    assert "return ctx.state.demo === true && !ctx.ui.guide.hidden;" in function_body(
-        basic, "function guideOpen(ctx) {"
+    home = without_comments(scripts()["home.js"])
+    # It is drawn in a demo and nowhere else, between "Waiting for you" and the box that asks.
+    # The approval cards stand above it and are complete without it.
+    assert "return ctx.state.demo === true && !ctx.ui.home.guide.hidden;" in function_body(
+        home, "function guideOpen(ctx) {"
     )
-    guide = function_body(basic, "function demoGuide(ctx, stops) {")
-    assert guide.splitlines()[1].strip() == "if (!guideOpen(ctx)) return null;"
-    card = '{ class: "card card-guide", key: "demo-guide", "aria-labelledby": "guide-title" }'
-    assert card in guide
-    assert 'chip("Demo", "accent"),' in guide
-    assert basic.count("demoGuide(") == 2
-    page = function_body(basic, "export function basicView(ctx, problem) {")
+    card = function_body(home, "function demoCard(ctx) {")
+    assert card.splitlines()[1].strip() == "if (!guideOpen(ctx)) return null;"
+    assert '{ class: "card guide", key: "demo-guide", "aria-labelledby": "guide-title" }' in card
+    assert 'chip(t("common.chip.demo"), "accent"),' in card
+    assert home.count("demoCard(") == 2
+    page = function_body(home, "export function homePage(ctx, problem) {")
     order = [
-        "approvalsSection(ctx, problem),",
-        "warningList(ctx, { bothKinds: true }),",
-        "setupCard(ctx),",
-        "demoGuide(ctx, stops),",
-        "leftSection(ctx, stops),",
+        "notices(ctx),",
+        "waitingPart(ctx, problem),",
+        "demoCard(ctx),",
+        "? firstSteps(ctx)",
+        'part("home-ask", t("home.ask.title"), null, asker(ctx)),',
+        'part("home-connect", t("home.connect.title"), null, tiles(ctx, true)),',
+        "leftPart(ctx),",
     ]
     places = [page.index(part) for part in order]
     assert places == sorted(places)
-    assert "approvalCards(" not in guide
+    assert "approvalCards(" not in card
     # Where the demo is, it reads from the three lists the page loads anyway and from what the
     # owner pressed on this page. The state says only that this is a demo.
-    beat = function_body(basic, "function guideBeat(ctx) {")
+    beat = function_body(home, "function guideBeat(ctx) {")
     assert "if (!approvals || !left.loaded || !ctx.stops) return null;" in beat
     assert "ctx.ui.decided.values()" in beat
     assert "ctx.state" not in beat
-    own = function_body(basic, "function ownVault(ctx) {")
-    assert re.findall(r"ctx\.state\.(\w+)", guide + own) == ["launch"]
-    # A passage that waits comes first: the guide then says nothing but "Your turn".
+    assert re.findall(r"ctx\.state\.(\w+)", card) == ["launch"]
+    # A passage that waits comes first: the card then says nothing but that it is the owner's turn.
     returns = re.findall(r'return "(\w+)";', beat)
     assert returns == ["turn", "read", "released", "kept", "asked", "watch"]
     assert 'if (waiting.length) return "turn";' in beat
     # What it remembers is this page's memory, forgotten with everything else when the vault locks.
     main = without_comments(scripts()["main.js"])
-    assert "guide: freshGuide()," in function_body(main, "function freshUi() {")
+    assert "home: freshHome()," in function_body(main, "function freshUi() {")
     assert "ctx.ui = freshUi();" in function_body(main, "function forget() {")
-    # "Hide" is that memory too, and it says how the guide comes back.
-    assert "guide.hidden = true;" in guide
-    assert '"The guide is hidden. It is back when this page is loaded again."' in guide
+    fresh = function_body(home, "export function freshHome() {")
+    assert (
+        "guide: { hidden: false, decision: null, noted: new WeakSet(), read: null, asking: false },"
+        in fresh
+    )
+    # "Hide" is that memory too: the card is back when the page is loaded again.
+    assert "guide.hidden = true;" in card
+    # The command that starts a vault of one's own is the one the app sent, shown from the
+    # owner's first answer on, with "Copy" and with nothing that starts anything.
+    assert "const command = (ctx.state.launch || {}).command;" in card
+    assert 'copyLine(ctx, "guide-copy", command, t("bar.label.command"))' in card
+    assert 'const answered = beat !== null && beat !== "watch" && beat !== "turn";' in card
+    assert card.count("onclick") == 2  # "Hide", and the button that has the played app ask again
 
 
-def test_the_demo_guide_says_its_sentences_word_for_word_and_names_no_time() -> None:
-    source = scripts()["basic.js"]
-    shown = quoted_texts(source)
-    for words in (
-        "Watch an app ask for documents",
-        "Nothing here is real: the documents are invented, and the apps that ask are played by   "
-        "itself. ",
-        "Soon one of them asks for a passage that needs your approval; it appears above, under "
-        "\u201cApprovals\u201d. ",
-        "The rows under \u201cWhat left the vault\u201d are what the played apps were given so "
-        "far.",
-        "Your turn",
-        "A played app asks, under the name  , for the passage above. Read the exact text, see "
-        "where it would go, and choose. Either answer is fine.",
-        "You released it once",
-        "Nothing has been sent yet. A real app now has to ask again; you would tell it "
-        "\u201ctry again\u201d. Here this button does that for the played app.",
-        "You did not release it",
-        "Nothing from that passage left. If an app asks again, the passage waits here again. "
-        "This button makes the played app ask again.",
-        "It asked again and got the passage",
-        "The newest row under \u201cWhat left the vault\u201d shows the exact text that left.",
-        "  That is the whole of it: an app asked, you saw the exact text and where it would go, "
-        "you decided, and what left is on the record.",
-        "Meanwhile a second played app read a letter with an instruction hidden in it and then "
-        "asked for every passage it could find. ",
-        "Its limit for 24 hours stopped it: see \u201cStopped in the last 24 hours\u201d below.",
-        "Have the played app ask again",
-        "Use your own documents",
-        "Now with your own documents",
-        "In the terminal where this demo runs, press Ctrl-C. The demo vault is deleted.",
-        "Run this:",
-        "The page that opens asks for a pairing code, which the terminal shows, and then for a "
-        "passphrase.",
-        "Have ready: a passphrase you can type from memory (it cannot be recovered), one "
-        "document, and the AI app you use.",
-    ):
-        assert words in shown, words
-    # The name in "Your turn" is the stored name of the app whose passage waits, read from the list.
-    basic = without_comments(source)
-    words = function_body(basic, "function guideWords(ctx, beat) {")
-    assert "under the name ${waiting[0].app}, for the passage above." in words
-    # The sentence about the second app is said only while the page shows the stop it speaks of.
-    guide = function_body(basic, "function demoGuide(ctx, stops) {")
-    assert 'decided && stops.some((stop) => stop.kind === "client-day")' in guide
-    # No sentence of the guide names a time: when the played app asks is not the page's to promise.
-    own = function_body(basic, "function ownVault(ctx) {")
-    sentences = [text for text in quoted_texts(words + guide + own) if " " in text]
-    assert len(sentences) > 20
-    for text in sentences:
-        # ("a second played app" counts apps, not time.)
-        assert re.search(r"\b(seconds|minutes?|moments?)\b", text) is None, text
-        # The one figure is the name of a limit, in the words the page uses for it elsewhere.
-        assert re.search(r"\d", text.replace("24 hours", "")) is None, text
-    # The command is the one the app sent, which in a demo starts a vault of one's own; the
-    # sentence after it says "the page that opens" only where that command opens one.
-    assert "const command = (ctx.state.launch || {}).command;" in own
-    assert 'copyLine(ctx, "guide-copy", command,' in own
-    assert "!command || opensPage(command)" in own
-    assert "onclick" not in own, "a button of the last block starts something"
-    # The foot leaves the command out in a demo: there it would not open this vault again.
-    launch = function_body(basic, "export function launchBlock(ctx) {")
-    assert "const command = ctx.state.demo ? null : launch.command;" in launch
-
-
-def test_the_lower_parts_are_folded_only_while_the_demo_guide_is_open() -> None:
-    basic = without_comments(scripts()["basic.js"])
-    fold = function_body(basic, "function foldOf(ctx, name) {")
-    assert fold.splitlines()[1].strip() == "if (!guideOpen(ctx)) return null;"
-    assert "id: `fold-${name}`," in fold
-    # (Documents, the third part that folded, has a page of its own now.)
-    assert basic.count("foldOf(") == 3  # where it is defined, and in the two parts
-    assert "documentsSection" not in basic
-    for head, name in (
-        ("function appsSection(ctx, stops) {", "apps"),
-        ("function alsoSection(ctx) {", "also"),
-    ):
-        part = function_body(basic, head)
-        assert f'const fold = foldOf(ctx, "{name}");' in part, name
-        assert "if (fold && !fold.open) return section(" in part, name
-        assert part.rstrip().endswith("], fold);"), name
-    # "Also set for this vault, in Pro" has a heading only when it has a line, folded or not.
-    also = function_body(basic, "function alsoSection(ctx) {")
-    assert also.index("if (!pages.length) return null;") < also.index("foldOf(")
-    # A part that folds is a button that says whether it is open, never a <details>.
-    part = function_body(basic, "function section(key, title, aside, content, fold = null) {")
-    assert 'expanded: fold.open ? "true" : "false", onclick: fold.toggle' in part
-    assert "fold && !fold.open ? null : content," in part
-    for name, source in scripts().items():
-        assert '"details"' not in without_comments(source), name
-    # "What left the vault" is not among them: it holds the rows and the stops the guide speaks of.
-    assert "foldOf(" not in function_body(basic, "function leftSection(ctx, stops) {")
+def test_the_demo_guide_says_its_sentences_from_the_tables_and_names_no_time() -> None:
+    home = without_comments(scripts()["home.js"])
+    card = function_body(home, "function demoCard(ctx) {")
+    assert sentences_of(card) == []
+    # Every moment has its title and its one sentence in both tables, and the card its second
+    # sentence, which leads to a vault of the owner's own.
+    for name in TABLES:
+        texts = table(name)
+        said = {key: value for key, value in texts.items() if key.startswith("guide.")}
+        assert sorted(said) == sorted(
+            [
+                f"guide.{moment}.{what}"
+                for moment in ("watch", "turn", "released", "kept", "read", "asked")
+                for what in ("title", "say.1")
+            ]
+            + ["guide.say.2", "guide.button.again", "guide.button.busy", "guide.label.hide"]
+        ), name
+        for key, values in said.items():
+            for text in values:
+                # No sentence of the card names a time: when the played app asks is not the
+                # page's to promise.
+                assert re.search(r"\b(seconds?|minutes?|moments?|soon)\b", text, re.I) is None, (
+                    name,
+                    key,
+                )
+                assert re.search(r"\b(sekund|minut|chwil|wkrótce|zaraz)", text, re.I) is None, (
+                    name,
+                    key,
+                )
+                assert re.search(r"\d", text) is None, (name, key)
+    english = table("text-en.js")
+    # Either answer is fine, and the card says so where the owner decides.
+    assert "either answer is fine" in english["guide.turn.say.1"][0]
+    # After a yes nothing has been sent yet: the played app has to ask again, as a real one has.
+    assert "ask again" in english["guide.released.say.1"][0]
+    assert english["guide.button.again"] == ["Have the played app ask again"]
+    # Settings and the bar leave the command out in a demo: there it would not open this vault
+    # again. The card shows it, under the sentence that says what it is for.
+    settings = function_body(
+        without_comments(scripts()["pages.js"]), "export function settingsPage(ctx) {"
+    )
+    assert "const command = state.demo ? null : (state.launch || {}).command;" in settings
+    bar = function_body(
+        without_comments(scripts()["parts.js"]), "export function problemBar(ctx, problem) {"
+    )
+    assert "const command = ctx.state && ctx.state.demo ? null : launch.command;" in bar
 
 
 # -- the simple frame and its plain pages -------------------------------------------
 
 
 def test_the_simple_scripts_hold_no_sentence() -> None:
-    # The plain pages take every text from the tables: their script holds no quoted text that
-    # a person would read as words, and no label either. What it quotes are keys, classes,
-    # addresses, ids and names of the code. (gateway.js joins this test when its three steps
-    # of setting up, which keep their English until Home replaces them, are gone.)
-    pages = without_comments(scripts()["pages.js"])
-    assert sentences_of(pages) == []
-    for text in quoted_texts(pages):
-        assert re.match(r"[A-Z][a-z]+( [a-z]+)*$", text.strip()) is None, text
-    assert re.search(r'import \{[^}]*\bt\b[^}]*\} from "\./texts\.js";', pages)
-    assert 'from "./brand.js"' not in pages, "the product's name is a place of the tables"
+    # Home, the sheets of its tiles, the plain pages and the screens before the vault is open
+    # take every text from the tables: their scripts hold no quoted text that a person would
+    # read as words, and no label either. What they quote are keys, classes, addresses, ids
+    # and names of the code. (Pro's scripts keep their sentences; the two sample documents in
+    # manage.js are documents.)
+    for name in ("home.js", "connect.js", "pages.js", "gateway.js"):
+        code = without_comments(scripts()[name])
+        assert sentences_of(code) == [], name
+        for text in quoted_texts(code):
+            assert re.match(r"[A-Z][a-z]+( [a-z]+)*$", text.strip()) is None, (name, text)
+            # No quoted text of two words either, unless it is a list of classes.
+            if len(text.split()) == 2:
+                assert re.fullmatch(r"[a-z0-9 -]+|\\u0000 \\u0000", text.strip()), (name, text)
+        assert re.search(r'import \{[^}]*\bt\b[^}]*\} from "\./texts\.js";', code), name
+    for name in ("home.js", "connect.js", "pages.js"):
+        code = without_comments(scripts()[name])
+        assert 'from "./brand.js"' not in code, "the product's name is a place of the tables"
     # The frame of these pages holds none either: see ON_THE_TABLE for its two functions.
     main = without_comments(scripts()["main.js"])
     nav = re.search(r"const NAV = \[(.*?)\n\];", main, re.S)
@@ -2380,9 +2693,9 @@ def test_the_switch_stands_on_every_screen_before_the_vault_is_open_and_in_both_
         table = scripts()[name]
         assert '"common.lang.en": "English",' in table, name
         assert '"common.lang.pl": "Polski",' in table, name
-    # Top right of the four screens (and of a step of setting up), through their one frame.
+    # Top right of the four screens, through their one frame.
     gateway = without_comments(scripts()["gateway.js"])
-    frame = function_body(gateway, "function gateScreen(ctx, key, content, options = {}) {")
+    frame = function_body(gateway, "function gateScreen(ctx, key, content) {")
     assert (
         'el("div", { class: "gate-lang", key: "lang" }, languageSwitch(ctx.chooseLanguage)),'
         in frame
@@ -2472,7 +2785,7 @@ ON_THE_TABLE = {
         "function simplePanelBody(ctx, panel, item) {",
     ),
     "sheets.js": (
-        "export function requestReauth(demoPassphrase = null) {",
+        "export function requestReauth(demoPassphrase = null, scope = null) {",
         "export function generalSentence() {",
         "export function basicGrantSentence(app) {",
     ),
@@ -2494,6 +2807,7 @@ ON_THE_TABLE = {
         "export function toastError(error) {",
         "export function copyButton(ctx, id, text, what, words = null) {",
         "export function copyLine(ctx, id, text, what) {",
+        "export function copyBlock(ctx, id, label, text) {",
         "export function problemBar(ctx, problem) {",
     ),
     "main.js": (
@@ -2552,7 +2866,7 @@ def test_the_parts_every_view_shares_hold_no_sentence_of_their_own() -> None:
     )
     sheet = function_body(
         without_comments(scripts()["sheets.js"]),
-        "export function requestReauth(demoPassphrase = null) {",
+        "export function requestReauth(demoPassphrase = null, scope = null) {",
     )
     assert 'errorText(form.failed, { wrong_passphrase: "reauth.error.wrong" })' in sheet
     parts = without_comments(scripts()["parts.js"])
@@ -2695,7 +3009,9 @@ def test_engine_words_stay_out_of_what_the_owner_reads() -> None:
             assert found is None, (
                 f"{name} shows the word {found.group(0) if found else ''!r}: {text[:80]!r}"
             )
-            if name != "sheets.js":
+            # In the tables the protocol is named under a few fixed keys
+            # (test_the_protocol_is_named_only_on_the_custom_tile).
+            if name not in ("sheets.js", *TABLES):
                 assert re.search(r"\bMCP\b", text) is None, (
                     f"{name} shows MCP outside the connect sheet"
                 )

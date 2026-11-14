@@ -2,16 +2,16 @@
 // Copyright 2025 Enclave
 //
 // The screens the owner reads: Overview, Activity with its detail panel, and
-// Approvals. The approval card and the simple parts of the detail panel are the
-// same on every page and take their texts from the text table; what only the six
-// pages show keeps its own English texts. On a page that is not one of the six, the
+// Approvals. The approval card, what was released and not read yet, and the simple
+// parts of the detail panel are the same on every page and take their texts from the
+// text table; what only the six pages show keeps its own English texts. On a page that is not one of the six, the
 // panel says everything in the language of the page, and the record's own figures
 // stand behind one button.
 
 import { api } from "./api.js";
 import { PRODUCT } from "./brand.js";
 import { el, icon } from "./dom.js";
-import { ago, at, clock, count, list, num, sentence, untilShort, when, whenFull } from "./format.js";
+import { ago, at, clock, count, list, num, sentence, when, whenFull } from "./format.js";
 import { loadingBlock, servingStrip } from "./manage.js";
 import { rowSentence } from "./pages.js";
 import {
@@ -169,8 +169,8 @@ const NOTICE_TEXT = {
 /** Notices that ask nothing of the owner: they can be put away. */
 const ASKS_NOTHING = new Set(["previous_session_unclean"]);
 
-/** What the owner has put away. It stays away until the page is loaded again. */
-const putAway = new Set();
+/** What the owner has put away, on Home or on Overview. It stays away until the page is loaded again. */
+export const putAway = new Set();
 
 /**
  * The notices of the state. Where a strip says that both kinds of apps are answered
@@ -960,30 +960,27 @@ function approvalCard(ctx, item, index) {
 async function withdraw(ctx, item) {
   try {
     await api.dismiss(item.app, item.ref);
-    toast(`Withdrawn. ${item.app} has to ask again before it can read that passage.`, "green");
+    toast(t("home.granted.result.withdrawn", { app: item.app }), "green");
   } catch (error) {
     toastError(error);
   }
   await ctx.refresh();
 }
 
+/**
+ * One release that was not read yet: which app may read which passage once, and until
+ * when. A document the page has not heard the title of is named by its number.
+ */
 function grantedLine(ctx, item) {
   const known = Object.assign({}, ctx.passages.get(item.ref), item.title ? item : null);
-  const left = untilShort(item.valid_until, ctx.now);
+  const [document, number] = String(item.ref).split(".");
+  const passage = typeof known.passage === "number" ? known.passage : Number(number);
   return el(
     "li",
     { key: `${item.app}-${item.ref}` },
     icon("clock"),
-    el(
-      "span",
-      { class: "granted-text" },
-      el("strong", null, item.app),
-      " may read ",
-      known.title ? `passage ${num(known.passage)}${known.passages ? ` of ${num(known.passages)}` : ""} of “${known.title}”` : ["the passage ", el("span", { class: "mono" }, item.ref)],
-      ` once, until ${when(item.valid_until, ctx.now)}`,
-      left ? el("span", { class: "muted" }, ` (${left})`) : null,
-    ),
-    item.withdrawable === true ? button("Withdraw", { small: true, onclick: () => withdraw(ctx, item), label: `Withdraw the approval for ${item.app}` }) : null,
+    el("span", { class: "granted-text" }, t("home.granted.status.line", { app: item.app, passage, title: known.title || document, time: clock(item.valid_until, ctx.now) })),
+    item.withdrawable === true ? button(t("home.granted.button.withdraw"), { small: true, onclick: () => withdraw(ctx, item) }) : null,
   );
 }
 
@@ -1019,7 +1016,7 @@ export function approvalCards(ctx, { limit = null, around = "" } = {}) {
     cards: shown.map((entry, index) => (entry.item ? approvalCard(ctx, entry.item, index) : decidedLine(ctx, entry.done))),
     more: entries.slice(shown.length).filter((entry) => entry.item).length,
     granted: granted.length
-      ? card("Approved, not read yet", el("ul", { class: "granted-list" }, granted.map((item) => grantedLine(ctx, item))), { key: "granted" })
+      ? card(t("home.granted.title"), el("ul", { class: "granted-list" }, granted.map((item) => grantedLine(ctx, item))), { key: "granted" })
       : null,
   };
 }

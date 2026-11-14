@@ -52,7 +52,9 @@ one is checked on every request, before the request's body is read.
   that table; nothing derived from a request reaches the file system. The
   page itself is the one file that is not sent as it lies there: where it
   says ``{{product}}`` the server has put the product's name, so that the
-  page shows it from its first moment and the scripts read it from the page.
+  page shows it from its first moment and the scripts read it from the page;
+  and where it says ``{{entry}}``, the name the product's entry has in the
+  settings file of an agent application.
 
 Nothing about a request is logged. When the service fails unexpectedly, one
 line with the name of the exception class goes to standard error and the
@@ -152,6 +154,7 @@ _CONTENT_TYPES = {
 _JSON = "application/json"
 _INDEX = "index.html"
 _NAME_PLACE = b"{{product}}"  # where the page gets the product's name
+_ENTRY_PLACE = b"{{entry}}"  # and the name of its entry in another program's settings file
 # The product's name as a header value: plain letters, a hyphen for each space.
 _SERVER_HEADER = "-".join(re.sub(r"[^A-Za-z0-9 ]", "", brand.PRODUCT).split()) or "app"
 
@@ -318,7 +321,6 @@ _ROUTES: tuple[_Route, ...] = (
     ),
     _Route("POST", "apps/<name>/limits", "set_app_limits", whole_body="limits"),
     _Route("GET", "apps/<name>/connect", "connect", query=(_text("host"),)),
-    _Route("POST", "apps/<name>/connect/check", "connect_check", fields=(_text("host"),)),
     # The settings file of one of three applications. The address names the application
     # and nothing else: no request carries a path.
     _Route("POST", "connect/<host>/look", "connect_look"),
@@ -502,7 +504,9 @@ def _load_static(directory: Path) -> dict[str, tuple[str, bytes]]:
         content_type, page = table["/" + _INDEX]
         # The name is text in the page and inside attribute values: escape it for both.
         name = html.escape(brand.PRODUCT, quote=True).encode("utf-8")
-        table["/" + _INDEX] = table["/"] = (content_type, page.replace(_NAME_PLACE, name))
+        slug = html.escape(brand.SLUG, quote=True).encode("utf-8")
+        page = page.replace(_NAME_PLACE, name).replace(_ENTRY_PLACE, slug)
+        table["/" + _INDEX] = table["/"] = (content_type, page)
     return table
 
 

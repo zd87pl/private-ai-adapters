@@ -13,19 +13,19 @@
 //   GATE_PORT           port of the interface (default: the app picks a free one)
 //   GATE_OWNER_SECONDS  how long owner mode lasts in this run (default: 100; the app's own value is 600)
 //
-// The app is started WITHOUT --demo on an empty directory with a short path under
-// /tmp, through launch_app.py, which changes one constant (how long owner mode
-// lasts) and gives the app an empty home of its own. Calls of an agent application
-// are made by agent_call.py through RemoteGate, the path the program an application
-// starts uses.
+// The app is started WITHOUT --demo and with "--view pro" on an empty directory with a
+// short path under /tmp, through launch_app.py, which changes one constant (how long
+// owner mode lasts) and gives the app an empty home of its own. Calls of an agent
+// application are made by agent_call.py through RemoteGate, the path the program an
+// application starts uses.
 //
-// The walk pairs, creates the vault, skips the two steps of the first run that can be
-// skipped, and from Home, where a new vault opens, goes to Settings: there it has the
-// app open on "All settings" and opens Overview. From there on it is a walk through
-// the six pages with every setting (Pro, under "#/pro/…"): documents, apps, grants, an
-// agent's calls, approvals, the passphrase asked for again, lock and unlock, Ctrl-C
-// and a restart, and at its end the addresses those pages had before. The first run
-// as the page offers it, Home and the plain pages are walked by journey_basic.js.
+// The walk pairs and creates the vault, which opens on Overview with its list for a new
+// vault: there is no step to skip. From there on it is a walk through the six pages
+// with every setting (Pro, under "#/pro/…"): documents, apps, grants, an agent's calls,
+// approvals, the passphrase asked for again, lock and unlock, Ctrl-C and a restart,
+// and at its end the addresses those pages, Home and the three steps of an earlier
+// first run had before. Home, the sheets of its tiles and the plain pages are walked by
+// journey_home.js.
 //
 // On its way it chooses Polish four times: on the pairing screen, on the passphrase
 // screen, for an approval card and on the locked screen. Each time everything that can
@@ -170,7 +170,7 @@ run(async () => {
   const files = writeFiles(path.join(work, 'files'));
 
   const browser = await openBrowser(options, '');
-  let app = startApp(options, { args: ['--store', store] });
+  let app = startApp(options, { args: ['--store', store, '--view', 'pro'] });
   let page = await newPage(browser, options);
   let base = '';
   let product = '';
@@ -356,51 +356,42 @@ run(async () => {
     // The language that is pressed last goes along with the passphrase: Polish.
     await chooseLanguage(page, '.gate-lang', 'pl');
     await create.click();
-    // The step that follows is an address, and it is the one that adds an app.
-    await page.locator('form.gate-card[data-key="step-3"]').waitFor({ state: 'visible', timeout: 40000 });
-    check(new URL(page.url()).hash === '#/setup/app', `after "Create my vault" the address is ${page.url()}`);
+    // No step follows: a vault that was started with "--view pro" opens on Overview.
+    await page.locator(FRAME.pro).waitFor({ state: 'visible', timeout: 40000 });
+    check(new URL(page.url()).hash === '#/pro/overview', `after "Create my vault" the address is ${page.url()}`);
     const now = await state();
     check(now.locked === false && now.store.exists === true, 'the vault is not unlocked after it was created');
     check(!('demo_passphrase' in now), 'a real vault sends a passphrase');
-    check(now.interface.view === 'basic' && now.interface.setup === 'open' && now.interface.language === 'pl', `a new vault starts as ${JSON.stringify(now.interface)}`);
+    check(now.interface.view === 'pro' && now.interface.language === 'pl', `a new vault starts as ${JSON.stringify(now.interface)}`);
   });
 
   await step('the app keeps the language beside the vault: a reload shows Polish again, and one press changes it back', async () => {
     check((await get('/api/session')).language === 'pl', 'the session\'s answer does not name the kept language');
     await reload(page);
-    await page.locator('form.gate-card[data-key="step-3"]').waitFor({ state: 'visible', timeout: WAIT });
+    await page.locator(FRAME.pro).waitFor({ state: 'visible', timeout: WAIT });
     check((await page.locator('html').getAttribute('lang')) === 'pl', `after a reload the page is in "${await page.locator('html').getAttribute('lang')}"`);
-    check((await page.locator('.gate-lang button[data-language="pl"]').getAttribute('aria-pressed')) === 'true', 'after a reload the switch does not mark Polish');
+    check((await page.locator('.sidebar-foot button[data-language="pl"]').getAttribute('aria-pressed')) === 'true', 'after a reload the switch does not mark Polish');
     // A press now is kept by the app at once: the vault exists.
     const kept = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/interface', { timeout: WAIT });
-    await chooseLanguage(page, '.gate-lang', 'en');
+    await chooseLanguage(page, '.sidebar-foot', 'en');
     check((await kept).status() === 200, 'the app did not keep the language');
     await eventually(async () => (await state()).interface.language === 'en', WAIT, 'the state does not name the language that was pressed');
     check((await count('#toasts .toast')) === 0, 'choosing a language left a message');
   });
 
-  await step('the first run can be skipped, and the empty overview says what to do next, in order', async () => {
-    await picture('03-first-run-app');
-    await page.locator('form.gate-card[data-key="step-3"] .gate-actions .btn-quiet').click();
-    const second = page.locator('section.gate-card[data-key="step-2"]');
-    await second.waitFor({ state: 'visible', timeout: WAIT });
-    check(new URL(page.url()).hash === '#/setup/documents', `skipping the app step leads to ${page.url()}`);
-    await picture('04-first-run-documents');
-    await second.locator('.gate-actions .btn-quiet').click();
-    // A new vault opens on Home, where one line says what setting up still lacks. Skipping
-    // stored nothing: no app, no document, and setting up still open.
+  await step('no step follows the passphrase: Overview is open with its list for a new vault, which says what to do next, in order; Settings shows where the app opens', async () => {
+    // Nothing was added on the way, and the app keeps that this vault opens on the six pages.
+    const fresh = await state();
+    check(fresh.interface.view === 'pro', `after "Create my vault": ${JSON.stringify(fresh.interface)}`);
+    check(fresh.encryption.documents === 0 && (await get('/api/apps')).apps.length === 0, 'creating the vault added something to it');
+    check((await count('ol.steps')) === 0 && (await count('.gate-card')) === 0, 'a step of setting up is on the screen');
+    // "Open on" under Settings shows it, and Overview is one of six rows there.
+    await page.locator('#pro-home').click();
     await page.locator(FRAME.simple).waitFor({ state: 'visible', timeout: WAIT });
-    check(new URL(page.url()).hash === '#/home', `skipping both steps leads to ${page.url()}`);
-    const skipped = await state();
-    check(skipped.interface.view === 'basic' && skipped.interface.setup === 'open', `after skipping: ${JSON.stringify(skipped.interface)}`);
-    check(skipped.encryption.documents === 0 && (await get('/api/apps')).apps.length === 0, 'skipping added something to the vault');
-    const next = page.locator('.card-setup[data-key="setup"] #setup-continue');
-    await next.waitFor({ state: 'visible', timeout: WAIT });
-    check((await next.getAttribute('href')) === '#/setup/app', `the line about setting up leads to ${await next.getAttribute('href')}`);
-    // The walk from here on is through the six pages with every setting. On Settings the app is
-    // told once to open on them, without a message; then "Overview" is one of six rows.
     await openPage(page, 'settings');
-    check((await page.locator('input[name="start"]:checked').getAttribute('value')) === 'basic', '"Open on" does not show that a new vault opens on Home');
+    check((await page.locator('input[name="start"]:checked').getAttribute('value')) === 'pro', '"Open on" does not show that this vault opens on the six pages');
+    await openOn(page, 'basic');
+    await eventually(async () => (await state()).interface.view === 'basic', WAIT, '"Open on" did not keep the choice');
     await openOn(page, 'pro');
     await eventually(async () => (await state()).interface.view === 'pro', WAIT, '"Open on" did not keep the choice');
     check((await count('#toasts .toast')) === 0, 'choosing where the app opens left a message');
@@ -620,6 +611,8 @@ run(async () => {
     check((await connect.locator('.note-amber').count()) === 0, `the connect sheet warns: ${await connect.locator('.connect-body').textContent()}`);
     await connect.locator('.sheet-foot .btn-primary').click();
     await noSheet();
+    // This sheet shows text to copy. It wrote nothing: the home of the app is as empty as it was made.
+    check(fs.readdirSync(app.home).length === 0, `the home of the app holds ${JSON.stringify(fs.readdirSync(app.home))}`);
   });
 
   // ------------------------------------------------------------------ calls of the app
@@ -942,8 +935,10 @@ run(async () => {
     // The six pages of the same words are one press away: the link at the foot of the simple page.
     await page.locator('#activity-full').click();
     await page.locator('.page-body[data-key="view-pro/activity"]').waitFor({ state: 'attached', timeout: WAIT });
-    // The page that was called Basic is Home.
+    // The page that was called Basic is Home, and so is every step of the first run that is gone.
     await opens('#/basic', '#/home', '.simple .page-body[data-key="view-home"]');
+    await opens('#/setup/app', '#/home', '.simple .page-body[data-key="view-home"]');
+    await opens('#/setup', '#/home', '.simple .page-body[data-key="view-home"]');
     // An address that names no page is decided by what the app keeps: this vault opens on the six pages.
     await opens('#/nothing-of-that-name', '#/nothing-of-that-name', '.page-body[data-key="view-pro/overview"]');
   });

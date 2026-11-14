@@ -2,9 +2,9 @@
 
 The states a file can be in are walked through the service, with the answers the
 page gets, in ``test_gate_service.py``. Here: the module by itself, for both
-systems it knows, and the rules its source keeps. ``check`` is the look as today's
-page asks for it, in the words it had before; ``look`` is the look the writer builds
-on (``test_gate_hostwrite.py``), with four words more.
+systems it knows, and the rules its source keeps. There is one look, the one the
+writer builds on (``test_gate_hostwrite.py``): the helper ``look`` below gives what it
+found as the words and places a test reads, and ``seen`` gives it whole.
 """
 
 from __future__ import annotations
@@ -33,7 +33,6 @@ UNSUPPORTED = {
     "state": "unsupported",
     "path": None,
     "folder": None,
-    "open_line": None,
     "section": None,
 }
 
@@ -55,7 +54,15 @@ def entry(client: str = "claude-desktop") -> dict[str, Any]:
 
 
 def look(host: str, platform: str, client: str = "claude-desktop") -> dict[str, Any]:
-    return hostcheck.check(host, client=client, store=STORE, platform=platform)
+    """What a look finds: its word, the file and its folder as an owner reads them, the section."""
+    found = hostcheck.look(host, client=client, store=STORE, platform=platform)
+    place = found.path
+    return {
+        "state": found.state,
+        "path": None if place is None else hostconfig.shown_path(place),
+        "folder": None if place is None else hostconfig.shown_path(place.parent),
+        "section": found.section,
+    }
 
 
 def seen(host: str, platform: str = "linux", client: str | None = None) -> hostcheck.Look:
@@ -133,7 +140,6 @@ def test_the_file_looked_at_is_the_one_of_that_system(platform: str, home: Path)
         "state": "no_folder",
         "path": shown,
         "folder": shown.rsplit("/", 1)[0],
-        "open_line": None,
         "section": None,
     }
     here.parent.mkdir(parents=True)
@@ -142,13 +148,14 @@ def test_the_file_looked_at_is_the_one_of_that_system(platform: str, home: Path)
     assert look("claude-desktop", platform)["state"] == "present"
     # The entry is the one of this app: under another name in the vault it differs.
     assert look("claude-desktop", platform, client="another-name")["state"] == "differs"
-    # The line that opens the file names it in full, never with "~", which a quoted word
-    # would not expand.
+    # The place is shown with "~"; the look itself holds the file in full.
     here.write_text('{"theme": "dark"}', encoding="utf-8")
     answer = look("claude-desktop", platform)
     assert (answer["state"], answer["section"]) == ("other", "none")
-    assert str(here) in answer["open_line"]
-    assert "~" not in answer["open_line"]
+    assert answer["path"] == shown
+    assert hostcheck.look(
+        "claude-desktop", client="claude-desktop", store=STORE, platform=platform
+    ).path == (here)
 
 
 def test_outside_macos_the_folder_follows_xdg_config_home(
@@ -279,7 +286,7 @@ def test_a_file_exchanged_after_the_first_look_is_not_read_either(
     assert stat.S_ISREG(real_lstat(place).st_mode)
 
 
-def test_a_file_the_system_refuses_is_unreadable_not_an_error(
+def test_a_file_the_system_refuses_is_a_word_and_not_an_error(
     home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     place = home / ".config" / "Claude" / "claude_desktop_config.json"
@@ -297,9 +304,9 @@ def test_a_file_the_system_refuses_is_unreadable_not_an_error(
     answer = look("claude-desktop", "linux")
     found = seen("claude-desktop")
     monkeypatch.undo()
-    assert answer["state"] == "unreadable"
+    # A refusal by the system has a word of its own, and nothing of the system's message is in it.
+    assert answer["state"] == "no_access"
     assert "Permission" not in json.dumps(answer)
-    # The look the writer builds on has a word of its own for it.
     assert (found.state, found.raw, found.status) == ("no_access", None, None)
 
 
@@ -375,9 +382,8 @@ def test_the_section_is_told_for_a_json_file_without_the_entry(home: Path) -> No
         place.write_bytes(content)
         found = seen("claude-desktop")
         assert (found.state, found.section) == (state, section), content
-        # Today's route tells the section for `other` only, as before.
-        answer = look("claude-desktop", "linux")
-        assert answer["section"] == (section if state == "other" else None)
+        # The section is told for a file without the entry, and for no other.
+        assert (section is None) or state in ("other", "empty")
 
 
 def test_an_entry_that_holds_more_than_the_command_is_said_to(home: Path) -> None:
@@ -407,8 +413,7 @@ def test_an_entry_that_holds_more_than_the_command_is_said_to(home: Path) -> Non
         found = holds({**ours, **more})
         assert (found.state, found.switched_off) == ("present_more", off), more
         assert SECRET not in repr(found)
-        # Today's route says `present` for it, as it did before there was the word.
-        assert look("claude-desktop", "linux")["state"] == "present"
+        assert look("claude-desktop", "linux")["state"] == "present_more"
     # An entry that points elsewhere says whether it is switched off, too.
     elsewhere = holds({**ours, "command": "/opt/other/python", "enabled": False})
     assert (elsewhere.state, elsewhere.switched_off) == ("differs", True)
@@ -440,7 +445,8 @@ def test_an_entry_with_a_table_below_it_holds_more(home: Path) -> None:
             assert (found.state, found.switched_off) == ("present_more", off), more
         assert found.section is None  # a section is told for JSON only
         assert SECRET not in repr(found)
-        assert look("codex", "linux", client="codex")["state"] == "present"
+        wanted = "present" if off is None else "present_more"
+        assert look("codex", "linux", client="codex")["state"] == wanted
 
 
 @needs_toml
@@ -470,8 +476,8 @@ def test_an_entry_made_for_the_other_program_of_the_same_file_is_named(home: Pat
     # Asked for the app that is itself named `codex`, there is no other name to find.
     place.write_text(toml_entry("codex"), encoding="utf-8")
     assert seen("chatgpt-desktop", client="codex").state == "present"
-    # Today's route says what it said before: an entry that is not this app's differs.
-    assert look("chatgpt-desktop", "linux", client="chatgpt-desktop")["state"] == "differs"
+    # Asked for the tile's own name, the entry is this vault's under the other name.
+    assert look("chatgpt-desktop", "linux", client="chatgpt-desktop")["state"] == "present_as"
     # The file of Grok Build is nobody else's, and neither is Claude Desktop's.
     assert hostconfig.same_file("grok-build") == ()
     assert hostconfig.same_file("claude-desktop") == ()
@@ -492,7 +498,6 @@ def test_the_file_of_grok_build_is_looked_at(
             "state": "no_folder",
             "path": "~/.grok/config.toml",
             "folder": "~/.grok",
-            "open_line": None,
             "section": None,
         }
     place.parent.mkdir()
@@ -536,9 +541,8 @@ def test_a_folder_that_is_a_link_is_not_gone_through(
         for path in opened.paths:
             assert not path.startswith(str(elsewhere)), path
             assert path in (str(home), str(home / ".config")), path
-        # Today's route says what it has a word for: the file was not read.
         answer = look("claude-desktop", "linux")
-        assert (answer["state"], answer["section"]) == ("not_read", None)
+        assert (answer["state"], answer["section"]) == ("linked", None)
         assert SECRET not in json.dumps(answer)
 
     # The folder of the file is a link to a folder that holds the very entry.
@@ -650,7 +654,7 @@ def test_what_the_system_refuses_is_said_apart_from_what_cannot_be_read(
     for name in (place.name, "Claude", ".config"):
         for number in (13, 1):  # EACCES, EPERM
             monkeypatch.setattr(hostcheck.os, "open", refusing(name, PermissionError, number))
-            assert both() == ("no_access", "unreadable"), (name, number)
+            assert both() == ("no_access", "no_access"), (name, number)
     monkeypatch.setattr(hostcheck.os, "open", real_open)
 
     # It refuses to look at the file, or at a folder on the way.
@@ -664,7 +668,7 @@ def test_what_the_system_refuses_is_said_apart_from_what_cannot_be_read(
 
     for name in (place.name, "Claude", ".config"):
         monkeypatch.setattr(hostcheck.os, "lstat", looking(name))
-        assert both() == ("no_access", "unreadable"), name
+        assert both() == ("no_access", "no_access"), name
     monkeypatch.setattr(hostcheck.os, "lstat", real_lstat)
     # Another error while the file is opened is not a refusal: the file could not be read.
     monkeypatch.setattr(hostcheck.os, "open", refusing(place.name, OSError, 5))
@@ -790,12 +794,28 @@ def test_the_module_reads_and_never_writes() -> None:
 
 
 def test_the_walk_throughs_give_the_app_a_home_of_their_own() -> None:
-    # "Check the file" in a browser walk-through looks where the app's home is. The program that
-    # starts the app for a walk-through names a folder the run owns before the app runs, so the
-    # settings of a program on the computer that runs the tests are never read.
+    # In a browser walk-through the app looks at a settings file, and writes one, where its home
+    # is. The program that starts the app for a walk-through names a folder the run owns before
+    # the app runs, so the settings of a program on the computer that runs the tests are never
+    # read and never written.
     source = (Path(__file__).parent / "browser" / "launch_app.py").read_text(encoding="utf-8")
     started = source.index("return run_wdva(arguments[1:])")
     assert 0 < source.index('os.environ["HOME"] = home') < started
     assert 0 < source.index('os.environ["XDG_CONFIG_HOME"] = ') < started
     assert 'given = os.environ.get("GATE_HOME", "")' in source
-    assert "home = given or tempfile.mkdtemp(" in source
+    # A home the launcher makes itself lies under the checkout, beside the walk-throughs, and
+    # not under the system's folder for temporary files: the app writes no entry that names a
+    # vault in such a folder.
+    assert 'made = tempfile.mkdtemp(prefix="home-", dir=os.path.join(HERE, ".run"))' in source
+    assert "home = given or made" in source
+    assert "tempfile.mkdtemp(" in source
+    assert source.count("mkdtemp(") == 1
+    # The two variables that move a settings file or stop a write never reach the app from
+    # the computer that runs the walk-through.
+    for name in ("GROK_HOME", "CODEX_HOME"):
+        assert 0 < source.index(f'os.environ.pop("{name}", None)') < started, name
+    # A walk-through may give the app a value of its own, after the computer's was removed.
+    given = source.index('moved = os.environ.get("GATE_CODEX_HOME", "")')
+    assert source.index('os.environ.pop("CODEX_HOME", None)') < given < started
+    ignored = (Path(__file__).parent.parent / ".gitignore").read_text(encoding="utf-8")
+    assert "/tests/browser/.run/" in ignored.splitlines()

@@ -25,11 +25,11 @@ What the look is allowed to do:
   and what was opened is looked at again before a byte is read, so that a file
   that was exchanged in between is not read either. No read can block.
 * What is found is one word from :data:`STATES`, and for a JSON file without
-  the gate's entry one word from :data:`SECTIONS`. :func:`check` answers with
-  those and nothing else of the file: no key, no value, no message of a parser.
-  :func:`look` also hands back the bytes that were read, for the one module
-  that writes such a file, :mod:`wdva.gate.hostwrite`; they are for that module
-  and belong in no answer.
+  the gate's entry one word from :data:`SECTIONS`. An answer to the owner's
+  page holds those and nothing else of the file: no key, no value, no message
+  of a parser. :func:`look` also hands back the bytes that were read, for the
+  one module that writes such a file, :mod:`wdva.gate.hostwrite`; they are for
+  that module and belong in no answer.
 
 TOML is read with ``tomllib``, which Python has from version 3.11. On an older
 Python a TOML file is not looked at and the answer is ``unsupported``.
@@ -58,7 +58,6 @@ __all__ = [
     "Look",
     "NoAccess",
     "NoFolder",
-    "check",
     "look",
     "open_folder",
 ]
@@ -105,14 +104,6 @@ _JSON_SERVERS = "mcpServers"
 _TOML_SERVERS = "mcp_servers"
 _READ_AT_ONCE = 64 * 1024
 _MISSING = object()
-
-# What `check` answers for the words that came with `look`: the words it had before.
-_BEFORE = {
-    "present_more": "present",
-    "present_as": "differs",
-    "linked": "not_read",
-    "no_access": "unreadable",
-}
 
 
 class FolderProblem(Exception):
@@ -472,54 +463,3 @@ def look(
         found.switched_off,
         found.other_name,
     )
-
-
-def check(
-    host: str,
-    *,
-    client: str,
-    store: str | os.PathLike[str] | None,
-    platform: str | None = None,
-) -> dict[str, Any]:
-    """Look at the settings file of the application ``host`` for the gate's entry.
-
-    The answer of :func:`look` in the words this function had before there
-    were more: ``present_more`` is ``present`` here, ``present_as`` is
-    ``differs``, ``linked`` is ``not_read`` and ``no_access`` is
-    ``unreadable``. Returns ``state``, ``path`` and ``folder`` (the file and
-    its folder as an owner reads them, ``None`` when ``unsupported``),
-    ``open_line`` (:func:`wdva.gate.hostconfig.open_line` for what was found,
-    or ``None``) and ``section`` (one of :data:`SECTIONS` for a JSON file in
-    the state ``other``, else ``None``).
-
-    Raises :class:`ValueError` where :func:`~wdva.gate.hostconfig.render` does.
-    Never raises for anything about the file.
-    """
-    config = hostconfig.render(host, client=client, store=store, platform=platform)
-    unsupported: dict[str, Any] = {
-        "state": "unsupported",
-        "path": None,
-        "folder": None,
-        "open_line": None,
-        "section": None,
-    }
-    place = hostconfig.settings_file(config.host, config.platform)
-    if place is None or not config.command:
-        return unsupported
-    path, language = place
-    block = next((b for b in config.blocks if b.language == language and b.where), None)
-    if block is None:
-        return unsupported
-    found = look(host, client=client, store=store, platform=platform)
-    if found.state == "unsupported":
-        return unsupported
-    state = _BEFORE.get(found.state, found.state)
-    return {
-        "state": state,
-        "path": hostconfig.shown_path(path),
-        "folder": hostconfig.shown_path(path.parent),
-        "open_line": hostconfig.open_line(
-            path, state=state, platform=config.platform, language=language, text=block.text
-        ),
-        "section": found.section if state == "other" else None,
-    }

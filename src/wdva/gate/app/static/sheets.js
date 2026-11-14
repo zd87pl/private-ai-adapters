@@ -66,15 +66,21 @@ export function basicGrantSentence(app) {
 // -- the passphrase again -----------------------------------------------------------
 
 let reauthOpen = null;
+/** Which refusal the sheet that is open answers for. */
+let reauthScope = null;
 
 /**
  * Ask for the passphrase. Resolves to true once it was accepted, false when the owner gave up.
  * `demoPassphrase` is the passphrase of the demo vault when this is the demo: the sheet then
- * shows it, because nobody could answer otherwise. Its one sentence says when the passphrase
- * is asked for and not what for: not every press that asks lets more text leave.
+ * shows it, because nobody could answer otherwise. `scope` says which refusal opened the
+ * sheet: "trial" for the owner's trial question, null for a change that needs owner mode.
+ * The sheet hands it on with the passphrase and says nothing else of it: its one sentence
+ * says when the passphrase is asked for and not what for.
  */
-export function requestReauth(demoPassphrase = null) {
-  if (reauthOpen) return reauthOpen;
+export function requestReauth(demoPassphrase = null, scope = null) {
+  // A sheet that is open answers for the refusal that opened it; a second one waits for it.
+  if (reauthOpen) return reauthOpen.then((accepted) => (accepted && reauthScope !== scope ? requestReauth(demoPassphrase, scope) : accepted));
+  reauthScope = scope;
   const form = { passphrase: "", busy: false, failed: null };
   const submit = async (event, sheet) => {
     event.preventDefault();
@@ -83,7 +89,7 @@ export function requestReauth(demoPassphrase = null) {
     form.failed = null;
     sheet.update();
     try {
-      await api.reauth(form.passphrase);
+      await api.reauth(form.passphrase, scope);
       form.passphrase = "";
       sheet.close(true);
     } catch (error) {
@@ -315,15 +321,6 @@ function nameField(form, update, prefix) {
       },
     }),
   });
-}
-
-/**
- * The three things the owner says about an app the list does not name: where its
- * model runs, who receives the text (for one whose model runs elsewhere), and its
- * name in the vault. The form of Pro and the first run both ask with these fields.
- */
-export function otherAppFields(form, update, prefix) {
-  return [kindRow(form, update, prefix), form.hosted ? destinationField(form, update, prefix) : null, nameField(form, update, prefix)];
 }
 
 /** The fields of the "add an app" form: which application, its name, where text goes. */

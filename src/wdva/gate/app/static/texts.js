@@ -10,7 +10,7 @@
 // module's memory and nowhere in the browser. Keeping it beside the vault is the
 // app's work, and main.js asks for that.
 
-import { PRODUCT } from "./brand.js";
+import { ENTRY, PRODUCT } from "./brand.js";
 import { list, num, useLanguage } from "./format.js";
 import { TEXT as ENGLISH } from "./text-en.js";
 import { TEXT as POLISH } from "./text-pl.js";
@@ -89,9 +89,11 @@ function written(value) {
 
 /**
  * The text of a key in the language shown. `values` fills its places: `{app}` takes
- * `values.app`. `{product}` needs no value. A key with plural forms takes the number
- * as `n`. A key the Polish table lacks is shown in English, and one that English
- * lacks as the key itself between ⟦ ⟧; the tests see to it that neither happens.
+ * `values.app`. `{product}` needs no value, and neither does `{entry}`, the name the
+ * product's entry has in the settings file of an AI app, where the caller has none
+ * from a look at such a file. A key with plural forms takes the number as `n`. A key
+ * the Polish table lacks is shown in English, and one that English lacks as the key
+ * itself between ⟦ ⟧; the tests see to it that neither happens.
  */
 export function t(key, values = {}) {
   const own = Object.prototype.hasOwnProperty;
@@ -102,7 +104,8 @@ export function t(key, values = {}) {
   return found.replace(/(\$?)\{([a-z]+)\}/g, (whole, dollar, name) => {
     if (dollar) return whole;
     if (name === "product") return PRODUCT;
-    return own.call(values, name) ? written(values[name]) : whole;
+    if (own.call(values, name)) return written(values[name]);
+    return name === "entry" && ENTRY ? ENTRY : whole;
   });
 }
 

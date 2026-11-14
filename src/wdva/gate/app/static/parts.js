@@ -2,8 +2,8 @@
 // Copyright 2025 Enclave
 //
 // The pieces every screen is made of: buttons, chips, meters, switches, sheets,
-// toasts, the choice of the language, a text to copy, the bar that says what is wrong,
-// and one row of activity as the six pages show it.
+// toasts, the choice of the language, a text to copy (a line or a block), the bar that
+// says what is wrong, and one row of activity as the six pages show it.
 
 import { el, icon, render } from "./dom.js";
 import { agoShort, num, sentence, whenFull } from "./format.js";
@@ -542,6 +542,21 @@ export function copyLine(ctx, id, text, what) {
     // The text wraps at its spaces and never inside an option; copied, it is one unbroken line.
     el("pre", { class: "code code-wrap", tabindex: 0, "aria-label": what }, el("code", null, codeWords(text))),
     copyButton(ctx, id, text, what),
+  );
+}
+
+/**
+ * A text of one or several lines to copy: its label with "Copy" at the right above it,
+ * the text in a box under them. A text of several lines keeps its lines and scrolls
+ * inside its box; one line wraps at its spaces.
+ */
+export function copyBlock(ctx, id, label, text) {
+  const lines = String(text).includes("\n");
+  return el(
+    "section",
+    { class: "copy-block", key: id },
+    el("header", { class: "copy-head" }, el("h3", { class: "copy-label" }, label), copyButton(ctx, id, text, label)),
+    el("pre", { class: ["code", !lines && "code-wrap"], tabindex: 0, "aria-label": label }, el("code", null, lines ? text : codeWords(text))),
   );
 }
 

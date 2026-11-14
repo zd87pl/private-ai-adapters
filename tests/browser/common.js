@@ -1,5 +1,5 @@
 // What the three walk-throughs of the app share (journey_demo.js, journey_real.js,
-// journey_basic.js).
+// journey_home.js).
 //
 // Nothing in this file knows a step. It reads the options from the environment,
 // starts and stops the app through launch_app.py, opens the browser engine that
@@ -22,7 +22,9 @@
 'use strict';
 
 const { spawn, spawnSync } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const vm = require('vm');
 
@@ -234,12 +236,14 @@ async function closeSheets(page) {
  * `started` waits for the lines.
  *
  * `home` is that home: an empty folder this run owns (`app.home`), made here unless one
- * is given. The app looks for the settings file of an AI app under it and nowhere else,
- * so a walk-through never reads the settings of a program on this computer.
+ * is given. It lies under the checkout (see `runDirectory`). The app looks for the settings
+ * file of an AI app under it and nowhere else, and writes there and nowhere else, so a
+ * walk-through never reads or changes the settings of a program on this computer. `env` is
+ * added to the environment of the app (`GATE_CODEX_HOME`, for the one run that needs it).
  */
-function startApp(options, { args = [], ownerSeconds = options.ownerSeconds, port = options.port, home = shortDirectory('gh-') } = {}) {
+function startApp(options, { args = [], ownerSeconds = options.ownerSeconds, port = options.port, home = newHome(), env = {} } = {}) {
   const command = [path.join(HERE, 'launch_app.py'), String(ownerSeconds), 'gate', 'app', '--no-browser', '--port', String(port), ...args];
-  const child = spawn(options.python, command, { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GATE_HOME: home } });
+  const child = spawn(options.python, command, { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env, GATE_HOME: home } });
   const app = { child, home, out: '', err: '', exit: null, lines: [], url: '', port: 0 };
   child.stdout.setEncoding('utf8');
   child.stderr.setEncoding('utf8');
@@ -324,6 +328,110 @@ function shortDirectory(prefix) {
   const made = fs.realpathSync(fs.mkdtempSync(path.join('/tmp', prefix)));
   leftovers.add(made);
   return made;
+}
+
+/** The longest path a vault's socket may have (SOCKET_PATH_LIMIT in wdva/gate/paths.py). */
+const SOCKET_BYTES = 100;
+/** What a run adds to its directory on the way to a socket: one letter for the vault, then the app's own names. */
+const BELOW_A_RUN = '/A/run/gate.sock';
+
+let runHolds = null;
+let homes = 0;
+
+/** A new directory with a name of three characters inside `base`, or null where none can be made. */
+function madeIn(base) {
+  try {
+    fs.mkdirSync(base, { recursive: true });
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const made = path.join(fs.realpathSync(base), crypto.randomBytes(8).toString('hex').replace(/[^a-z0-9]/g, '').slice(0, 3));
+      try {
+        fs.mkdirSync(made);
+        return made;
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+      }
+    }
+  } catch (_error) {
+    // The place cannot be written: the next one is tried.
+  }
+  return null;
+}
+
+/**
+ * The directory of this run: where its vaults and the homes of its apps lie. It is made
+ * once, under the checkout (`.run/` beside this file, which version control leaves out)
+ * and not under the system's folder for temporary files: the app writes no entry into a
+ * settings file that names a vault in a temporary folder. It is removed when the process
+ * ends. GATE_RUN_DIR names another place for it.
+ *
+ * A vault's socket lies below it, and the path of a socket may have 100 bytes. Where the
+ * checkout lies too deep for that, the directory is made in the home folder of the account
+ * instead, which is said in a note.
+ */
+function runDirectory() {
+  if (runHolds) return runHolds;
+  const fits = (made) => Buffer.byteLength(made + BELOW_A_RUN) <= SOCKET_BYTES;
+  const wanted = option('GATE_RUN_DIR', path.join(HERE, '.run'));
+  let made = madeIn(wanted);
+  if (made && !fits(made)) {
+    fs.rmSync(made, { recursive: true, force: true });
+    note(`a vault under ${wanted} would have a socket path of more than ${SOCKET_BYTES} bytes; the vaults of this run lie in the home folder of this account instead (GATE_RUN_DIR names another place)`);
+    made = null;
+  }
+  if (!made) made = madeIn(path.join(os.homedir(), '.gate-walk'));
+  if (!made || !fits(made)) {
+    console.log(`FAIL  no directory for the vaults of this run: ${wanted} and ${path.join(os.homedir(), '.gate-walk')} cannot be written or lie too deep for a socket path of ${SOCKET_BYTES} bytes. Name a short directory outside the temporary folders in GATE_RUN_DIR.`);
+    process.exit(1);
+  }
+  leftovers.add(made);
+  runHolds = made;
+  return made;
+}
+
+/** A new, empty home for an app of this run, inside the run's directory. */
+function newHome() {
+  homes += 1;
+  const made = path.join(runDirectory(), `h${homes}`);
+  fs.mkdirSync(made);
+  return made;
+}
+
+/**
+ * Whether the app would write an entry that names this Python and a vault of this run: its
+ * own rule, asked through launch_app.py. Returns {ok, line}; the line is what the launcher
+ * said, with the reason where the answer is no.
+ */
+function canConnect(options) {
+  const asked = spawnSync(options.python, [path.join(HERE, 'launch_app.py'), '--can-connect', runDirectory()], { encoding: 'utf8', timeout: 120000 });
+  const line = String(asked.stdout || '').trim().split('\n').pop() || String(asked.stderr || asked.error || '').trim().split('\n').pop() || 'the launcher said nothing';
+  return { ok: asked.status === 0 && line === 'connect: ok', line };
+}
+
+/**
+ * One call of an agent application made through the entry that stands in a settings file:
+ * with the Python that entry names as its command, for the vault and under the name that
+ * its arguments name. `entry` is {command, args}, as read from the file. This is the way
+ * an AI app would start the program, short of the protocol it then speaks: no AI app takes
+ * part in a walk-through. Returns {code, text, released}.
+ */
+function agentCallThrough(entry, ...rest) {
+  const args = entry.args || [];
+  const after = (flag) => (args.includes(flag) ? args[args.indexOf(flag) + 1] : '');
+  const store = after('--store');
+  const client = after('--client');
+  if (!entry.command || !store || !client) throw new Error(`the entry names no command, vault or app: ${JSON.stringify(entry)}`);
+  const made = spawnSync(entry.command, [path.join(HERE, 'agent_call.py'), store, client, ...rest], { encoding: 'utf8', timeout: 120000 });
+  if (made.error) throw new Error(`the call through the written entry could not be made: ${made.error.message}`);
+  if (made.status !== 0) throw new Error(`the call through the written entry failed: ${(made.stderr || '').trim().split('\n').pop()}`);
+  return JSON.parse(made.stdout);
+}
+
+/** What read_settings.py says about files in a home of this run. Returns its JSON answer. */
+function readSettings(options, ...rest) {
+  const made = spawnSync(options.python, [path.join(HERE, 'read_settings.py'), ...rest], { encoding: 'utf8', timeout: 120000 });
+  if (made.error) throw new Error(`read_settings.py could not be started: ${made.error.message}`);
+  if (made.status !== 0) throw new Error(`read_settings.py failed: ${(made.stderr || '').trim().split('\n').pop()}`);
+  return JSON.parse(made.stdout);
 }
 
 // -- the browser ----------------------------------------------------------------------
@@ -501,6 +609,22 @@ async function apiGet(page, base, pathname) {
   if (session) headers['X-WDVA-Session'] = session;
   const response = await page.context().request.get(new URL(pathname, base).href, { headers, timeout: WAIT });
   if (!response.ok()) throw new Error(`GET ${pathname} answered ${response.status()}`);
+  return response.json();
+}
+
+/**
+ * Change something the way a second window of the owner does: with the request the page
+ * itself would send, under the session of `page`. For setting a vault up before a walk
+ * begins to look at it; what the walk is about is done on the page. `body` is sent as JSON,
+ * or as it is when it is a text or bytes (a document). Returns the parsed answer.
+ */
+async function apiPost(page, base, pathname, body = {}) {
+  const raw = typeof body === 'string' || Buffer.isBuffer(body);
+  const headers = { Accept: 'application/json', 'Content-Type': raw ? 'application/octet-stream' : 'application/json', 'X-WDVA-Gate': '1' };
+  const session = await sessions.get(page.context());
+  if (session) headers['X-WDVA-Session'] = session;
+  const response = await page.context().request.post(new URL(pathname, base).href, { headers, data: raw ? Buffer.from(body) : body, timeout: WAIT });
+  if (!response.ok()) throw new Error(`POST ${pathname} answered ${response.status()}: ${(await response.text()).slice(0, 200)}`);
   return response.json();
 }
 
@@ -778,8 +902,11 @@ module.exports = {
   FRAME,
   WAIT,
   agentCall,
+  agentCallThrough,
   apiGet,
+  apiPost,
   backHome,
+  canConnect,
   check,
   chooseLanguage,
   closePage,
@@ -791,6 +918,7 @@ module.exports = {
   finish,
   focused,
   lockElsewhere,
+  newHome,
   newPage,
   notOfTable,
   note,
@@ -803,8 +931,10 @@ module.exports = {
   pressCounter,
   problem,
   readOptions,
+  readSettings,
   reload,
   run,
+  runDirectory,
   shortDirectory,
   shot,
   sleep,

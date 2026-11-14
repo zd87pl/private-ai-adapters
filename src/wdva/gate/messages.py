@@ -122,9 +122,9 @@ def needs_approval(ref: str, client: str) -> str:
     """The passage exists and may be released to this client once the owner approves it."""
     return _two_lines(
         "NEEDS_APPROVAL: the owner must approve this passage before it is released.",
-        f'Ask the user to open "Approvals" in the {APP_NAME} app and release {ref} for '
-        f"{client}, then call {AGENT_TOOL_READ} again with the same ref. Do not ask for further "
-        "passages until the user has answered.",
+        f"Ask the user to open the {APP_NAME} page in their browser and answer the request for "
+        f"{ref} from {client} there, then call {AGENT_TOOL_READ} again with the same ref. Do not "
+        "ask for further passages until the user has answered.",
     )
 
 

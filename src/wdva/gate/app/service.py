@@ -2569,26 +2569,6 @@ class GateService:
             raise _not_found("There is no application of that kind to connect.")
         return chosen
 
-    @_translated
-    def connect_check(self, *, name: str, host: str | None = None) -> JSONObject:
-        """Look at the settings file of one agent application for this app's entry.
-
-        The look that came before :meth:`connect_look`, for an app that is
-        registered; it stays for the page that still calls it. It reads one
-        file outside the vault's folder, whose place is fixed by the
-        application and this computer, when this is called and at no other
-        time. The answer says in one word what was found and holds nothing
-        from the file. Nothing is changed, here or there, so it needs no owner
-        mode.
-        """
-        session = self._unlocked()
-        self._registered(session.gate.policy(), name)
-        chosen = self._host_for(name, host)
-        try:
-            return hostcheck.check(chosen, client=name, store=self._path)
-        except ValueError:
-            raise _invalid(_UNUSABLE_NAME) from None
-
     # -- the settings file of an agent application ----------------------------------------
 
     @staticmethod

@@ -59,7 +59,7 @@ function fileNames(files) {
  * above the buttons. "Cancel" drops the files: nothing is sent. It is built from the
  * lists as they are when it opens.
  */
-async function addToWhichGroup(ctx, files) {
+export async function addToWhichGroup(ctx, files) {
   if (!files.length || !ctx.data.apps || !ctx.data.documents) return;
   const apps = ctx.data.apps.apps;
   const groups = ctx.data.documents.collections.map((group) => group.name);
@@ -429,6 +429,24 @@ const HOW = [
     title: "how.works.title",
     lines: ["how.works.1", "how.works.2", "how.works.3", "how.works.4", "how.works.5", "how.works.6", "how.works.7"],
   },
+  { title: "how.ask.title", lines: ["how.ask.1", "how.ask.2", "how.ask.3", "how.ask.4", "how.ask.5"] },
+  {
+    title: "how.connect.title",
+    lines: [
+      "how.connect.1",
+      "how.connect.2",
+      "how.connect.3",
+      "how.connect.4",
+      "how.connect.5",
+      "how.connect.6",
+      "how.connect.7",
+      "how.connect.8",
+      "how.connect.9",
+      "how.connect.10",
+      "how.connect.11",
+      "how.connect.12",
+    ],
+  },
   { title: "how.files.title", lines: ["how.files.1", "how.files.2", "how.files.3"] },
   { title: "how.cannot.title", lines: null },
   { title: "how.locked.title", lines: ["how.locked.1", "how.locked.2"] },
@@ -436,8 +454,9 @@ const HOW = [
 
 /**
  * The one page of the simple interface that explains at length: how a passage reaches
- * an app, where the owner's files stay, what the product cannot do, what a locked
- * vault shows, and which version this is.
+ * an app, what the box that asks does, what "Connect" writes and what it never does,
+ * where the owner's files stay, what the product cannot do, what a locked vault
+ * shows, and which version this is.
  */
 export function howPage(ctx) {
   return {

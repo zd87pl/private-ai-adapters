@@ -890,7 +890,7 @@ def record_and_files(browser: Browser) -> tuple[Any, ...]:
     )
 
 
-def test_the_view_the_check_and_the_demo_address_over_http(
+def test_the_view_the_look_and_the_demo_address_over_http(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # What looks for another program's settings looks into a home that this test owns.
@@ -898,8 +898,8 @@ def test_the_view_the_check_and_the_demo_address_over_http(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     browser, store = app.browser, app.store
-    check = "/api/apps/claude-desktop/connect/check"
-    posts = [("/api/interface", {"view": "pro"}), (check, {}), ("/api/demo/again", {})]
+    look = "/api/connect/claude-desktop/look"
+    posts = [("/api/interface", {"view": "pro"}), (look, {}), ("/api/demo/again", {})]
 
     # Each needs the session, like every call.
     for path, body in posts:
@@ -908,7 +908,7 @@ def test_the_view_the_check_and_the_demo_address_over_http(
 
     # Without a vault there is no view to keep, and none of the three makes anything.
     assert browser.error("POST", "/api/interface", {"view": "pro"}) == (404, "not_found")
-    assert browser.error("POST", check, {}) == (409, "locked")
+    assert browser.error("POST", look, {}) == (409, "locked")
     assert browser.error("POST", "/api/demo/again", {}) == (404, "not_found")
     assert not store.exists()
 
@@ -946,19 +946,16 @@ def test_the_view_the_check_and_the_demo_address_over_http(
     assert json.loads(file.read_bytes()) == {"view": "pro", "setup": "done"}
     assert not list(tmp_path.glob("elsewhere*"))
 
-    # -- the check: one word about one file, and not a byte of it
+    # -- the look: fixed words about one file, and not a byte of it
     secret = "sk-MADE-UP-KEY-OF-ANOTHER-TOOL-90817"
-    assert browser.ok("POST", check, {}) == {
-        "state": "no_folder",
-        "path": "~/.config/Claude/claude_desktop_config.json"
+    answer = browser.ok("POST", look, {})
+    assert (answer["state"], answer["section"], answer["copies"]) == ("no_folder", None, [])
+    assert (answer["path"], answer["folder"]) == (
+        "~/.config/Claude/claude_desktop_config.json"
         if sys.platform != "darwin"
         else "~/Library/Application Support/Claude/claude_desktop_config.json",
-        "folder": "~/.config/Claude"
-        if sys.platform != "darwin"
-        else "~/Library/Application Support/Claude",
-        "open_line": None,
-        "section": None,
-    }
+        "~/.config/Claude" if sys.platform != "darwin" else "~/Library/Application Support/Claude",
+    )
     assert not home.exists()
     place = home / ".config" / "Claude" / "claude_desktop_config.json"
     if sys.platform == "darwin":
@@ -980,30 +977,32 @@ def test_the_view_the_check_and_the_demo_address_over_http(
 
     before = in_the_home()
     seen = len(browser.bodies)
-    answer = browser.ok("POST", check, {"host": "claude-desktop"})
+    answer = browser.ok("POST", look, {})
     assert (answer["state"], answer["section"]) == ("other", "filled")
-    assert str(place) in answer["open_line"]
-    assert in_the_home() == before, "the check changed something in the home folder"
+    assert in_the_home() == before, "the look changed something in the home folder"
     place.write_bytes(place.read_bytes()[:-1])  # the last brace is missing
     before = in_the_home()
-    assert browser.ok("POST", check, {})["state"] == "unreadable"
+    assert browser.ok("POST", look, {})["state"] == "unreadable"
     assert in_the_home() == before
     for body in browser.bodies[seen:]:
         assert secret not in body, "a byte of the file reached an answer"
         assert "another-tool" not in body
-    # The request names the app and the kind of application, never a file.
+    # The address names the application, and the request names nothing: never a file.
     for body in (
         {"path": str(place)},
-        {"host": "claude-desktop", "file": "/etc/passwd"},
-        {"host": 7},
+        {"host": "claude-desktop"},
+        {"expect": "other"},
     ):
-        assert browser.error("POST", check, body) == (400, "invalid"), body
-    for host in ("/etc/passwd", "../codex", "netscape"):
-        assert browser.error("POST", check, {"host": host}) == (404, "not_found")
-    assert browser.error("POST", "/api/apps/nobody/connect/check", {}) == (404, "not_found")
-    assert browser.error("POST", f"{check}?path=/etc/passwd", {}) == (400, "invalid")
-    assert browser.error("GET", check) == (404, "not_found")
-    assert browser.ok("POST", check, {"host": "claude-code"})["state"] == "unsupported"
+        assert browser.error("POST", look, body) == (400, "invalid"), body
+    for host in ("netscape", "codex", "claude-code", "generic"):
+        assert browser.error("POST", f"/api/connect/{host}/look", {}) == (404, "not_found")
+    assert browser.error("POST", f"{look}?path=/etc/passwd", {}) == (400, "invalid")
+    assert browser.error("GET", look) == (404, "not_found")
+    # The address of the look that came before these routes answers nothing any more.
+    assert browser.error("POST", "/api/apps/claude-desktop/connect/check", {}) == (
+        404,
+        "not_found",
+    )
     # Asking for the text reads no file; its new fields come with it.
     connect = browser.ok("GET", "/api/apps/claude-desktop/connect")
     assert connect["blocks"][0]["where_here"] == answer["path"]
@@ -1019,7 +1018,7 @@ def test_the_view_the_check_and_the_demo_address_over_http(
     assert record_and_files(browser) == head
     assert browser.ok("GET", "/api/activity?limit=200") == listed
 
-    # Locked: the view can still be kept; the check is refused; the demo's address is not there.
+    # Locked: the view can still be kept; the look is refused; the demo's address is not there.
     assert browser.ok("POST", "/api/lock", {})["locked"] is True
     head = record_and_files(browser)
     state = browser.ok("POST", "/api/interface", {"view": "basic"})
@@ -1028,7 +1027,7 @@ def test_the_view_the_check_and_the_demo_address_over_http(
         gs.interface("basic", "done"),
     )
     assert browser.error("POST", "/api/interface", {"view": "expert"}) == (400, "invalid")
-    assert browser.error("POST", check, {}) == (409, "locked")
+    assert browser.error("POST", look, {}) == (409, "locked")
     assert browser.error("POST", "/api/demo/again", {}) == (404, "not_found")
     assert record_and_files(browser) == head
     # And the view that was kept is the one the vault opens with.

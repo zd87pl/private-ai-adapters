@@ -55,8 +55,9 @@ NON_OK: dict[str, tuple[str, str]] = {
     "needs_approval": (
         messages.needs_approval(REF, CLIENT),
         "NEEDS_APPROVAL: the owner must approve this passage before it is released.\n"
-        f'What to do: Ask the user to open "Approvals" in the {PRODUCT} app and release '
-        f"d-3f9a2c41b07e.7 for claude-desktop, then call {READ} again with the same ref. "
+        f"What to do: Ask the user to open the {PRODUCT} page in their browser and answer "
+        "the request for d-3f9a2c41b07e.7 from claude-desktop there, "
+        f"then call {READ} again with the same ref. "
         "Do not ask for further passages until the user has answered.",
     ),
     "client-day": (
@@ -171,9 +172,10 @@ def test_non_ok_messages_contain_no_document_text() -> None:
     # Apart from those two fields the text is constant.
     one = messages.needs_approval("d-000000000000.1", "a")
     other = messages.needs_approval("d-ffffffffffff.99999", "lm-studio")
-    assert one.replace("d-000000000000.1 for a,", "<>") == other.replace(
-        "d-ffffffffffff.99999 for lm-studio,", "<>"
+    assert one.replace("d-000000000000.1 from a there,", "<>") == other.replace(
+        "d-ffffffffffff.99999 from lm-studio there,", "<>"
     )
+    assert "<>" in one.replace("d-000000000000.1 from a there,", "<>")
     assert messages.store_not_found("a").replace("connect a again", "<>") == (
         messages.store_not_found("lm-studio").replace("connect lm-studio again", "<>")
     )
@@ -256,6 +258,19 @@ def test_agent_visible_messages_name_no_command(name: str) -> None:
 @pytest.mark.parametrize("name", list(agent_visible()))
 def test_agent_visible_messages_say_vault(name: str) -> None:
     assert re.search(r"\bstores?\b", agent_visible()[name]) is None
+
+
+def test_no_text_names_a_page_of_the_interface() -> None:
+    # An app passes these words on to a person, often in another language. A page has one
+    # name in one interface and another name, or none, in the other: the text that waits for
+    # an answer says "the page in their browser", which is true wherever the card stands.
+    pages = re.compile(r"\b(Approvals|Home|Basic)\b")
+    for name, text in agent_visible().items():
+        assert pages.search(text) is None, name
+    literals = re.findall(r'"((?:[^"\\\n]|\\.)*)"', inspect.getsource(messages))
+    assert len(literals) > 60
+    for text in literals:
+        assert pages.search(text) is None, text
 
 
 # -- the last line and what is left ---------------------------------------------------

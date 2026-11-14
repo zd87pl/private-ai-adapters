@@ -48,9 +48,10 @@ function keepSession(value) {
 }
 
 /**
- * `unauthorized()` is called when the session has ended. `reauth()` is called when
+ * `unauthorized()` is called when the session has ended. `reauth(scope)` is called when
  * an action needs the passphrase again; it resolves to true once the passphrase
- * was accepted and to false when the owner gave up.
+ * was accepted and to false when the owner gave up. `scope` is "trial" when it is the
+ * owner's trial question that was refused, else null.
  */
 export function configure({ unauthorized, reauth }) {
   hooks.unauthorized = unauthorized;
@@ -111,8 +112,12 @@ async function call(method, path, options = {}) {
       if (hooks.unauthorized) hooks.unauthorized();
       throw error;
     }
-    if (error.code === "reauth_required" && hooks.reauth && !options.plain) {
-      const accepted = await hooks.reauth();
+    // The one place that asks for the passphrase again. It knows two refusals: a change that
+    // needs owner mode, and the owner's trial question. For the second the passphrase is sent
+    // with its scope, so that typing it for the box that asks opens that box and nothing else.
+    const trial = error.code === "trial_reauth_required";
+    if ((trial || error.code === "reauth_required") && hooks.reauth && !options.plain) {
+      const accepted = await hooks.reauth(trial ? "trial" : null);
       if (!accepted) throw new ApiError(403, "cancelled", t("common.error.cancelled"));
       return send(method, path, options);
     }
@@ -150,7 +155,8 @@ export const api = {
   createStore: (passphrase, language) => call("POST", "/api/store/create", { body: language ? { passphrase, language } : { passphrase } }),
   unlock: (passphrase) => call("POST", "/api/unlock", { body: { passphrase } }),
   lock: () => call("POST", "/api/lock"),
-  reauth: (passphrase) => call("POST", "/api/reauth", { body: { passphrase }, plain: true }),
+  // With the scope "trial" the passphrase opens the box that asks the documents, and nothing else.
+  reauth: (passphrase, scope) => call("POST", "/api/reauth", { body: scope ? { passphrase, scope } : { passphrase }, plain: true }),
   setServing: (body) => call("POST", "/api/serving", { body }),
   verify: () => call("POST", "/api/verify"),
   setInterface: (body) => {
@@ -166,6 +172,8 @@ export const api = {
   release: (app, ref, bodySha256) =>
     call("POST", "/api/approvals/release", { body: { app, ref, body_sha256: bodySha256 } }),
   dismiss: (app, ref) => call("POST", "/api/approvals/dismiss", { body: { app, ref } }),
+  // The owner's own question: the one passage an app would get for it. Nothing is recorded.
+  tryQuestion: (question) => call("POST", "/api/try", { body: { question } }),
 
   documents: () => call("GET", "/api/documents"),
   addDocument: (collection, name, file) =>
@@ -180,7 +188,11 @@ export const api = {
   setGrant: (app, collection, mode) => call("POST", "/api/grants", { body: { app, collection, mode } }),
   setAppLimits: (name, limits) => call("POST", `/api/apps/${part(name)}/limits`, { body: limits }),
   connect: (name, host) => call("GET", `/api/apps/${part(name)}/connect`, { query: { host } }),
-  checkConnect: (name, host) => call("POST", `/api/apps/${part(name)}/connect/check`, { body: { host } }),
+  // The settings file of an AI app: a look that changes nothing; the write of this vault's
+  // entry; its removal. `expect` is the state of the file that the owner was shown.
+  connectLook: (host) => call("POST", `/api/connect/${part(host)}/look`),
+  connectWrite: (host, expect) => call("POST", `/api/connect/${part(host)}`, { body: { expect } }),
+  connectRemove: (host, expect) => call("POST", `/api/connect/${part(host)}/remove`, { body: { expect } }),
 
   settings: () => call("GET", "/api/settings"),
   setSettings: (body) => call("POST", "/api/settings", { body }),
