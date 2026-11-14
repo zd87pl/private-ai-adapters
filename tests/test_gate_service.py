@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import functools
 import hashlib
 import http.client
 import importlib.util
@@ -198,7 +199,7 @@ def test_state_locked_and_unlocked(vault: GateService, gate_clock: FakeClock) ->
     assert state["locks_at"] == "2026-11-12T17:00:00Z"
     assert state["owner_mode_until"] == "2026-11-12T09:10:00Z"
     # The trial's permission begins with the unlock too, and no question was asked yet.
-    assert state["trial"] == {"until": "2026-11-12T09:10:00Z", "questions": 0}
+    assert state["trial"] == {"until": "2026-11-12T09:10:00Z", "questions": 0, "since_start": 0}
     assert state["encryption"] == {
         "cipher": "XChaCha20-Poly1305",
         "kdf": "scrypt (N=2^14, r=8, p=1)",
@@ -354,7 +355,7 @@ def test_lock_twice_and_unlock_twice(unlocked: GateService, gate_clock: FakeCloc
     assert again["unlocked_at"] == first["unlocked_at"]
     assert again["locks_at"] == first["locks_at"]
     assert again["owner_mode_until"] == "2026-11-12T09:13:00Z"
-    assert again["trial"] == {"until": "2026-11-12T09:13:00Z", "questions": 0}
+    assert again["trial"] == {"until": "2026-11-12T09:13:00Z", "questions": 0, "since_start": 0}
     assert again["record"]["head_seq"] == first["record"]["head_seq"]
 
     assert unlocked.lock()["locked"] is True
@@ -837,7 +838,11 @@ def test_a_trial_leaves_no_trace(
         }
 
     before = picture()
-    assert unlocked.state()["trial"] == {"until": "2026-11-12T09:10:00Z", "questions": 0}
+    assert unlocked.state()["trial"] == {
+        "until": "2026-11-12T09:10:00Z",
+        "questions": 0,
+        "since_start": 0,
+    }
 
     # No connection is opened for a trial: not to the socket for AI apps, not to anything.
     opened: list[socket.socket] = []
@@ -876,7 +881,11 @@ def test_a_trial_leaves_no_trace(
     monkeypatch.undo()
 
     # The one number the app keeps: how many questions were asked since the unlock.
-    assert unlocked.state()["trial"] == {"until": "2026-11-12T09:10:00Z", "questions": 50}
+    assert unlocked.state()["trial"] == {
+        "until": "2026-11-12T09:10:00Z",
+        "questions": 50,
+        "since_start": 50,
+    }
     assert (session.trial_questions, len(session.trial_times)) == (50, 10)
     assert all(not isinstance(when, str) for when in session.trial_times)
     # Everything else is what it was: the record and its head, the activity list entry for
@@ -973,6 +982,65 @@ def test_a_trial_needs_its_permission_before_it_searches(
         empty.close()
 
 
+def test_a_lock_does_not_take_the_count_of_trial_questions_away(
+    unlocked: GateService, short_store_dir: Path, gate_clock: FakeClock
+) -> None:
+    """The count is the one trace of a trial, and locking asks for no passphrase."""
+
+    def counts(state: Mapping[str, Any]) -> tuple[int, int]:
+        assert sorted(state["trial"]) == ["questions", "since_start", "until"]
+        return state["trial"]["questions"], state["trial"]["since_start"]
+
+    def kinds_recorded() -> list[str]:
+        session = unlocked._session
+        assert session is not None
+        return [record.kind for record in session.store.ledger.records()]
+
+    assert counts(unlocked.state()) == (0, 0)
+    recorded = kinds_recorded()
+    for _ in range(TRIAL_PER_MINUTE):
+        unlocked.try_question(question="rent deposit")
+    with refused(429, "too_many"):
+        unlocked.try_question(question="rent deposit")
+    with refused(400, "invalid"):
+        unlocked.try_question(question="  ")
+    # Both numbers count the questions that were looked up, and no other.
+    assert counts(unlocked.state()) == (TRIAL_PER_MINUTE, TRIAL_PER_MINUTE)
+    assert kinds_recorded() == recorded  # and the record holds nothing of them
+
+    # "Lock now" needs no passphrase. The state of a locked vault says nothing of a trial.
+    assert unlocked.lock()["trial"] is None
+    state = unlocked.unlock(passphrase=gs.PASSPHRASE)
+    # Unlocked again: none since the unlock, and every one since the app was started.
+    assert counts(state) == (0, TRIAL_PER_MINUTE)
+    assert kinds_recorded() == [*recorded, "lock", "unlock"]
+    # The unlock opened twenty new ones, as before; they are counted on.
+    for _ in range(3):
+        assert unlocked.try_question(question="income tax")["found"] is True
+    assert counts(unlocked.state()) == (3, TRIAL_PER_MINUTE + 3)
+
+    # The vault locks itself: the same.
+    gate_clock.advance(hours=9)
+    assert unlocked.state()["locked"] is True
+    assert counts(unlocked.unlock(passphrase=gs.PASSPHRASE)) == (0, TRIAL_PER_MINUTE + 3)
+    # A question that is refused for want of the passphrase is counted in neither.
+    gate_clock.advance(seconds=OWNER_MODE.total_seconds())
+    with refused(403, "trial_reauth_required"):
+        unlocked.try_question(question="rent")
+    assert counts(unlocked.state()) == (0, TRIAL_PER_MINUTE + 3)
+    unlocked.reauth(passphrase=gs.PASSPHRASE, scope="trial")
+    unlocked.try_question(question="zzzabsent")  # looked up, and found nothing
+    assert counts(unlocked.state()) == (1, TRIAL_PER_MINUTE + 4)
+
+    # The number is kept by the running app and nowhere else: a new start begins at none.
+    unlocked.close()
+    again = GateService(short_store_dir, clock=gate_clock, scrypt_n=gs.FAST_SCRYPT)
+    try:
+        assert counts(again.unlock(passphrase=gs.PASSPHRASE)) == (0, 0)
+    finally:
+        again.close()
+
+
 def test_the_passphrase_for_a_trial_opens_nothing_else(
     unlocked: GateService, gate_clock: FakeClock
 ) -> None:
@@ -994,7 +1062,7 @@ def test_the_passphrase_for_a_trial_opens_nothing_else(
     }
     state = unlocked.state()
     assert state["owner_mode_until"] == before["owner_mode_until"]
-    assert state["trial"] == {"until": "2026-11-12T09:40:00Z", "questions": 0}
+    assert state["trial"] == {"until": "2026-11-12T09:40:00Z", "questions": 0, "since_start": 0}
     assert unlocked.try_question(question="rent")["found"] is True
     # Every change that lets more leave is refused as before.
     for name, act in sorted(WIDENING.items()):
@@ -3448,6 +3516,80 @@ def test_setting_the_interface_needs_no_owner_mode(
         unlocked.add_app(name="another-app", hosted=False)
 
 
+def test_two_presses_at_the_same_moment_keep_both_words(
+    service: GateService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two requests that each keep one word of the three: neither undoes the other."""
+    service.create_store(passphrase=gs.PASSPHRASE)
+    service.set_interface(view="pro")
+    assert service.state()["interface"] == gs.interface("pro", "open")
+    real_write = service_module._write_interface
+    first_writes, second_started = threading.Event(), threading.Event()
+    calls: list[tuple[Any, ...]] = []
+
+    def slow_first(path: Path, view: str, setup: str, language: str | None) -> None:
+        calls.append((view, setup, language))
+        if len(calls) == 1:
+            # The first press is in the middle of its write while the second arrives.
+            first_writes.set()
+            assert second_started.wait(30)
+            time.sleep(0.2)
+        real_write(path, view, setup, language)
+
+    monkeypatch.setattr(service_module, "_write_interface", slow_first)
+    failed: list[BaseException] = []
+
+    def press(**words: Any) -> None:
+        try:
+            service.set_interface(**words)
+        except BaseException as error:
+            failed.append(error)
+
+    first = threading.Thread(target=press, kwargs={"setup": "done"}, daemon=True)
+    first.start()
+    assert first_writes.wait(30)
+    second = threading.Thread(target=press, kwargs={"language": "pl"}, daemon=True)
+    second.start()
+    second_started.set()
+    for thread in (first, second):
+        thread.join(timeout=30)
+        assert not thread.is_alive()
+    assert failed == []
+    # The second write starts from what the first one kept, not from what stood before both.
+    assert calls == [("pro", "done", None), ("pro", "done", "pl")]
+    assert service.state()["interface"] == gs.interface("pro", "done", "pl")
+    monkeypatch.setattr(service_module, "_write_interface", real_write)
+
+    # The same without a hand on the order: three presses at once, round after round.
+    lost: Counter[str] = Counter()
+    for _ in range(40):
+        service._keep_interface("basic", "open", None)  # as a new vault has it
+        assert service.state()["interface"] == gs.interface("basic", "open")
+        together = threading.Barrier(3)
+
+        def pressed(words: dict[str, Any], together: threading.Barrier = together) -> None:
+            together.wait(timeout=30)
+            press(**words)
+
+        threads = [
+            threading.Thread(target=pressed, args=(words,), daemon=True)
+            for words in ({"setup": "done"}, {"language": "pl"}, {"view": "pro"})
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+            assert not thread.is_alive()
+        kept = service.state()["interface"]
+        lost.update(
+            word
+            for word, value in (("setup", "done"), ("language", "pl"), ("view", "pro"))
+            if kept[word] != value
+        )
+    assert failed == []
+    assert not lost, f"presses that were lost in 40 rounds: {dict(lost)}"
+
+
 def test_a_file_that_cannot_be_written_is_said_in_a_sentence(
     unlocked: GateService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -4297,6 +4439,9 @@ LOOK_FIELDS = [
 ]
 TILE_APP_FIELDS = ["name", "registered", "paused", "last_seen", "differs", "reads"]
 NOT_SHOWN = "Say which state of the settings file you were shown."
+# The record holds no place of a settings file: what Activity names is where the file lies for
+# this run of the app, and the label of that detail says so.
+FILE_NOW = "settings file, where it lies now"
 
 
 @pytest.fixture
@@ -4775,7 +4920,7 @@ def test_connect_is_recorded_as_a_policy_entry(fresh: GateService, tiles_home: P
             "created the collection documents; opened documents to hosted apps; "
             "added the app claude-desktop; granted claude-desktop: documents (ask me each time)",
         ],
-        ["settings file", shown(place)],
+        [FILE_NOW, shown(place)],
         ["settings, version", "2"],
     ]
     # A second press finds the entry: an entry all the same, with the settings unchanged.
@@ -4784,7 +4929,7 @@ def test_connect_is_recorded_as_a_policy_entry(fresh: GateService, tiles_home: P
     assert (
         told["summary"] == "you connected Claude Desktop: its settings file had the entry already"
     )
-    assert told["details"] == [["settings file", shown(place)], ["settings, version", "3"]]
+    assert told["details"] == [[FILE_NOW, shown(place)], ["settings, version", "3"]]
     assert policy_records(fresh)[-2:] == [
         (f"connect:{JSON_HOST}", 2),
         (f"connect-kept:{JSON_HOST}", 3),
@@ -4818,6 +4963,47 @@ def test_connect_is_recorded_as_a_policy_entry(fresh: GateService, tiles_home: P
     assert service_module._outside(f"connect:{JSON_HOST}") == ("connect", JSON_HOST)
     for by in ("connect:codex", "connect:", "connect", "owner", "export:claude-desktop", None, 7):
         assert service_module._outside(by) is None
+
+
+def test_activity_says_that_the_place_of_a_settings_file_is_the_one_of_now(
+    fresh: GateService, tiles_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An entry of last week must not name a file as if the connect of that day had written it."""
+    # A variable of the app's own environment moves the file of two programs.
+    host, variable = ("grok-build", "GROK_HOME") if HAS_TOML else (JSON_HOST, "XDG_CONFIG_HOME")
+    elsewhere = tiles_home / "where a variable points"
+    elsewhere.mkdir()
+    monkeypatch.setenv(variable, str(elsewhere))
+    moved = hostconfig.settings_place(host)[3] == variable  # type: ignore[index]
+    then = folder_of(host)
+    assert fresh.connect_write(host=host, expect="no_file")["connected"] is True
+    assert then.exists()
+    item = fresh.activity(limit=1)["items"][0]
+    assert item["summary"].startswith("you connected ")
+
+    def place_told() -> list[str]:
+        details = fresh.activity_detail(seq=item["seq"])["details"]
+        (told,) = [detail for detail in details if "settings file" in detail[0]]
+        return list(told)
+
+    assert place_told() == [FILE_NOW, shown(then)]
+    # The app is started again without the variable. The record holds no place, so the same
+    # entry now names the file the app would look at today, and its label says no more.
+    monkeypatch.delenv(variable)
+    fresh.lock()
+    fresh.unlock(passphrase=gs.PASSPHRASE)  # the list is made from the record again
+    now = file_of(host)
+    assert place_told() == [FILE_NOW, shown(now)]
+    if moved:
+        assert (now != then, now.exists(), then.exists()) == (True, False, True)
+    # No entry of the list has a detail that names a settings file under another label.
+    labels = {
+        detail[0]
+        for listed in fresh.activity(limit=50)["items"]
+        for detail in fresh.activity_detail(seq=listed["seq"])["details"]
+        if "settings file" in detail[0]
+    }
+    assert labels == {FILE_NOW}
 
 
 def test_connect_grants_ask_me_each_time_for_one_group_and_nothing_for_several(
@@ -4887,6 +5073,74 @@ def test_connect_grants_ask_me_each_time_for_one_group_and_nothing_for_several(
         "connect-kept",
         "connect-kept",
     ]
+
+
+def test_connect_brings_no_stored_can_read_to_life(fresh: GateService, tiles_home: Path) -> None:
+    """A press on "Connect" gives "can read" to no app that did not have it in force before."""
+    folder_of(JSON_HOST)
+    other = Caller("other-cloud", "some-app", "1", "2025-11-25", "stdio")
+    fresh.add_document(collection="home", name="lease.txt", data=gs.LEASE_TEXT.encode())
+    fresh.set_collection(name="home", allow_hosted=True)
+    fresh.add_app(name="other-cloud", hosted=True, destination="Some Provider")
+    fresh.set_grant(app="other-cloud", collection="home", mode="read")
+    fresh.add_app(name="lm-studio", hosted=False)
+    fresh.set_grant(app="lm-studio", collection="home", mode="read")
+    fresh.add_app(name=JSON_HOST, hosted=True, destination="Anthropic")
+    fresh.set_grant(app=JSON_HOST, collection="home", mode="read")
+    session = fresh._session
+    assert session is not None
+    # The engine's own way to close a group leaves the grants of such apps in the settings,
+    # where the gate ignores them. (Closing on the page takes them away.)
+    session.gate.set_policy(session.gate.policy().with_collection("home", allow_hosted=False))
+    stored = in_force(fresh)["clients"]
+    assert stored[JSON_HOST]["grants"] == {"home": {"mode": "read"}}
+    assert stored["other-cloud"]["grants"] == {"home": {"mode": "read"}}
+    apps = registered(fresh)
+    assert apps[JSON_HOST]["grants"] == apps["other-cloud"]["grants"] == {}  # none is in force
+    assert REF.findall(fresh.backend.search(other, "tenant landlord").text) == []
+
+    look = fresh.connect_look(host=JSON_HOST)
+    assert (look["groups"], look["app"]["reads"]) == (1, False)
+    answer = fresh.connect_write(host=JSON_HOST, expect=look["state"])
+    assert (answer["connected"], answer["app"]["reads"]) == (True, False)
+    # The group is open again. The tile's app asks each time, as after any connect; the
+    # other app that sends text to a provider got nothing by it; the app on this computer,
+    # whose grant was in force all along, keeps it.
+    apps = registered(fresh)
+    assert apps[JSON_HOST]["grants"] == {"home": "approve"}
+    assert apps["other-cloud"]["grants"] == {}
+    assert apps["lm-studio"]["grants"] == {"home": "read"}
+    assert fresh.connect_look(host=JSON_HOST)["app"]["reads"] is False
+    # Nothing is left in the settings that a later opening could bring to life.
+    stored = in_force(fresh)["clients"]
+    assert stored[JSON_HOST]["grants"] == {"home": {"mode": "approve"}}
+    assert stored["other-cloud"]["grants"] == {}
+    # At the gate: the tile's app has to wait for a yes, the other one finds nothing.
+    ref = first_ref(fresh, CLAUDE, "tenant landlord", "home")
+    assert fresh.backend.read(CLAUDE, ref).code == "NEEDS_APPROVAL"
+    reply = fresh.backend.search(other, "tenant landlord")
+    assert REF.findall(reply.text) == []
+    assert gs.LEASE_MARKER not in reply.text
+    assert fresh.backend.read(other, ref).code != "OK"
+    # Activity lists every change the press made to the settings.
+    entry = next(
+        item
+        for item in fresh.activity(limit=20)["items"]
+        if item["summary"].startswith("you connected Claude Desktop")
+    )
+    assert fresh.activity_detail(seq=entry["seq"])["details"][0] == [
+        "changes",
+        "opened home to hosted apps; granted claude-desktop: home (ask me each time); "
+        "took home away from other-cloud",
+    ]
+
+    # A grant "can read" that was in force before the press stays, for each of the two.
+    fresh.set_grant(app=JSON_HOST, collection="home", mode="read")
+    fresh.set_grant(app="other-cloud", collection="home", mode="read")
+    answer = fresh.connect_write(host=JSON_HOST, expect="present")
+    assert (answer["connected"], answer["app"]["reads"]) == (True, True)
+    apps = registered(fresh)
+    assert apps[JSON_HOST]["grants"] == apps["other-cloud"]["grants"] == {"home": "read"}
 
 
 def test_connect_does_not_change_what_kind_of_app_a_name_is(
@@ -5053,6 +5307,101 @@ def test_a_write_that_fails_leaves_the_vault_as_it_was(
     assert fresh.verify()["verified"] is True
 
 
+def test_a_connect_that_fails_takes_no_approval_away(
+    fresh: GateService, tiles_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Who is answered changes when the file was written, not before: a failure withdrew nothing."""
+    fresh.add_document(collection="home", name="lease.txt", data=gs.LEASE_TEXT.encode())
+    fresh.add_document(collection="home", name="bank.txt", data=gs.BANK_TEXT.encode())
+    fresh.add_app(name="lm-studio", hosted=False)
+    fresh.set_grant(app="lm-studio", collection="home", mode="approve")
+    session = fresh._session
+    assert session is not None
+
+    def ask_for(words: str) -> str:
+        ref = first_ref(fresh, LM, words, "home")
+        assert fresh.backend.read(LM, ref).code == "NEEDS_APPROVAL"
+        return ref
+
+    def approve(ref: str) -> None:
+        (card,) = [w for w in fresh.approvals()["waiting"] if w["ref"] == ref]
+        fresh.release(app="lm-studio", ref=ref, body_sha256=card["body_sha256"])
+
+    waits, approved = ask_for("tenant landlord cooperative"), ask_for("overdraft account fee")
+    assert waits != approved
+    approve(approved)
+
+    def held() -> tuple[list[str], list[str], tuple[str, ...]]:
+        lists = fresh.approvals()
+        return (
+            [w["ref"] for w in lists["waiting"]],
+            [g["ref"] for g in lists["granted"]],
+            session.gate.served(),
+        )
+
+    before = held()
+    assert before == ([waits], [approved], ("lm-studio",))
+    place = holding(folder_of(JSON_HOST), '{\n  "theme": "dark"\n}\n')
+    old = place.read_bytes()
+    assert fresh.connect_look(host=JSON_HOST)["answered_change"] is True
+    real_replace = os.replace
+    between: list[Any] = []
+
+    def failing(source: Any, target: Any, **kwargs: Any) -> None:
+        if target == place.name:
+            # The record is written and the file is not yet in place: the app of the tile is
+            # registered and not answered, and the app on this computer still is.
+            between.append((registered(fresh).keys() >= {JSON_HOST}, held()))
+            between.append(fresh.backend.status(CLAUDE).code)
+            raise OSError(errno.EIO, "made to fail")
+        real_replace(source, target, **kwargs)
+
+    monkeypatch.setattr(os, "replace", failing)
+    answer = fresh.connect_write(host=JSON_HOST, expect="other")
+    monkeypatch.setattr(os, "replace", real_replace)
+    assert answer == {"connected": False, "state": "failed", "path": shown(place)}
+    assert between == [(True, before), "NOT_ALLOWED"]
+    assert place.read_bytes() == old
+    assert JSON_HOST not in registered(fresh)
+    # The vault is as it was, and so is what the owner had approved and what waits.
+    assert held() == before
+    assert fresh.backend.read(LM, approved).code == "OK"  # the approval is used, once
+    assert fresh.backend.read(LM, waits).code == "NEEDS_APPROVAL"
+
+    # The same for a file that was put in place and is found without the entry when it is
+    # read back: the settings are put back, and nothing was withdrawn.
+    approve(waits)
+    before = held()
+    assert before == ([], [waits], ("lm-studio",))
+    real_look = hostcheck.look
+    looks: list[int] = []
+
+    def undone(*args: Any, **kwargs: Any) -> Any:
+        looks.append(1)
+        if len(looks) == 2:  # the second look of a write is the read-back
+            between.append(held())
+            place.write_bytes(old)
+        return real_look(*args, **kwargs)
+
+    monkeypatch.setattr(hostcheck, "look", undone)
+    answer = fresh.connect_write(host=JSON_HOST, expect="other")
+    monkeypatch.setattr(hostcheck, "look", real_look)
+    assert answer == {"connected": False, "state": "failed", "path": shown(place)}
+    assert between[-1] == before  # also while the file was read back
+    assert held() == before
+    settled(place)
+
+    # A connect that stays does what the look said ahead: the app on this computer is not
+    # answered until the owner has chosen, and its approval goes with that.
+    answer = fresh.connect_write(host=JSON_HOST, expect="other")
+    assert answer["connected"] is True
+    assert held() == ([], [], (JSON_HOST,))
+    assert fresh.backend.read(LM, waits).code == "NOT_ALLOWED"
+    assert fresh.backend.status(CLAUDE).code == "OK"
+    assert fresh.state()["serving"]["choice_needed"] is True
+    assert fresh.verify()["verified"] is True
+
+
 def test_the_policy_is_checked_before_a_file_is_prepared(
     fresh: GateService, tiles_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -5143,6 +5492,219 @@ def test_the_vault_can_lock_while_a_file_is_looked_at(
     assert in_force(fresh) == settings
     assert [by for by, _ in policy_records(fresh)[len(known) :] if ":" in by] == []
     assert place.read_bytes() == b'{\n  "theme": "dark"\n}\n'
+
+
+def in_time(call: Callable[[], Any], seconds: float = 20.0) -> Any:
+    """What ``call`` answers or raises, run in a thread of its own; it must not wait longer."""
+    box: list[Any] = []
+
+    def run() -> None:
+        try:
+            box.append(call())
+        except BaseException as error:
+            box.append(error)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(timeout=seconds)
+    assert not thread.is_alive(), "the call waits"
+    return box[0]
+
+
+@pytest.mark.parametrize(
+    "how",
+    ["lock now", "lock now, and the replace fails", "the time is over", "the app is stopped"],
+)
+def test_the_gate_closes_at_once_while_a_settings_file_is_put_in_place(
+    fresh: GateService,
+    tiles_home: Path,
+    gate_clock: FakeClock,
+    monkeypatch: pytest.MonkeyPatch,
+    how: str,
+) -> None:
+    """A rename that does not return (a home on a network) must not keep the vault open.
+
+    The service's lock is held while the file is put in place. Locking closes the gate
+    before it waits for that lock: no app is answered and no call of the owner goes
+    through from that moment, and the rest of the lock follows when the system returns.
+    """
+    fresh.add_document(collection="home", name="lease.txt", data=gs.LEASE_TEXT.encode())
+    fresh.add_app(name="codex", hosted=True, destination="OpenAI")  # an app that is answered
+    fresh.set_collection(name="home", allow_hosted=True)
+    fresh.set_grant(app="codex", collection="home", mode="approve")
+    codex = Caller("codex", "codex", "1", "2025-11-25", "stdio")
+    place = holding(folder_of(JSON_HOST), '{\n  "theme": "dark"\n}\n')
+    old = place.read_bytes()
+    session = fresh._session
+    assert session is not None
+    head = fresh.state()["record"]["head_seq"]
+    real_replace = os.replace
+    hangs, returns = threading.Event(), threading.Event()
+
+    def held_up(source: Any, target: Any, **kwargs: Any) -> None:
+        if target == place.name:
+            hangs.set()
+            assert returns.wait(60)
+            if "fails" in how:
+                raise OSError(errno.EIO, "made to fail")
+        real_replace(source, target, **kwargs)
+
+    monkeypatch.setattr(os, "replace", held_up)
+    answers: list[Any] = []
+
+    def press() -> None:
+        try:
+            answers.append(fresh.connect_write(host=JSON_HOST, expect="other"))
+        except ServiceError as error:
+            answers.append(error)
+
+    connecting = threading.Thread(target=press, daemon=True)
+    connecting.start()
+    assert hangs.wait(30)
+    # The record is written and the system does not return from the rename. Until somebody
+    # locks, the vault is as unlocked as it was.
+    assert fresh.backend.search(codex, "tenant landlord").code == "OK"
+    state = in_time(fresh.state)
+    assert state["locked"] is False
+    assert state["record"]["head_seq"] == head + 2  # the connect, and the search just now
+
+    states: list[Any] = []
+    lock: Callable[[], Any] = fresh.lock
+    if how == "the app is stopped":
+        lock = functools.partial(fresh.close, "interrupt")  # what Ctrl-C does
+    locking = threading.Thread(target=lambda: states.append(lock()), daemon=True)
+    started = time.monotonic()
+    if how == "the time is over":
+        gate_clock.advance(hours=9)  # nobody presses anything: the vault's own time passes
+    else:
+        locking.start()
+        while not session.gate.closed:
+            assert time.monotonic() - started < 20, "the gate stays open while the rename hangs"
+            time.sleep(0.005)
+    # From here on no app is answered ...
+    for caller in (codex, CLAUDE):
+        assert fresh.backend.search(caller, "tenant landlord").code == "LOCKED"
+        assert fresh.backend.status(caller).code == "LOCKED"
+    # ... the page is told that the vault is locked, without waiting ...
+    state = in_time(fresh.state)
+    assert (state["locked"], state["trial"], state["serving"]) == (True, None, None)
+    assert fresh.unlocked is False
+    # ... and no call of the owner goes through, each answered at once.
+    for call in (
+        fresh.apps,
+        fresh.documents,
+        fresh.approvals,
+        lambda: fresh.activity(limit=5),
+        lambda: fresh.try_question(question="tenant"),
+        lambda: fresh.add_app(name="another", hosted=False),
+        lambda: fresh.reauth(passphrase=gs.PASSPHRASE),
+        lambda: fresh.connect_look(host=JSON_HOST),
+    ):
+        refusal = in_time(call)
+        assert isinstance(refusal, ServiceError), refusal
+        assert (refusal.status, refusal.code) == (409, "locked")
+    assert time.monotonic() - started < 20
+    # The lock is in the record, after the entry of the connect.
+    assert state["record"]["head_seq"] == head + 3
+    assert connecting.is_alive(), "the rename returned by itself"
+    if how != "the time is over":
+        assert locking.is_alive()  # the rest of the lock waits for the system, and only it
+
+    # The system returns. Nothing was waiting for anything else: everybody comes back.
+    returns.set()
+    connecting.join(timeout=30)
+    assert not connecting.is_alive()
+    if how != "the time is over":
+        locking.join(timeout=30)
+        assert not locking.is_alive()
+        if how != "the app is stopped":
+            assert states[0]["locked"] is True
+    monkeypatch.setattr(os, "replace", real_replace)
+    assert in_time(fresh.state)["locked"] is True
+    assert fresh._session is None
+    assert not (fresh.path / "run" / "gate.sock").exists()
+    (answer,) = answers
+    if "fails" in how:
+        # What could not be recorded any more is not said: the answer is that of a locked vault.
+        assert isinstance(answer, ServiceError), answer
+        assert (answer.status, answer.code) == (409, "locked")
+        assert place.read_bytes() == old
+    else:
+        # The file was put in place and read back; the answer is the one taken at the record.
+        assert answer["connected"] is True
+        assert json.loads(place.read_bytes())["mcpServers"] == {SLUG: the_entry(fresh)}
+    assert not [item.name for item in place.parent.iterdir() if item.name.endswith(".tmp")]
+
+    # The vault opens again as one that was locked properly, with a record that verifies.
+    state = fresh.unlock(passphrase=gs.PASSPHRASE)
+    assert state["record"]["previous_session"] == "clean"
+    assert fresh.verify()["verified"] is True
+    session = fresh._session
+    assert session is not None
+    newest = [
+        (record.kind, record.data.get("by") or record.data.get("reason"))
+        for record in session.store.ledger.records()
+    ][-4:]
+    reason = {"the time is over": "timer", "the app is stopped": "interrupt"}.get(
+        how, "lock-command"
+    )
+    assert newest == [
+        ("policy", f"connect:{JSON_HOST}"),
+        ("release", None),  # the search of the app that was answered while the rename hung
+        ("lock", reason),
+        ("unlock", None),
+    ]
+    # The app of the connect is registered, as the record says, and answered again.
+    assert JSON_HOST in registered(fresh)
+    assert fresh.backend.status(CLAUDE).code == "OK"
+
+
+def test_locking_and_connecting_at_the_same_moment_never_wait_for_each_other(
+    fresh: GateService, tiles_home: Path
+) -> None:
+    place = folder_of(JSON_HOST)
+    empty = '{\n  "theme": "dark"\n}\n'
+    outcomes: Counter[str] = Counter()
+    for round_number in range(16):
+        holding(place, empty)
+        answers: list[Any] = []
+
+        def press(answers: list[Any] = answers) -> None:
+            try:
+                answers.append(fresh.connect_write(host=JSON_HOST, expect="other"))
+            except ServiceError as error:
+                answers.append(error)
+
+        connecting = threading.Thread(target=press, daemon=True)
+        locking = threading.Thread(target=fresh.lock, daemon=True)
+        connecting.start()
+        time.sleep(round_number * 0.0004)  # the lock arrives a little later each round
+        locking.start()
+        for thread in (connecting, locking):
+            thread.join(timeout=30)
+            assert not thread.is_alive(), f"round {round_number}: a thread waits"
+        assert fresh.state()["locked"] is True
+        (answer,) = answers
+        state = fresh.unlock(passphrase=gs.PASSPHRASE)
+        assert state["record"]["previous_session"] == "clean"
+        written = SLUG in json.loads(place.read_bytes()).get("mcpServers", {})
+        if isinstance(answer, ServiceError):
+            assert (answer.status, answer.code) == (409, "locked"), answer.message
+            outcomes["locked"] += 1
+        else:
+            # The answer, the file and the vault agree.
+            assert (answer["connected"], written) == (True, True)
+            assert JSON_HOST in registered(fresh)
+            outcomes["connected"] += 1
+        if not written:
+            assert place.read_bytes() == empty.encode()
+        assert not [item.name for item in place.parent.iterdir() if item.name.endswith(".tmp")]
+        if JSON_HOST in registered(fresh):
+            fresh.remove_app(name=JSON_HOST)
+        for copy in place.parent.iterdir():
+            copy.unlink()
+    assert sum(outcomes.values()) == 16
+    assert fresh.verify()["verified"] is True
 
 
 def test_what_changes_while_a_file_is_prepared_stops_the_write(
@@ -5477,6 +6039,69 @@ def test_a_demo_connects_nothing(
         assert "~" not in json.dumps(tiles)
     finally:
         demo.close()
+
+
+def test_the_text_to_copy_of_a_demo_names_no_place_of_this_computer(
+    short_store_dir: Path,
+    gate_clock: FakeClock,
+    tiles_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A demo answers whoever asks, and a place here can say where a variable points."""
+    moved = tiles_home / "where a variable points"
+    for variable in ("XDG_CONFIG_HOME", "GROK_HOME"):
+        monkeypatch.setenv(variable, str(moved))
+    passphrase = "a-passphrase-everybody-may-see"
+    gs.make_store(short_store_dir, passphrase=passphrase, clock=gate_clock).close()
+    demo = GateService(
+        short_store_dir,
+        demo=True,
+        demo_passphrase=passphrase,
+        clock=gate_clock,
+        scrypt_n=gs.FAST_SCRYPT,
+    )
+    real = GateService(short_store_dir.parent / "real", clock=gate_clock, scrypt_n=gs.FAST_SCRYPT)
+    try:
+        demo.unlock(passphrase=passphrase)
+        real.create_store(passphrase=gs.PASSPHRASE)
+        real.add_app(name=JSON_HOST, hosted=True, destination="Anthropic")
+        seen = count_looks(monkeypatch)
+        told_here = 0
+        for known in hostconfig.KNOWN_HOSTS:
+            answer = demo.connect(name=JSON_HOST, host=known.id)
+            beside = real.connect(name=JSON_HOST, host=known.id)
+            # In a demo no block names the one place that applies on this computer ...
+            assert [block["where_here"] for block in answer["blocks"]] == [None] * len(
+                answer["blocks"]
+            ), known.id
+            assert str(moved) not in json.dumps(answer), known.id
+            assert str(tiles_home) not in json.dumps(answer), known.id
+            # ... and everything else is what a vault of the owner's own is told: the text,
+            # and the usual places as the makers of the programs document them.
+            assert list(answer) == list(beside), known.id
+            for block, other in zip(answer["blocks"], beside["blocks"], strict=True):
+                assert list(block) == list(other)
+                assert (block["title"], block["language"], block["where"]) == (
+                    other["title"],
+                    other["language"],
+                    other["where"],
+                )
+                told_here += other["where_here"] is not None
+        # The vault that is no demo is told the place, also where a variable moved it.
+        assert told_here > 0
+        for host in (JSON_HOST, "grok-build"):
+            (where,) = [
+                block["where_here"]
+                for block in real.connect(name=JSON_HOST, host=host)["blocks"]
+                if block["where"]
+            ]
+            assert where == shown(file_of(host))
+            if host == "grok-build" or sys.platform != "darwin":
+                assert where.startswith(shown(moved))
+        assert seen == []  # no file was looked at for any of it
+    finally:
+        demo.close()
+        real.close()
 
 
 def marked_file(host: str, entry: dict[str, Any] | None, toml: list[str] | None) -> str:

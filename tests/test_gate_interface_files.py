@@ -2048,6 +2048,124 @@ def test_a_trial_sends_nothing_when_it_is_answered() -> None:
         assert storage not in home
 
 
+def test_the_trial_card_shows_the_whole_passage() -> None:
+    # The card says "would get only this passage": the passage is shown whole, as on an
+    # approval card. A box with a greatest height cut a passage of 702 characters in the
+    # middle of a sentence, with nothing to say that more followed.
+    css = without_comments(read(STATIC / "home.css"))
+    assert css_rules("home.css", ".trial .code") == []
+    for selector, rule in re.findall(r"(?m)^\s*(\.trial[^{\n]*) \{\n([^}]*)\}", css):
+        assert "max-height" not in rule, selector
+        assert "overflow" not in rule, selector
+    card = function_body(without_comments(scripts()["home.js"]), "function trialCard(ctx) {")
+    # Its lines are folded at the width of the card, so nothing scrolls sideways either.
+    assert (
+        'el("pre", { class: "code code-wrap released", tabindex: 0 }, '
+        'el("code", null, passage.body)),'
+    ) in card
+    assert "white-space: pre-wrap;" in css_rules("base.css", ".code-wrap")[0]
+
+
+def test_home_says_how_many_trial_questions_were_asked_since_the_app_was_started() -> None:
+    # "Lock now" needs no passphrase and begins the count since the unlock anew. The count
+    # since the app was started is shown wherever it is the larger one, in a line of its own.
+    box = function_body(without_comments(scripts()["home.js"]), "function asker(ctx) {")
+    assert "const asked = ctx.state.trial ? ctx.state.trial.questions : 0;" in box
+    assert "const sinceStart = ctx.state.trial ? ctx.state.trial.since_start : 0;" in box
+    since_unlock = (
+        'asked > 0 ? el("p", { class: "asker-count", id: "ask-count", key: "count" }, '
+        't("ask.status.count", { n: asked })) : null,'
+    )
+    since_start = (
+        'sinceStart > asked ? el("p", { class: "asker-count", id: "ask-count-start", '
+        'key: "count-start" }, t("ask.status.count.start", { n: sinceStart })) : null,'
+    )
+    assert since_unlock in box
+    assert since_start in box
+    assert box.index(since_unlock) < box.index(since_start)
+    # The page holds no figure of its own: both numbers are the app's.
+    for name, source in scripts().items():
+        if name != "home.js":
+            assert "since_start" not in without_comments(source), name
+
+
+def test_the_column_makes_room_for_the_details_in_a_wide_window() -> None:
+    # At 1280 px the open panel lay over the right third of the column: how many characters
+    # and when, of every row. Now the column gives the panel its width while it is open.
+    css = without_comments(read(STATIC / "home.css"))
+    found = re.search(
+        r"@media \(min-width: (\d+)px\) \{\n"
+        r"  \.simple\.has-panel \.column \{\n"
+        r"    padding-right: calc\(var\(--panel-width\) \+ var\(--gutter\)\);\n"
+        r"  \}\n\}",
+        css,
+    )
+    assert found is not None
+    assert css.count("has-panel") == 2
+    shell = function_body(without_comments(scripts()["main.js"]), "function simpleShell() {")
+    assert '{ class: ["simple", ctx.panel && "has-panel"], key: "simple" },' in shell
+
+    def size(sheet: str, selector: str, name: str, rule: int = 0) -> int:
+        value = re.search(rf"{name}: (\d+)px;", css_rules(sheet, selector)[rule])
+        assert value is not None, name
+        return int(value.group(1))
+
+    side = size("base.css", ":root", "--side")
+    panel = size("home.css", ".simple", "--panel-width")
+    gutter = size("home.css", ".simple", "--gutter")
+    narrow_gutter = size("home.css", ".simple", "--gutter", rule=1)
+    assert (side, panel, gutter, narrow_gutter) == (208, 440, 32, 16)
+    # From that width on, what is left for the column is at least what a window of 400 px
+    # leaves it; so the rule never makes the column narrower than a phone does.
+    wide = int(found.group(1))
+    assert wide - side - panel - 2 * gutter == 400 - 2 * narrow_gutter
+    # Where that leaves less than four tiles of 124 px need, the tiles of Home stand two by
+    # two while the panel is open, as they do on a phone.
+    band = re.search(
+        rf"@media \(min-width: {wide}px\) and \(max-width: (\d+)px\) \{{\n"
+        r"  \.simple\.has-panel \.tiles \{\n"
+        r"    grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);\n"
+        r"  \}\n\}",
+        css,
+    )
+    assert band is not None
+    gap = re.search(r"gap: (\d+)px;", css_rules("home.css", ".tiles")[0])
+    assert gap is not None
+    room = int(band.group(1)) + 1 - side - panel - 2 * gutter
+    assert (room - 3 * int(gap.group(1))) // 4 >= 124
+    # The panel itself is as wide as ever, and at 720 px and narrower it covers the page.
+    as_ever = "width: min(var(--panel-width), calc(100vw - 48px));"
+    assert as_ever in css_rules("app.css", ".panel")[0]
+    before, narrow = css.split("@media (max-width: 720px) {")
+    assert found.group(0) in before
+    assert re.search(r"\.simple \.panel \{\s*width: 100vw;", narrow)
+    assert "has-panel" not in narrow
+
+
+def test_a_time_within_the_next_day_is_written_without_its_date() -> None:
+    # "Unlocked until Nov 15, 1:55 AM" took two lines of the sidebar whenever the vault locks
+    # itself after midnight. Within 24 hours the time of day says which moment is meant.
+    source = without_comments(scripts()["format.js"])
+    clock = function_body(source, "export function clock(text, now = new Date()) {")
+    assert "const ahead = moment.getTime() - now.getTime();" in clock
+    assert (
+        "if (dayOffset(moment, now) === 0 || (ahead >= 0 && ahead < 86400000)) "
+        "return clockFormat().format(moment);"
+    ) in clock
+    # Beyond that the date stands with it, as before.
+    assert clock.index("ahead < 86400000") < clock.index('once("dated"')
+    # The three places that say "until": the sidebar, a release, what is released and not read.
+    uses = {
+        name: len(re.findall(r"(?<![\w.])clock\(", without_comments(code)))
+        for name, code in scripts().items()
+    }
+    assert {name: count for name, count in uses.items() if count} == {
+        "format.js": 1,
+        "main.js": 1,
+        "views.js": 2,
+    }
+
+
 def test_the_trials_first_sentence_follows_the_answer() -> None:
     home = without_comments(scripts()["home.js"])
     chosen = function_body(home, "function trialSentence(passage) {")

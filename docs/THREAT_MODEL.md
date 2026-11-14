@@ -683,8 +683,10 @@ route.
   running.
 - **Not in a demo.** A demo refuses the look and the write: the three routes
   answer before any file is looked at, and the list of tiles a demo answers
-  names no place of a settings file. The page of a demo does not ask either:
-  a press on a tile says that nothing can be connected.
+  names no place of a settings file. Neither does the text to copy that a
+  demo answers: it gives the usual places as the makers of the AI apps write
+  them, and not the one that applies on this computer. The page of a demo
+  does not ask either: a press on a tile says that nothing can be connected.
 
 What an adversary gains from the look: with the session, fixed words about a
 file that a program of the owner's account can read whole, the places of
@@ -744,9 +746,19 @@ answered 401 without the session. What is new:
 8. The request also changes the vault: it registers the app, and in a vault
    with at most one group it opens that group to apps that send text to a
    provider and gives the app "Ask me each time". It never gives "Can read",
-   and with several groups it gives no group. Where apps that run on this
-   computer were the only ones registered, they are no longer answered from
-   then on until the owner chooses; the look says so before.
+   and with several groups it gives no group. "Never" includes access that
+   lay in the settings unused: closing a group through the Python interface
+   of the engine leaves "Can read" of such apps stored, where it is ignored
+   (the page's own way of closing takes it away). Opening the group would bring it
+   back into force. A connect that opens the group therefore gives its own
+   app "Ask me each time" in its place and takes such stored access of every
+   other app away, and Activity lists both. An app that had "Can read" in
+   force before the press keeps it. Where apps that run on this
+   computer were the only ones registered, they are no longer answered
+   until the owner chooses, and lose the passages they were approved and the
+   ones that wait; the look says so before. That happens when the file was
+   written, not when the record was: a write that fails puts the settings
+   back and has taken no approval and no waiting passage away.
 9. A `policy` entry of the record no longer always means that the settings
    changed: one that came with these routes can stand for a file that was
    about to be changed, with the settings as they were. A version of
@@ -765,7 +777,15 @@ all 32 routes answered 401 without it. It also needs the passphrase typed
 within ten minutes, a permission apart from owner mode, and answers 20
 questions a minute at most. Inside those ten minutes, whoever holds the
 session can read up to 200 passages this way, and nothing shows it afterwards
-but a number on Home, under the box, that is gone at the next lock.
+but two numbers on Home, under the box: how many questions were asked since
+the vault was unlocked, and, where that is more, how many since Locktender
+was started. "Lock now" needs no passphrase and begins the first number anew.
+It leaves the second, so a program that has asked its questions cannot take
+the trace away by locking the vault. Ending Locktender clears both: neither
+number is written anywhere, and the record holds nothing of a trial. A
+program of the owner's account can end Locktender; what the owner finds then
+is no number but a page that says Locktender is not answering. And a number
+on Home is seen only by an owner who looks at Home.
 Outside them the route
 answers `trial_reauth_required` before it searches: in a run for this page,
 ten minutes after the passphrase, 200 questions with words that were in the
@@ -933,7 +953,8 @@ the demo there is no pairing: any program on the computer is the owner at the
 demo's page, which is why the demo's vault holds invented documents and nothing
 else belongs in it. One thing there is not invented: such a program is told
 the full path of the Python that runs Locktender. A demo answers no look at a
-settings file, and the list of tiles it answers names no place of one. An
+settings file, and neither the list of tiles nor the text to copy that it
+answers names the place of one on this computer. An
 administrator is
 not "another user": root reads the files, the memory and the loopback traffic.
 
@@ -1335,8 +1356,9 @@ vault cannot do, the computer has to: a screen lock and full-disk encryption.
   at the demo's page. The demo's vault holds invented documents; real documents
   do not belong in it. One thing such a program is told there is not
   invented: the full path of the Python that runs Locktender. A demo answers
-  no look at a settings file, and the list of tiles it answers names no place
-  of one: a place could tell where `XDG_CONFIG_HOME` or `GROK_HOME` point. A
+  no look at a settings file, and neither the list of tiles nor the text to
+  copy that it answers names the place of one on this computer: a place could
+  tell where `XDG_CONFIG_HOME` or `GROK_HOME` point. A
   demo that was killed leaves its temporary vault behind. A later demo removes
   it at its start, once the leftover has lain unchanged for a minute and no
   running demo holds the lock on it.
@@ -1364,6 +1386,26 @@ vault cannot do, the computer has to: a screen lock and full-disk encryption.
   the file held at that moment. It was not tried with the AI apps, nor by
   hand on a Mac. A program of the owner's account can change the file and the
   copies afterwards.
+- **A settings folder that does not answer holds up the end of a lock, not
+  the lock.** While Locktender puts a settings file in place it holds the
+  lock that locking takes, for a few calls to the system. On a home folder
+  that lies on a network whose server is gone, the system may not return
+  from such a call for a long time. "Lock now", the vault's own time to lock
+  and stopping Locktender close the gate first, without waiting: from that
+  moment no app is answered, the page is told that the vault is locked, and
+  nothing that needs an unlocked vault goes through. What follows waits
+  until the system returns: the key stays in Locktender's memory, the press
+  on "Lock now" has no answer, the vault cannot be unlocked again, and
+  Locktender does not end when it is stopped. The file may still be put in
+  place after the lock was recorded. Locktender's tests hold that call up
+  and lock in each of the three ways; no folder that really hangs was tried.
+  (Before this was so, the vault stayed open for as long as the call hung.)
+- **Activity names a settings file as it lies now.** The record holds no
+  place of a settings file. The details of a connect or a disconnect name
+  the file Locktender would look at today, under a label that says so. After
+  a start with another home folder, or with `XDG_CONFIG_HOME` or `GROK_HOME`
+  set otherwise, that is not the file that was written on the day of the
+  entry.
 - **Grok.** By xAI's pages, a project's own settings can define a server of
   the same name, and "a project server with the same name as a user one
   replaces it entirely": in a folder whose settings define an entry named

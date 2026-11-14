@@ -133,13 +133,16 @@ export function whenFull(text) {
 
 /**
  * A moment as it stands inside a sentence of the text table ("until {time}"): the
- * time of day, and for another day the date with it. In Polish that date is written
- * in numbers ("16.11, 18:00"): the name of a month would need an ending there.
+ * time of day, and the date with it for a moment of another day that does not lie
+ * within the next 24 hours. "Until 01:55" late in the evening can only mean the
+ * coming night, and the line that says so stays one line. In Polish that date is
+ * written in numbers ("16.11, 18:00"): the name of a month would need an ending there.
  */
 export function clock(text, now = new Date()) {
   const moment = parseTime(text);
   if (!moment) return "–";
-  if (dayOffset(moment, now) === 0) return clockFormat().format(moment);
+  const ahead = moment.getTime() - now.getTime();
+  if (dayOffset(moment, now) === 0 || (ahead >= 0 && ahead < 86400000)) return clockFormat().format(moment);
   const month = tag === "pl" ? "numeric" : "short";
   return once("dated", () => new Intl.DateTimeFormat(tag, { day: "numeric", month, hour: "numeric", minute: "2-digit" })).format(moment);
 }

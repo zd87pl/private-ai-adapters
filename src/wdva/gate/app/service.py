@@ -41,8 +41,10 @@ app has beyond the store itself:
   involved and nothing is written into the record, so the answer is bound in
   another way: it needs the passphrase entered within the last ten minutes,
   by a clock of its own, a session gets at most :data:`TRIAL_PER_MINUTE`
-  answers in a minute, and the session counts its questions where the state
-  shows the number.
+  answers in a minute, and the questions are counted where the state shows
+  the numbers: those since the vault was unlocked, and those since the app
+  was started. Locking, which needs no passphrase, begins the first anew and
+  leaves the second; only ending the app clears that one.
 * **The settings file of an agent application.** For three applications the
   app can do what the owner otherwise does by hand: put the entry that
   starts this vault's program into the application's own settings file, or
@@ -52,11 +54,15 @@ app has beyond the store itself:
   :mod:`wdva.gate.hostwrite`, by its rules; the service decides who may ask,
   registers or removes the app in the same step, and writes the record
   first: one ``policy`` record that says what was about to be done, also
-  where the settings themselves did not change. The service's lock is held
-  only while the record is written and the file is put in place, never while
-  a file of another program is read or prepared, so that a folder that
-  answers slowly cannot keep the vault from locking. A demo refuses all
-  three.
+  where the settings themselves did not change. Who is answered changes
+  when the file was written, not at the record, so that a write that fails
+  has withdrawn no approval and no waiting passage. The service's lock is
+  held only while the record is written and the file is put in place, never
+  while a file of another program is read or prepared, so that a folder that
+  answers slowly cannot keep the vault from locking; and locking closes the
+  gate before it waits for that lock, so that a folder that does not answer
+  at all cannot keep the gate open (:meth:`GateService._end`). A demo
+  refuses all three.
 * **Which view the owner uses.** Three words about the interface, kept in a
   small file beside the vault that is not sealed (``run/interface.json``):
   which of its two views the owner uses, whether setting up was finished,
@@ -283,6 +289,9 @@ _OUTSIDE_WORDS = {
     "connect-failed": "{product} did not finish changing the settings file of {label}",
     "disconnect-failed": "{product} did not finish changing the settings file of {label}",
 }
+
+# The label of the one detail of such an entry that is not read from the record.
+_FILE_NOW = "settings file, where it lies now"
 
 _F = TypeVar("_F", bound=Callable[..., Any])
 
@@ -646,7 +655,9 @@ def _outside(by: Any) -> tuple[str, str] | None:
 def _settings_file_shown(host: str) -> str | None:
     """Where the settings file of ``host`` lies for this run of the app, as an owner reads it.
 
-    The record holds no path: this is the place the app would look at now.
+    The record holds no path: this is the place the app would look at now,
+    which need not be the file a connect of another day wrote. The activity
+    list shows it under a label that says so.
     """
     try:
         place = hostconfig.settings_place(host)
@@ -1005,9 +1016,11 @@ class _Feed:
         if listed:
             details.append(("changes", "; ".join(text[4:] for text, _ in listed)))
         if outside is not None:
+            # Not a fact of the day of the entry: the record holds no place, and a start
+            # with another home or another variable looks for the file elsewhere.
             place = _settings_file_shown(outside[1])
             if place is not None:
-                details.append(("settings file", place))
+                details.append((_FILE_NOW, place))
         serial = _whole(data.get("serial"))
         if serial is not None:
             details.append(("settings, version", f"{serial:,}"))
@@ -1201,6 +1214,9 @@ class GateService:
         self._lock = threading.RLock()  # the session and every change made through it
         self._checking = threading.Lock()  # one passphrase is stretched at a time
         self._session: _Session | None = None
+        # Trial questions that were looked up since the app was started. A lock, which
+        # needs no passphrase, must not take the one trace of a trial away.
+        self._trial_asked = 0
         self._opening = False
         self._cursor_lock = threading.Lock()
         self._cursor = 1
@@ -1244,10 +1260,17 @@ class GateService:
             self._cursor += 1
 
     def _current(self) -> _Session | None:
-        """The session, after ending one whose time has passed."""
+        """The session, or ``None`` once its gate is closed.
+
+        A gate is closed when its time has passed, or when a lock closed it
+        and still waits for the rest (:meth:`_end`). Either way the session
+        is ended here if that can be done without waiting; whoever holds the
+        service's lock is not waited for, so that the state of a locked vault
+        is answered at once.
+        """
         session = self._session
         if session is not None and session.gate.closed:
-            self._end(session, "timer")
+            self._end(session, "timer", wait=False)
             return None
         return session
 
@@ -1262,9 +1285,27 @@ class GateService:
         if self._clock() >= session.owner_until:
             raise ServiceError(403, "reauth_required", _ENTER_AGAIN)
 
-    def _end(self, session: _Session, reason: str) -> None:
-        """Lock: stop answering apps, close the gate (which records it), close the store."""
-        with self._lock:
+    def _end(self, session: _Session, reason: str, *, wait: bool = True) -> None:
+        """Lock: close the gate (which records it), stop listening for apps, close the store.
+
+        The gate is closed first, and without the service's lock. That lock
+        is held while a settings file of another program is put in place
+        (:meth:`_outside_section`), and on a folder that does not answer the
+        system may not return from that for a long time. The gate has a lock
+        of its own, so it closes at once all the same: from then on every app
+        is answered ``LOCKED`` and every call of the owner that needs an
+        unlocked vault is refused. What is left (forgetting the session, the
+        socket, the store) needs the service's lock and follows when it is
+        free. With ``wait`` false this call does not wait for it: a later
+        call, or the one that does wait, finishes the work.
+        """
+        # If the gate cannot record the lock it is locked all the same, and the next
+        # unlock reports that this session did not end properly.
+        with contextlib.suppress(WDVAError, OSError):
+            session.gate.close(reason)
+        if not self._lock.acquire(blocking=wait):
+            return
+        try:
             if self._session is not session:
                 return
             self._session = None
@@ -1272,11 +1313,9 @@ class GateService:
             if session.timer is not None:
                 session.timer.cancel()
             session.link.stop()
-            # If the gate cannot record the lock it is locked all the same, and the next
-            # unlock reports that this session did not end properly.
-            with contextlib.suppress(WDVAError, OSError):
-                session.gate.close(reason)
             session.store.close()
+        finally:
+            self._lock.release()
         self._bump()
 
     def _timer_fired(self, session: _Session) -> None:
@@ -1407,7 +1446,13 @@ class GateService:
         session.gate.set_served(answered)
 
     def _change(
-        self, session: _Session, new: Policy, *, by: str = "owner", always: bool = False
+        self,
+        session: _Session,
+        new: Policy,
+        *,
+        by: str = "owner",
+        always: bool = False,
+        serve: bool = True,
     ) -> Policy:
         """Put a changed policy in force. One that lets more leave needs owner mode.
 
@@ -1415,7 +1460,11 @@ class GateService:
         nothing writes no record, unless ``always`` asks for one: the record
         then says that something was done, or about to be done, outside the
         settings (see :meth:`connect_write`), and the settings in it are the
-        ones that were in force.
+        ones that were in force. Without ``serve`` the gate is not told who
+        is answered under the new policy: the names it answered go on being
+        answered, and a name that is new is not answered yet. The caller then
+        does that itself (:meth:`_apply_serving`) once it knows that the
+        change stays.
         """
         old = session.gate.policy()
         if new.with_serial(old.serial) == old:
@@ -1424,15 +1473,32 @@ class GateService:
         elif widens(old, new) or self._answers_more(session, new, session.kinds, session.paused):
             self._owner(session)
         stored = session.gate.set_policy(new, by=by)
-        self._apply_serving(session, stored)
+        if serve:
+            self._apply_serving(session, stored)
         return stored
 
     # -- which view the owner uses ----------------------------------------------------
 
-    def _keep_interface(self, view: str, setup: str, language: str | None) -> None:
-        """Write the interface file and read it again. :class:`OSError` when it cannot be kept."""
+    def _keep_interface(
+        self, view: str | None, setup: str | None, language: str | None, *, rest_stays: bool = False
+    ) -> None:
+        """Write the interface file and read it again. :class:`OSError` when it cannot be kept.
+
+        With ``rest_stays`` a word that is ``None`` stays as the file last
+        said. What it last said is taken inside the lock that the write
+        holds, so two calls that each keep one word keep both, in whatever
+        order they arrive. Without it the three words are written as given,
+        and no language means none.
+        """
         path = paths.interface_path(self._path)
         with self._interface_lock:
+            if rest_stays:
+                current = self._interface
+                view = view or current["view"]
+                setup = setup or current["setup"]
+                language = language or current["language"]
+            if view is None or setup is None:
+                raise ValueError("the view and the state of setting up are always written")
             try:
                 _write_interface(path, view, setup, language)
             finally:
@@ -1466,7 +1532,8 @@ class GateService:
         leave and changes nothing that is sealed. ``setup`` can only be set to
         ``"done"``. A word that is not given stays as it was last read, so
         choosing a view never chooses a language, and a language that was
-        chosen is never taken away again. Nothing is written into the record.
+        chosen is never taken away again; two calls at the same moment that
+        each give another word keep both. Nothing is written into the record.
         """
         if view is not None and view not in VIEWS:
             raise _invalid('The view is "basic" or "pro".')
@@ -1478,13 +1545,8 @@ class GateService:
             raise _invalid("Say which view or language to keep, or that setting up is done.")
         if not store_info(self._path).exists:
             raise _not_found("There is no vault here yet.")
-        current = self._interface
         try:
-            self._keep_interface(
-                view or current["view"],
-                setup or current["setup"],
-                language or current["language"],
-            )
+            self._keep_interface(view, setup, language, rest_stays=True)
         except OSError as exc:
             reason = exc.strerror or "the file could not be written"
             raise _unavailable(
@@ -1533,7 +1595,9 @@ class GateService:
             try:
                 return self._unlocked_state(session)
             except GateError:
-                if self._session is session:
+                # A gate that closed in the middle of this is a locked vault, whether or
+                # not the rest of the lock is done.
+                if self._session is session and not session.gate.closed:
                     raise
         return self._locked_state()
 
@@ -1629,9 +1693,14 @@ class GateService:
             unlocked_at=_iso(session.unlocked_at),
             locks_at=_iso(session.locks_at),
             owner_mode_until=_iso(session.owner_until),
-            # Until when a trial question is answered, and how many this session asked
-            # since the vault was unlocked: the one trace a trial leaves.
-            trial={"until": _iso(session.trial_until), "questions": session.trial_questions},
+            # Until when a trial question is answered, and how many were looked up since
+            # the vault was unlocked and since the app was started: the one trace a trial
+            # leaves. A lock begins the first number anew and leaves the second.
+            trial={
+                "until": _iso(session.trial_until),
+                "questions": session.trial_questions,
+                "since_start": self._trial_asked,
+            },
             encryption={
                 "cipher": "XChaCha20-Poly1305",
                 "kdf": _kdf(info.scrypt_n),
@@ -1805,6 +1874,11 @@ class GateService:
         if self._current() is not None:
             self.reauth(passphrase=passphrase)
             return self.state()
+        ending = self._session
+        if ending is not None:
+            # Its gate is closed and the rest of the lock still waits: the vault cannot be
+            # opened before the store of that session is closed.
+            self._end(ending, "timer")
         if not store_info(self._path).exists:
             raise _not_found("There is no vault here yet.")
         self._socket_fits()
@@ -1824,7 +1898,13 @@ class GateService:
 
     @_translated
     def lock(self) -> JSONObject:
-        """Lock the store and return the state. Locking a locked vault changes nothing."""
+        """Lock the store and return the state. Locking a locked vault changes nothing.
+
+        The gate is closed at once, whatever else the app is doing: from that
+        moment apps are answered ``LOCKED`` and :meth:`state` says so. This
+        call returns when the session has ended, which waits for a settings
+        file that is just being put in place.
+        """
         session = self._session
         if session is not None:
             self._end(session, "lock-command")
@@ -2105,6 +2185,7 @@ class GateService:
                 raise ServiceError(429, "too_many", "Wait a moment before the next question.")
             times.append(now)
             session.trial_questions += 1
+            self._trial_asked += 1
 
     @_translated
     def try_question(self, *, question: str) -> JSONObject:
@@ -2122,12 +2203,14 @@ class GateService:
         It is a trial: no app is involved, nothing leaves, nothing is written
         into the record or counted against a limit, and no passage waits or
         is approved because of it. Neither the question nor the answer is
-        kept. So it has a condition of its own: the passphrase entered within
-        the last ten minutes (:meth:`reauth` with ``scope="trial"`` renews
-        that and nothing else), and at most :data:`TRIAL_PER_MINUTE` questions
-        in a minute. The checks come in a fixed order, and the first that
-        fails answers: the question, an unlocked vault, the permission, the
-        count; only then is the index touched.
+        kept. The question is counted, since the unlock and since the app was
+        started (the state's ``trial``), and a lock does not take the second
+        number away. So it has a condition of its own: the passphrase entered
+        within the last ten minutes (:meth:`reauth` with ``scope="trial"``
+        renews that and nothing else), and at most :data:`TRIAL_PER_MINUTE`
+        questions in a minute. The checks come in a fixed order, and the
+        first that fails answers: the question, an unlocked vault, the
+        permission, the count; only then is the index touched.
         """
         asked = question.strip() if isinstance(question, str) else ""
         if not asked:
@@ -2524,7 +2607,14 @@ class GateService:
 
     @_translated
     def connect(self, *, name: str, host: str | None = None) -> JSONObject:
-        """The configuration that connects one agent application under this app's name."""
+        """The configuration that connects one agent application under this app's name.
+
+        The text to copy, where the application's maker says it goes, and
+        whether the command in it can start. No file is looked at. In a demo
+        no block says which of the usual places applies on this computer
+        (``where_here`` is ``None``): a demo has no pairing, and that place
+        can say where a variable of the account points.
+        """
         session = self._unlocked()
         self._registered(session.gate.policy(), name)
         chosen = self._host_for(name, host)
@@ -2540,6 +2630,9 @@ class GateService:
             message = self._start_problem()
             starts = message is None
         out = config.as_dict()
+        if self._demo:
+            for block in out["blocks"]:
+                block["where_here"] = None
         out["ready"] = {
             "sdk": bool(status["sdk"]),
             "python": bool(status["python"]),
@@ -2614,6 +2707,14 @@ class GateService:
         group already: a grant in force is left as it is, also "can read". In
         a vault with several groups no group and no grant is touched. A pause
         is never touched. Raises what registering an app raises.
+
+        "In force" is asked of ``policy``, before the group is opened. A
+        group that was closed by the engine's own method keeps the grants of
+        such apps in the settings, where the gate ignores them; opening the
+        group would bring them to life. So the app of the tile gets "ask me
+        each time" in place of such a grant, and every other app of that kind
+        loses its own, as it does when the page closes a group. A connect
+        therefore gives "can read" to no app that did not have it in force.
         """
         name = known.name
         new = policy
@@ -2623,10 +2724,14 @@ class GateService:
         if len(groups) > 1:
             return new
         group = groups[0] if groups else _FIRST_GROUP
+        answered = policy.effective_grant(name, group) is not None
         entry = new.collections.get(group)
         if entry is None or not entry.allow_hosted:
             new = new.with_collection(group, allow_hosted=True)
-        if new.effective_grant(name, group) is None:
+            for other, held in policy.clients.items():
+                if held.hosted and other != name and group in held.grants:
+                    new = new.without_grant(other, group)  # stored, and not honoured until now
+        if not answered:
             new = new.with_grant(name, group, MODE_APPROVE)
         return new
 
@@ -2718,7 +2823,11 @@ class GateService:
 
         Entered, it yields ``record(action)``:
 
-        * ``connect``, ``connect-kept``: put ``new`` in force. What the vault
+        * ``connect``, ``connect-kept``: put ``new`` in force, and leave who
+          is answered as it is: the gate is told that only when the writer
+          has returned (:meth:`_serve_after`), so that a write that fails
+          has withdrawn nothing. Until then the app of the tile is registered
+          and not answered, and whoever was answered still is. What the vault
           then says of the app, and how many groups it has, is noted for the
           answer (``app``, ``groups``): the answer of a connect says how
           things stood when it was recorded, also when the vault locks right
@@ -2736,7 +2845,7 @@ class GateService:
         the application's id, also where the settings did not change.
         """
         host, name = known.id, known.name
-        told: dict[str, Any] = {"kept": False, "removed": False}
+        told: dict[str, Any] = {"kept": False, "removed": False, "to_serve": False}
         # The settings before this call's connect, and those the connect put in force.
         mine: list[Policy] = []
         recorded: list[str] = []
@@ -2747,7 +2856,8 @@ class GateService:
             if action in ("connect", "connect-kept"):
                 if new is None:
                     raise ValueError("a connect needs the settings it puts in force")
-                mine[:] = [policy, self._change(session, new, by=by, always=True)]
+                mine[:] = [policy, self._change(session, new, by=by, always=True, serve=False)]
+                told["to_serve"] = True
                 told["groups"] = len(self._group_names(session, mine[1]))
                 told["app"] = self._tile_app(session, mine[1], known)
             elif action == "connect-failed":
@@ -2781,6 +2891,25 @@ class GateService:
 
         return section, told
 
+    def _serve_after(self, session: _Session, told: Mapping[str, Any]) -> None:
+        """Tell the gate who is answered, once the writer is done with a connect it recorded.
+
+        Who is answered follows from the settings in force, the owner's
+        choice of kinds and the pauses. After a connect that stays this is
+        where the app of the tile begins to be answered, and where apps on
+        this computer stop being answered until the owner has chosen, which
+        takes their unused approvals and their waiting passages with it.
+        After a connect whose settings were put back it changes nothing:
+        nobody had stopped being answered, so nothing was withdrawn. Does
+        nothing for a session that has ended.
+        """
+        if not told["to_serve"]:
+            return
+        with self._lock:
+            if self._session is session:
+                with contextlib.suppress(GateError):  # the gate locked in this very moment
+                    self._apply_serving(session, session.gate.policy())
+
     @_translated
     def connect_write(self, *, host: str, expect: str) -> JSONObject:
         """Connect one application: register it, write the vault's entry into its settings file.
@@ -2808,7 +2937,11 @@ class GateService:
         most one group, that group opened to apps that send text to a
         provider and "ask me each time" for it; nothing for several groups).
         If the file is then not changed, a second record puts the settings
-        back as they were.
+        back as they were. Who is answered changes only when the writer has
+        returned: until then the new app is not answered, and apps on this
+        computer that a connect leaves without an answer keep theirs, with
+        their approvals and the passages that wait for the owner. A connect
+        that fails has therefore taken none of these away.
 
         Returns ``{"connected": True, "state", "path", "copy", "replaced",
         "groups", "app"}``, or ``{"connected": False, "state": word, ...}`` with
@@ -2855,6 +2988,8 @@ class GateService:
             )
         except ValueError:
             raise _invalid(_UNWRITABLE_COMMAND) from None
+        finally:
+            self._serve_after(session, told)
         if answer["state"] == "changed":
             raise _file_changed()
         if not answer["connected"]:

@@ -355,7 +355,9 @@ LABEL_LIKE = {"common.lang.en", "common.lang.pl"}
 SENT_ON = {"ask.sample.question", "connect.ask.start"}
 
 # How many words the English table may hold without the page "How it works" (section 1.2).
-WORDS_AT_MOST = 2720
+# 2,720 until the count of trial questions since the app was started got its line (7 words)
+# and the sentence after a trial's "Release once" was made true (17 words for 16).
+WORDS_AT_MOST = 2728
 
 
 def unit_of(stem: str) -> list[str]:
@@ -521,6 +523,17 @@ REQUIRED_TEXTS = {
     ),
 }
 
+# What a press on "Release once" under a trial says, word for word. It must not say that the
+# text "would now be with" a provider: after a real release nothing has left until the app
+# asks again, and Activity lists the passage when it is read, not before.
+AFTER_A_TRIAL_YES = (
+    "A connected app could now read this text once, and Activity would list it when it does."
+)
+TRIAL_COUNTS = {
+    "ask.status.count": "{n} trial questions since the vault was unlocked.",
+    "ask.status.count.start": "{n} trial questions since {product} was started.",
+}
+
 # Keys the tests name that belong to a part of the page no stage has built yet. Each stage
 # took out what it built; the last part, Home with its tiles and sheets, is built, and the set
 # is empty.
@@ -565,6 +578,35 @@ def test_the_required_texts_are_there_word_for_word() -> None:
                 for promise in ("by itself", "continues", "sama wróci", "samoczynnie"):
                     if key.startswith(("offline.", "bar.")):
                         assert promise not in text, f"{TABLES[language]} {key} promises: {promise}"
+
+
+def test_what_a_trial_says_after_a_yes_and_of_its_counts() -> None:
+    read = tables()
+    assert read["en"]["ask.result.yes"] == AFTER_A_TRIAL_YES
+    for language, table in read.items():
+        said = table["ask.result.yes"]
+        assert isinstance(said, str)
+        where = f"{TABLES[language]} ask.result.yes"
+        # One sentence of at most 20 words, without a semicolon, as a counted sentence is.
+        assert (sentences(said), ";" in said) == (1, False), where
+        assert words(said) <= 20, where
+        for untrue in ("would now be with", "byłby już u", "is now with", "jest już u"):
+            assert untrue not in said, f"{where} says that the text has left: {untrue}"
+    assert read["pl"]["ask.result.yes"] != AFTER_A_TRIAL_YES
+    assert "Aktywność" in str(read["pl"]["ask.result.yes"])
+    # The two counts: since the unlock, and since the app was started. The same words but
+    # for what they count from, with the number in each form.
+    for key, text in TRIAL_COUNTS.items():
+        english, polish = read["en"][key], read["pl"][key]
+        assert isinstance(english, dict), key
+        assert isinstance(polish, dict), key
+        assert english["other"] == text, key
+        assert english["one"] == text.replace("questions", "question"), key
+        for form in (*english.values(), *polish.values()):
+            assert form.startswith("{n} "), key
+        assert all("pyta" in form and "próbn" in form for form in polish.values()), key
+    assert all("{product}" in form for form in texts(read["pl"]["ask.status.count.start"]))
+    assert all("{product}" not in form for form in texts(read["pl"]["ask.status.count"]))
 
 
 # -- the Polish ---------------------------------------------------------------------

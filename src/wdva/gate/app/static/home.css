@@ -119,6 +119,23 @@
   outline: none;
 }
 
+/* While the details of an entry are open in a wide window, the column makes room for
+   them: the panel stands beside the rows, not over what they say at their right end.
+   From this width on the column keeps at least the width it has on a phone. In a
+   narrower window the panel lies over the page, as it always did. */
+@media (min-width: 1080px) {
+  .simple.has-panel .column {
+    padding-right: calc(var(--panel-width) + var(--gutter));
+  }
+}
+
+/* Up to here that room is too narrow for four tiles in a row: they stand two by two, as on a phone. */
+@media (min-width: 1080px) and (max-width: 1239px) {
+  .simple.has-panel .tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 /* The bar that says what is wrong, while there is one, and the title of the page: both
    stay in view, and the bar stands above the title. */
 .column-top {
@@ -562,7 +579,14 @@
   font-size: var(--fs-s);
 }
 
-/* The answer of the box. It is no approval card: a broken line frames it, and its two buttons are plain. */
+/* The count since the app was started stands right under the count since the unlock. */
+.asker-count + .asker-count {
+  margin-top: -10px;
+}
+
+/* The answer of the box. It is no approval card: a broken line frames it, and its two buttons are plain.
+   The passage is shown whole, as on an approval card: the card says "only this passage", so no
+   part of it may be out of sight. */
 .trial {
   display: grid;
   gap: 12px;
@@ -578,12 +602,6 @@
 .trial-say {
   font-size: var(--fs-m);
   line-height: 1.5;
-}
-
-.trial .code {
-  /* About fourteen lines; a longer passage scrolls inside its box. */
-  max-height: 21em;
-  overflow: auto;
 }
 
 .trial-facts {

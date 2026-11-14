@@ -196,7 +196,11 @@ export const TEXT = Object.freeze({
     one: "{n} trial question since the vault was unlocked.",
     other: "{n} trial questions since the vault was unlocked.",
   },
-  "ask.result.yes": "With a connected app, this text would now be with its provider, and listed under Activity.",
+  "ask.status.count.start": {
+    one: "{n} trial question since {product} was started.",
+    other: "{n} trial questions since {product} was started.",
+  },
+  "ask.result.yes": "A connected app could now read this text once, and Activity would list it when it does.",
   "ask.result.no": "Nothing would have left the vault.",
   "ask.result.none": "No passage holds any of these words as you typed them. Use a word exactly as it stands in the document: “invoice” does not find “invoices”.",
   "ask.result.nowords": "Ask with words, not only numbers.",

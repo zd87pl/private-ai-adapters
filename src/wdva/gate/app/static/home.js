@@ -435,15 +435,19 @@ function trialCard(ctx) {
 /**
  * The box itself: one input and "Ask" in one rounded frame, under them what went
  * wrong or the answer, and in small grey type how many trial questions were asked
- * since the vault was unlocked. While the vault holds no document the input and
- * "Ask" are off and one line says why. "Ask" is the filled button of Home once the
- * vault holds a document, and never while a passage waits.
+ * since the vault was unlocked. Where more were asked since the app was started, a
+ * second line says how many: locking needs no passphrase and begins the first number
+ * anew, so the first alone would not show that somebody asked before the last lock.
+ * While the vault holds no document the input and "Ask" are off and one line says why.
+ * "Ask" is the filled button of Home once the vault holds a document, and never while
+ * a passage waits.
  */
 function asker(ctx) {
   const box = ctx.ui.home.ask;
   const none = documentsHeld(ctx) === 0;
   const question = shownQuestion(ctx);
   const asked = ctx.state.trial ? ctx.state.trial.questions : 0;
+  const sinceStart = ctx.state.trial ? ctx.state.trial.since_start : 0;
   let failed = null;
   if (box.failed) failed = box.failed.code === "too_many" ? t("ask.error.slow") : errorText(box.failed);
   return [
@@ -486,6 +490,7 @@ function asker(ctx) {
     failed ? el("p", { class: "field-error", id: "ask-error", key: "error", role: "alert" }, failed) : null,
     none ? null : trialCard(ctx),
     asked > 0 ? el("p", { class: "asker-count", id: "ask-count", key: "count" }, t("ask.status.count", { n: asked })) : null,
+    sinceStart > asked ? el("p", { class: "asker-count", id: "ask-count-start", key: "count-start" }, t("ask.status.count.start", { n: sinceStart })) : null,
   ];
 }
 

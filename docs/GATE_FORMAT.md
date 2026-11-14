@@ -936,7 +936,7 @@ like the state's.
 
 | | |
 | --- | --- |
-| Body | `{"view": "basic" or "pro"}`, `{"setup": "done"}`, `{"language": "en" or "pl"}`, or any of them together. `setup` can only be set to `done`: nothing sent to this route opens it again, and nothing sent to it takes a language away. A word that is not sent stays as the app last read it |
+| Body | `{"view": "basic" or "pro"}`, `{"setup": "done"}`, `{"language": "en" or "pl"}`, or any of them together. `setup` can only be set to `done`: nothing sent to this route opens it again, and nothing sent to it takes a language away. A word that is not sent stays as the app last read it. What it last read is taken while the write of the file is held for this request, so two requests at the same moment that each send another word keep both (before this was so, the second of them wrote the first one's word back to what it had been) |
 | Answer | The state, as `GET /api/state` gives it |
 | Errors | 400 `invalid` for another value (for a language: "The language is "en" or "pl"."), for a body with none of the three fields, and for a field the route does not know. 404 `not_found` while no store exists. 503 `unavailable` when the file cannot be written; with a directory in its place the message was "The choice could not be kept: is a directory." |
 | While locked | Works |
@@ -1111,7 +1111,7 @@ more field of the state, `trial`, belongs to [the trial question](#the-trial-que
 | `GET /api/apps/<name>/connect` | `platform` | `"macos"` or `"linux"`: the system the app runs on, for which the places in the answer were chosen |
 | | `plain_note` | What the text follows and that it was not tried, without an address, for example "This follows the published instructions for Claude Desktop, as read on 2026-11-12. It has not been tried with Claude Desktop itself." |
 | | `after` | `{"title", "text", "desktop"}`: what the owner does in the application once the text is in place, and whether it is a desktop app that has to be quit |
-| | `blocks[].where_here` | Of the places listed in `where`, the one that applies on this computer, or `null`. For Claude Desktop and for Grok Build it is the place of the settings file here, written with `~` where it lies in the home directory; a variable that moves the file ([below](#the-settings-file-of-an-ai-application)) moves this place with it, so it need not be one of `where` |
+| | `blocks[].where_here` | Of the places listed in `where`, the one that applies on this computer, or `null`. For Claude Desktop and for Grok Build it is the place of the settings file here, written with `~` where it lies in the home directory; a variable that moves the file ([below](#the-settings-file-of-an-ai-application)) moves this place with it, so it need not be one of `where`. **In a demo it is always `null`**, for the reason `tiles[].path` is: a demo has no pairing, and the place here can say where a variable of the account points. The text to copy and `where`, the usual places as the makers document them, are the same in a demo |
 | | `blocks[].inner` | For a block of JSON: `{"entry", "section"}`, the entry `"locktender": {…}` alone and the member `"mcpServers": {…}` alone, each as text without the braces around it, for a file that holds other settings already. `null` for a block in another format |
 
 The other fields of a configuration are `host`, `label`, `local_program`, `blocks` (each with
@@ -1191,12 +1191,22 @@ registering a client and raising a limit were still refused with `reauth_require
 a limit of a client, of a pool or of a document; no passage on the waiting list and no approval;
 and `cursor` in the state does not move. Neither the question nor the answer is kept once the
 response is sent. The session keeps two things: the times of the questions of the last minute,
-for the limit, and how many questions were looked up since the store was unlocked. The state
-shows the second, in `trial`:
+for the limit, and how many questions were looked up since the store was unlocked. The running
+app keeps one more, apart from any session: how many were looked up since the app was started.
+The state shows the two counts, in `trial`:
 
 | Field of `GET /api/state` | Value |
 | --- | --- |
-| `trial` | `null` while the store is locked, else `{"until", "questions"}`: until when a trial question is answered, and how many were looked up since the store was unlocked, whichever tab or program asked them. A question that was refused before it was looked up (400, 403, 429) is not counted; one that found nothing, or whose passage could not be shown, is |
+| `trial` | `null` while the store is locked, else `{"until", "questions", "since_start"}`: until when a trial question is answered; how many were looked up since the store was unlocked; and how many since the app was started. Both count whichever tab or program asked. A question that was refused before it was looked up (400, 403, 429) is counted in neither; one that found nothing, or whose passage could not be shown, is counted in both |
+
+The two counts are the one trace a trial leaves, and they differ once the store was locked and
+unlocked again. `POST /api/lock` asks for no passphrase and begins `questions` anew; it leaves
+`since_start`, so that a program which holds the session cannot ask its questions and then take
+the trace away by locking. Home shows the second count under the box wherever it is the larger
+one. Neither is written anywhere: the record holds nothing of a trial, and ending the app
+clears `since_start` as a lock clears `questions`. The app's tests ask 20 questions, lock and
+unlock: `questions` is then 0 and `since_start` 20, and an app started again on the same store
+begins both at 0.
 
 In the run, 50 questions (34 that found a passage, 9 that matched nothing, 7 without a word)
 left the head of the record, the number and the size of the sealed files, `cursor`, `today`,
@@ -1368,8 +1378,20 @@ collection is marked for hosted clients if it is not, and granted in `approve` m
 client is answered for it already (a grant in force is left as it is, also one in `read` mode);
 with several, no collection and no grant is touched, and the answer's `groups` says how many
 there are. A pause is not touched. Where local clients are registered and no hosted one, the
-client this registers is the first hosted one, and from then on only hosted clients are answered
-until the owner chooses: the look says so ahead, in `answered_change`.
+client this registers is the first hosted one, and once the file is written only hosted clients
+are answered until the owner chooses: the look says so ahead, in `answered_change`.
+
+Whether the client is answered for the collection is asked of the policy in force before the
+collection is marked. A grant of a hosted client for a collection that is not marked can lie in
+the policy without being in force: the engine's own method that takes the mark away leaves such
+grants (no route of the app does; taking the mark away through `POST /api/collections` removes
+them). Marking the collection would bring them into force. So where a connect marks the
+collection, the client of the id gets `approve` in the place of such a grant, and every other
+hosted client loses its stored grant of that collection, as it does when the app takes the
+mark away; the entry in the activity list names each of these changes. A connect therefore
+gives the mode `read` to no client that did not have it in force before the request. (Before
+this was so, the grant was asked for after the marking: a stored `read` of the client, and of
+every other hosted client, came into force with one press on "Connect".)
 
 **The writer**, step by step. A step that stops removes every temporary file of the call.
 
@@ -1394,16 +1416,25 @@ until the owner chooses: the look says so ahead, in `answered_change`.
    when the new file's group is not the old one's), and, for a file that exists, the copy,
    0600. A failure stops with `failed`, or with `no_copy` where the copy has no place.
 9. With the store's lock held: the file is compared with what was read (R13); the entry is
-   recorded (`connect:<host>`), which puts the new policy in force; the copy is put in place;
-   the file is compared once more; the file is replaced. If the copy cannot be put in place,
-   the second comparison fails or the replace fails, a second entry is recorded
-   (`connect-failed:<host>`) that puts the policy back as it was, and a first copy this call
-   made is removed again.
+   recorded (`connect:<host>`), which puts the new policy in force and leaves who is answered
+   as it is (step 11); the copy is put in place; the file is compared once more; the file is
+   replaced. If the copy cannot be put in place, the second comparison fails or the replace
+   fails, a second entry is recorded (`connect-failed:<host>`) that puts the policy back as it
+   was, and a first copy this call made is removed again.
 10. The folder is flushed, and the file is read back. It must hold the entry (`present` or
     `present_more`). If it does not, a second entry is recorded as in step 9 and the answer is
     `failed`. A file that the system does not let be read at this moment is no failure while
     its name leads to the file that was put there (R8): the answer is `connected` with
     `not_read_back`, and nothing more is recorded.
+11. Only now, when the writer has returned, is the session told who is answered under the
+    policy in force. After a connect that stays, the client of the id is answered from here on,
+    and local clients that the look named in `answered_change` are not, which takes their
+    unused approvals and their waiting passages with it. Between step 9 and this step the
+    client is registered and not answered (`NOT_ALLOWED`), and whoever was answered still is.
+    After a connect whose policy was put back the step changes nothing: nobody had stopped
+    being answered, so no approval and no waiting passage was withdrawn. (Before this was so,
+    step 9 changed who is answered, and a write that failed gave the policy back but not the
+    approvals and the waiting passages of local clients.)
 
 The store's lock, the one that locking takes, is held in step 9 only: for two looks at the
 file's status, the record, and putting the copy and the file in place. It is not held while a
@@ -1411,6 +1442,25 @@ file is read, prepared or flushed, so a folder that answers slowly does not keep
 locking. Step 9 begins by asking again whether the store is still unlocked in the session of
 the request (else 409 `locked`), whether owner mode is still on (else 403), and whether the
 policy in force is still the one the new policy was built from (else 409 `changed`).
+
+On a folder that does not answer at all (a home directory on a network whose server is gone),
+the system may not return from a call of step 9 for a long time, and the store's lock is held
+for as long. Locking does not wait for it to close the gate: `POST /api/lock`, the store's own
+time to lock and the end of the app each close the gate first, which has a lock of its own,
+and append the `lock` entry. From that moment clients are answered `LOCKED`, `GET /api/state`
+says `locked`, and every route that needs an unlocked store answers 409 `locked`, each at
+once. What is left of locking (the socket for clients is closed, the store's key is wiped,
+its lock on the folder is released) follows when the system returns; until then the request
+`POST /api/lock` itself has no answer, a new `POST /api/unlock` waits, and so does the end of
+the app. A file that the system then puts in place is put in place after the `lock` entry. If
+the replace fails instead, `connect-failed:<host>` can no longer be recorded: the request is
+answered 409 `locked`, the record holds `connect:<host>` followed by `lock`, and the client
+stays registered without an entry in the file, as it does when the app is stopped between the
+record and the replace. The app's tests hold the replace of a settings file up and lock in
+four ways (the request, the request with a replace that then fails, the store's own time, the
+end of the app): in each the gate was closed and the routes answered before the replace returned, every
+request came back once it did, and the store was unlocked again with a record that verified
+and a session that had ended properly. No folder that really hangs was at hand.
 
 | What happened | Answer | The store and the record | The file |
 | --- | --- | --- | --- |
@@ -1564,8 +1614,11 @@ place: `by` and the time are what it says.
 In the activity list such an entry is of the kind `change`. Its sentence says first what was
 about to be done ("you connected Claude Desktop: Locktender was about to write its entry into
 the settings file"), then how many changes of the policy came with it ("and made 4 more
-changes"); its details list those changes, and name the place of the settings file as the app
-would look for it now, since the record does not hold it.
+changes"); its details list those changes, and name the place of the settings file under the
+label "settings file, where it lies now". The record does not hold that place: the detail is
+where the app that is running would look for the file, and after a start with another home
+directory, another `XDG_CONFIG_HOME` or another `GROK_HOME` that is not the file the connect of
+that day wrote.
 
 #### What was run
 

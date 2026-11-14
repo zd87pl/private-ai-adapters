@@ -731,7 +731,11 @@ function panelBody(ctx, panel) {
   ];
 }
 
-/** The side panel with one entry in full. It lies over the page; the list under it keeps its shape. */
+/**
+ * The side panel with one entry in full. It lies over the page, and the list under it
+ * keeps its shape. In the simple frame, in a wide window, the stylesheet has the column
+ * make room for it instead, so that no row stands under it.
+ */
 export function detailPanel(ctx) {
   const panel = ctx.panel;
   if (!panel) return null;

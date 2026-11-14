@@ -493,8 +493,8 @@ words, and press "Ask" or Return. Under the box a card marked "Trial" appears:
   asking you, inside the limits you set." In a vault with several groups, where no app was given
   the group of this document: "No app can ask for this document yet."
 - **The passage**, in a box: the one passage that a search by your words finds first, as an
-  approval card would show it. A passage of more than about fourteen lines scrolls inside its
-  box.
+  approval card would show it. The box holds the whole passage, however long it is: the card
+  says "only this passage", so none of it is out of sight.
 - **Its size and its place**, for example "570 characters · passage 2 of 3 of “Sample rental
   agreement (invented)”", and the words of your question by which it was found: "Found by: the,
   rental, agreement, end". Read that line. A passage that was found by "the" alone is no
@@ -503,8 +503,9 @@ words, and press "Ask" or Return. Under the box a card marked "Trial" appears:
 - **"This is a trial on this computer: nothing is sent and nothing is recorded."**
 - **The two buttons of a real card**, "Don’t release" and "Release once". Here they send
   nothing, and neither waits before it can be pressed. A press says what would have happened,
-  "With a connected app, this text would now be with its provider, and listed under Activity."
-  or "Nothing would have left the vault.", and offers "Ask something else". While a real
+  "A connected app could now read this text once, and Activity would list it when it does."
+  or "Nothing would have left the vault.", and offers "Ask something else". (A real "Release
+  once" sends nothing either: the text leaves when the app asks for the passage again.) While a real
   passage waits under "Waiting for you", the trial card has no buttons and says "A real request
   is waiting above.": a press that is harmless here must not become a habit for the card above
   it.
@@ -531,7 +532,11 @@ What to know about the box:
 - **Twenty questions a minute** at most; the next one is answered "Too many questions in a
   minute. Wait a moment." Under the box a grey line counts, for example "3 trial questions since
   the vault was unlocked." It counts the questions of every tab, and of any program that asked
-  with the page's session. A number you cannot explain is a reason to lock the vault.
+  with the page's session. Locking begins that count anew, and "Lock now" asks for no
+  passphrase. So where more were asked before the last lock, a second line says how many there
+  were in all, for example "23 trial questions since Locktender was started." That number
+  stays through a lock; it is kept by the running program and nowhere else, so ending
+  Locktender clears it. A number you cannot explain is a reason to lock the vault.
 
 ### Connect an app
 
@@ -573,7 +578,8 @@ settings of its own it is headed "Connect Claude Desktop · desktop app" and hol
 1. **In your vault** it adds the app under the tile's name (`claude-desktop`, `chatgpt-desktop`
    or `grok-build`), as an app whose text goes to Anthropic, OpenAI or xAI. In a vault with one
    group, or with none yet, it opens that group to apps that send text to a provider and gives
-   the app "Ask me each time" for it. It never gives "Can read". In a vault with several groups
+   the app "Ask me each time" for it. It never gives "Can read": an app that holds "Can read"
+   after the press held it before. In a vault with several groups
    it gives the app no group, and the sheet says so afterwards, with a link to Settings.
 2. **In the app's settings file** it writes one entry, named `locktender`: the command that
    starts the small program which carries the app's requests to Locktender. The command names
@@ -718,7 +724,8 @@ depend on the page you look at.
   command that opens Locktender again, with "Copy"; the link "How it works and what it cannot
   do"; "Open on"; and two grey lines, the version and the folder of the vault.
 
-Under the entries the sidebar says until when the vault is unlocked, and has the two languages
+Under the entries the sidebar says until when the vault is unlocked (the time of day, and
+the date with it only for a time more than 24 hours away), and has the two languages
 and "Lock now". In a window of 720 px or narrower there is no sidebar: the name, "EN" and "PL"
 and a button with a lock are in a bar at the top, and the four entries in a bar at the bottom
 that stays in view.
@@ -1082,7 +1089,7 @@ buttons. "Cancel" drops the files: nothing was sent. Groups are made under Setti
 
 ### The page Activity
 
-![The page Activity in the demo with one row opened, "claude-desktop read passage 4 of “lease-2025”": a panel shows where the text went, what the calling program said it is, the exact text that left with its length, and the sentence "This text is with Anthropic now. Locktender cannot take it back."](images/gate-activity.png)
+![The page Activity in the demo with one row opened, "claude-desktop read passage 4 of “lease-2025”": beside the two rows of the list, a panel shows where the text went, what the calling program said it is, the exact text that left with its length, and the sentence "This text is with Anthropic now. Locktender cannot take it back."](images/gate-activity.png)
 
 The page has two lists and a switch between them. "Press a row to see the exact text that
 left."
@@ -1111,7 +1118,9 @@ left."
 
 The panel that opens from a row shows who asked, the exact text that left, and for an app that
 sends text to a provider the two sentences "This text is with Anthropic now." and "Locktender
-cannot take it back." For a search it shows "What it searched for". "Record details" unfolds
+cannot take it back." In a window of 1080 px or wider the rows move aside for the panel, so that
+the list can still be read beside it; in a narrower window the panel lies over the page, and at
+720 px or narrower it covers it. For a search it shows "What it searched for". "Record details" unfolds
 the entry's place in the record, which [Activity](#activity) under Settings describes. A row
 that was stopped says "Nothing was released."
 
@@ -1167,7 +1176,11 @@ What else is listed:
 - **Your own changes**: documents added and removed, apps, what you gave them, limits, approvals,
   locking and unlocking, and each "Connect" and "Disconnect" of Home, for example "you connected
   Claude Desktop: Locktender was about to write its entry into the settings file". Such an entry
-  is written before the file is changed, which is why it says "was about to". Words you listed
+  is written before the file is changed, which is why it says "was about to". Opened, it names
+  the file under "Settings file, where it lies now": the record does not keep the place, so that
+  line is where Locktender would look for the file today, which is another file than the one
+  that was written if Locktender was since started with another home folder or with
+  `XDG_CONFIG_HOME` or `GROK_HOME` set otherwise. Words you listed
   for replacement are counted, never quoted.
 - **"Names not in use"**, in the app filter: calls under names that are not registered.
 
@@ -1715,8 +1728,9 @@ defects that wait for a fix.
   say about Grok Build.
 - **The box shows text that was not released.** "Ask your documents" shows a passage of the
   vault to whoever is at the page, for ten minutes after the passphrase was typed, and leaves no
-  entry in the record. Afterwards only the count under the box says that questions were asked,
-  and it starts from nothing at the next unlock. The box also has you type the passphrase more
+  entry in the record. Afterwards only two counts under the box say that questions were asked.
+  The one since the unlock starts from nothing at the next unlock; the one since Locktender was
+  started stays until Locktender is ended, and is gone then. The box also has you type the passphrase more
   often than before. *For you:* lock the vault when you leave the computer, and type the
   passphrase only into the page you opened from your own Terminal.
 - **Home shows less than the six pages.** It shows the three newest answers that apps were given

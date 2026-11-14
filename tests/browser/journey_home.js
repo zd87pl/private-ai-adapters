@@ -23,7 +23,8 @@
 //   A  the offered path with a file of the owner's, for Claude: pairing, the passphrase, the three
 //      cards of a new vault, a file refused and one sealed, a question in the box, the tile, the
 //      look, "Connect", what stands in the settings file, a call through that entry, a passage
-//      released and read; Documents, Activity, Settings; Polish; a lock; the app stopped.
+//      released and read; Documents, Activity with the details of a row beside the rows, Settings;
+//      Polish; a lock, and what Home and the sidebar say after it; the app stopped.
 //   B  the write against files the walk made: no folder, other servers and keys, the copies, an
 //      entry that points elsewhere, links, broken JSON, a file that changed, owner mode run out.
 //   C  ChatGPT and Grok (TOML), an entry under another name, a file written in a way the app does
@@ -69,6 +70,7 @@ const {
   expectOldSessionRefused,
   finish,
   focused,
+  lockElsewhere,
   newHome,
   newPage,
   notOfTable,
@@ -381,6 +383,34 @@ async function ask(walk, question, { typed = true } = {}) {
   await eventually(async () => (await walk.count('#trial, #trial-none, #ask-error')) > 0 && !(await page.locator('#ask-button').getAttribute('aria-busy')), WAIT, 'the box did not answer');
 }
 
+/** The passage on the trial card: how many characters the card says it has and how many it holds, and its box against what the box holds. */
+function passageBox(walk) {
+  return walk.page.evaluate(() => {
+    const node = document.querySelector('#trial pre');
+    const said = /^([\d\s.,\u00a0\u202f]+)/.exec(document.querySelector('#trial-meta').textContent.trim());
+    return { characters: said ? Number(said[1].replace(/\D/g, '')) : -1, held: Array.from(node.textContent).length, inner: node.scrollHeight, box: node.clientHeight, wide: node.scrollWidth, width: node.clientWidth };
+  });
+}
+
+/** Where the rows of the page stand, where the head of the column ends, and where the panel with the details of an entry lies, if it is open. */
+function rowsAndPanel(walk) {
+  return walk.page.evaluate(() => {
+    const edge = (node) => {
+      const box = node.getBoundingClientRect();
+      return { left: Math.round(box.left), right: Math.round(box.right), width: Math.round(box.width) };
+    };
+    const panel = document.querySelector('aside.panel');
+    const title = document.querySelector('.column-top');
+    return {
+      window: window.innerWidth,
+      wide: document.documentElement.scrollWidth,
+      panel: panel ? edge(panel) : null,
+      titleRight: title ? edge(title).right : 0,
+      rows: Array.from(document.querySelectorAll('#main .row-open')).map((row) => ({ ...edge(row), timeRight: edge(row.querySelector('.row-time')).right })),
+    };
+  });
+}
+
 /** Press a tile and wait until its sheet shows `state` (a state of the sheet, or one of several). */
 async function pressTile(walk, word, state) {
   await walk.page.locator(`#tile-${word}`).click();
@@ -575,6 +605,10 @@ async function runA(browser, files) {
     await saysText(walk, '#trial-say-2', 'ask.say.2');
     const body = await walk.text('#trial pre');
     check(body.includes('1,180 EUR') && body.includes('due on the third working day'), `the passage is: ${body.slice(0, 120)}`);
+    // The card says "only this passage": all of it is on the card, and none of it scrolls out of sight inside its box.
+    const shown = await passageBox(walk);
+    check(shown.characters === shown.held && shown.characters > 600, `the card says ${shown.characters} characters and holds ${shown.held}`);
+    check(shown.inner <= shown.box && shown.wide <= shown.width, `the passage is ${shown.inner} px high in a box of ${shown.box} px: part of it is out of sight`);
     await says(page.locator('#trial-words'), (read) => read.startsWith(en('ask.status.words', { words: '' })) && /\brent\b/.test(read) && /\bdue\b/.test(read), 'the card does not say by which words the passage was found');
     await says(page.locator('#trial-meta'), (read) => read.includes('flat-notes'), 'the card does not name the document');
     await saysText(walk, '#ask-count', 'ask.status.count', { n: 1 });
@@ -736,7 +770,28 @@ async function runA(browser, files) {
     await openPage(page, 'documents');
     await says(page.locator('#main'), (read) => read.includes('flat-notes'), 'the page Documents does not list the document');
     await openPage(page, 'activity');
-    if (connects) await eventually(async () => (await walk.count('#main .act-rows > li')) >= 1, WAIT, 'the page Activity lists nothing');
+    if (connects) {
+      await eventually(async () => (await walk.count('#main .act-rows > li')) >= 1, WAIT, 'the page Activity lists nothing');
+      // The details of a row open beside the rows: in this window no row stands under the panel, and none is cut.
+      const closed = await rowsAndPanel(walk);
+      await page.locator('#main .row-open').first().click();
+      await page.locator('aside.panel .panel-title').waitFor({ state: 'visible', timeout: WAIT });
+      const open = await eventually(async () => {
+        const now = await rowsAndPanel(walk);
+        // (The panel slides into its place: it is measured once it has come to rest at the window's edge.)
+        check(now.panel && now.panel.right === now.window, 'the panel has not come to rest');
+        return now;
+      });
+      check(open.window >= 1080, `the window of the walk is ${open.window} px wide`);
+      check(open.rows.length >= 1 && open.rows.every((row) => row.right <= open.panel.left && row.timeRight <= open.panel.left), `with the details open, rows end at ${JSON.stringify(open.rows.map((row) => row.right))} and the panel begins at ${open.panel.left}`);
+      check(open.titleRight <= open.panel.left && open.wide <= open.window, 'with the details open the head of the column stands under the panel, or the page scrolls sideways');
+      check(open.rows.every((row) => row.width >= 368), `with the details open the rows are ${JSON.stringify(open.rows.map((row) => row.width))} px wide`);
+      await walk.picture('h13-activity-details');
+      await page.keyboard.press('Escape');
+      await page.locator('aside.panel').waitFor({ state: 'detached', timeout: WAIT });
+      const again = await rowsAndPanel(walk);
+      check(JSON.stringify(again.rows) === JSON.stringify(closed.rows), 'with the details closed again the rows are not where they were');
+    }
     await openPage(page, 'settings');
     check((await walk.count('#main a.row-link[href^="#/pro/"]')) === 6, 'Settings does not lead to the six pages');
     await openPage(page, 'home');
@@ -772,6 +827,62 @@ async function runA(browser, files) {
     await chooseLanguage(page, '.gate-lang', 'en');
     await unlock(walk);
     await page.locator('#home-title').waitFor({ state: 'attached', timeout: WAIT });
+  });
+
+  await step('A: after the lock Home still says how many trial questions were asked since the app was started; the sidebar says until when in one line, without a date for a time within 24 hours', async () => {
+    // "Lock now" asked for no passphrase. It began the count since the unlock anew, and left the other.
+    const before = (await walk.state()).trial;
+    check(before.questions === 0 && before.since_start >= 5, `after the lock the app counts ${JSON.stringify(before)}`);
+    await saysText(walk, '#ask-count-start', 'ask.status.count.start', { n: before.since_start });
+    check((await walk.count('#ask-count')) === 0, 'Home shows a count since the unlock although nothing was asked since');
+    await ask(walk, 'When is the rent due?');
+    await saysText(walk, '#ask-count', 'ask.status.count', { n: 1 });
+    await saysText(walk, '#ask-count-start', 'ask.status.count.start', { n: before.since_start + 1 });
+    const record = (await walk.state()).record.head_seq;
+    await ask(walk, 'zeppelin');
+    const after = await walk.state();
+    check(after.trial.questions === 2 && after.trial.since_start === before.since_start + 2 && after.record.head_seq === record, `the app counts ${JSON.stringify(after.trial)}`);
+    await walk.picture('h14-home-after-lock', { whole: true });
+
+    // The line in the sidebar. The vault locks itself in less than 24 hours: the time of day alone, on one line.
+    const timeOnly = /^\d{1,2}[:.]\d{2}(\s?[AP]M)?$/i;
+    const untilWhen = async () => {
+      const read = trimmed(await page.locator('#side-lock').textContent());
+      const lead = en('nav.status.until', { time: '' });
+      check(read.startsWith(lead), `the sidebar says: ${read}`);
+      const lines = await page.locator('#side-lock').evaluate((node) => Math.round(node.getBoundingClientRect().height / parseFloat(getComputedStyle(node).lineHeight)));
+      return { time: read.slice(lead.length), lines };
+    };
+    const unlockFor = async (hours) => {
+      // The lock comes from outside the page: whatever the page was asking at that moment is answered 409.
+      const meanwhile = expectHttp(409, /^\/api\//, { times: 20, optional: true });
+      await lockElsewhere(page, walk.base);
+      await page.locator('#unlock-passphrase').waitFor({ state: 'visible', timeout: WAIT });
+      withdraw(meanwhile);
+      const state = await apiPost(page, walk.base, '/api/unlock', { passphrase: PASSPHRASE, hours });
+      await page.locator('#home-title').waitFor({ state: 'attached', timeout: WAIT });
+      return state.locks_at;
+    };
+    let line = await untilWhen();
+    check(timeOnly.test(line.time) && line.lines === 1, `the sidebar says "${line.time}" on ${line.lines} lines`);
+    // Unlocked until a moment after midnight that is less than 24 hours away: another day, and still no date.
+    const now = new Date();
+    const toMidnight = (new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime() - now.getTime()) / 3600000;
+    const locksAt = new Date(await unlockFor((toMidnight + 24) / 2));
+    check(locksAt.getDate() !== new Date().getDate(), `the vault locks itself at ${locksAt}, which is today`);
+    line = await eventually(async () => {
+      const read = await untilWhen();
+      check(timeOnly.test(read.time) && read.lines === 1, `for a time after midnight the sidebar says "${read.time}" on ${read.lines} lines`);
+      return read;
+    });
+    await walk.picture('h15-sidebar-after-midnight');
+    // More than 24 hours away, the time of day alone would not say which day: the date stands with it.
+    await unlockFor(30);
+    await eventually(async () => {
+      const read = await untilWhen();
+      check(!timeOnly.test(read.time) && /\d{1,2}[:.]\d{2}/.test(read.time) && read.time.length > line.time.length, `for a time 30 hours away the sidebar says "${read.time}"`);
+      return true;
+    });
   });
 
   await step('A: Ctrl-C: Home says in a bar that the app is not answering, with the command that starts it again', async () => {
@@ -1485,6 +1596,21 @@ async function runE(browser, files) {
         check(measured.barBottom <= measured.height && measured.barTop > measured.height / 2, `at 400 px the bar of the page ${name} lies at ${measured.barTop} to ${measured.barBottom} of ${measured.height}`);
         await walk.picture(`h53-400-${name}`);
       }
+      // The details of an entry cover the page at this width, as they always did: the column makes room for them only in a wide window.
+      await openPage(page, 'activity');
+      if ((await walk.count('#main .row-open')) > 0) {
+        const closed = await rowsAndPanel(walk);
+        await page.locator('#main .row-open').first().click();
+        await page.locator('aside.panel .panel-title').waitFor({ state: 'visible', timeout: WAIT });
+        const open = await eventually(async () => {
+          const now = await rowsAndPanel(walk);
+          check(now.panel && now.panel.left === 0 && now.panel.width === now.window, `at 400 px the panel lies at ${JSON.stringify(now.panel)}`);
+          return now;
+        });
+        check(JSON.stringify(open.rows) === JSON.stringify(closed.rows), 'at 400 px the rows moved when the details opened');
+        await page.keyboard.press('Escape');
+        await page.locator('aside.panel').waitFor({ state: 'detached', timeout: WAIT });
+      } else if (connects) check(false, 'at 400 px the page Activity lists no row to open');
       await openPage(page, 'home');
       const lines = await page.locator('.tile .tile-state').evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().height / parseFloat(getComputedStyle(node).lineHeight))));
       check(lines.every((count) => count <= 2), `the states of the tiles have ${JSON.stringify(lines)} lines`);

@@ -1141,7 +1141,11 @@ def test_the_trial_over_http(short_store_dir: Path) -> None:
         # No vault, and then a vault without a document.
         assert browser.error("POST", "/api/try", question) == (409, "locked")
         state = browser.ok("POST", "/api/store/create", {"passphrase": gs.PASSPHRASE})
-        assert state["trial"] == {"until": "2026-11-12T09:10:00Z", "questions": 0}
+        assert state["trial"] == {
+            "until": "2026-11-12T09:10:00Z",
+            "questions": 0,
+            "since_start": 0,
+        }
         assert browser.ok("POST", "/api/try", question) == {
             "found": False,
             "reason": "no_documents",
@@ -1240,7 +1244,11 @@ def test_the_trial_over_http(short_store_dir: Path) -> None:
         assert browser.error("POST", "/api/apps", app_body) == (403, "reauth_required")
         state = browser.ok("GET", "/api/state")
         assert state["owner_mode_until"] == "2026-11-12T09:10:00Z"
-        assert state["trial"] == {"until": "2026-11-12T09:20:00Z", "questions": 6}
+        assert state["trial"] == {
+            "until": "2026-11-12T09:20:00Z",
+            "questions": 6,
+            "since_start": 6,
+        }
         # Without a scope it opens both, as before.
         assert browser.ok("POST", "/api/reauth", {"passphrase": gs.PASSPHRASE}) == {
             "owner_mode_until": "2026-11-12T09:20:00Z",
@@ -1270,9 +1278,12 @@ def test_the_trial_over_http(short_store_dir: Path) -> None:
         assert (state["locked"], state["trial"]) == (True, None)
         assert browser.error("POST", "/api/try", question) == (409, "locked")
         assert browser.error("POST", "/api/reauth", scoped) == (409, "locked")
+        # The lock, which asks for no passphrase, began the count since the unlock anew.
+        # The count since the app was started is where it was: the trace is not gone.
         assert browser.ok("POST", "/api/unlock", {"passphrase": gs.PASSPHRASE})["trial"] == {
             "until": "2026-11-12T09:21:01Z",
             "questions": 0,
+            "since_start": 26,
         }
         # No answer of all this held the passphrase, a ref or the id of the document.
         assert not [text for text in browser.bodies if gs.PASSPHRASE in text]
