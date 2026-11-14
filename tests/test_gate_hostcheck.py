@@ -676,10 +676,10 @@ def test_what_the_system_refuses_is_said_apart_from_what_cannot_be_read(
     monkeypatch.setattr(hostcheck.os, "open", real_open)
     if os.geteuid() != 0:  # root is refused nothing
         place.chmod(0o000)
-        assert both() == ("no_access", "unreadable")
+        assert both() == ("no_access", "no_access")
         place.chmod(0o600)
         place.parent.chmod(0o000)
-        assert both() == ("no_access", "unreadable")
+        assert both() == ("no_access", "no_access")
         place.parent.chmod(0o700)
     assert seen("claude-desktop").state == "present"
 
