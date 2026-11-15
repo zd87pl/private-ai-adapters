@@ -292,18 +292,26 @@ async function restart(walk, { ownerSeconds = walk.ownerSeconds, env = walk.env,
   check(walk.app.err === '', `standard error: ${walk.app.err}`);
   const before = walk.code;
   walk.ownerSeconds = ownerSeconds;
-  walk.app = startApp(options, { args: ['--store', walk.store, ...args], ownerSeconds, port: new URL(walk.base).port, home: walk.home, env });
-  const lines = await started(walk.app);
-  check(walk.app.url === walk.base, `the app came back at ${walk.app.url}, not at ${walk.base}`);
-  const found = /^pairing code: (\S+)\s/.exec(lines[3]);
-  check(found && found[1] !== before, `the new run has no code of its own: ${lines[3]}`);
-  walk.code = found[1];
+  // Announced before the app is started, not once its start-up lines were read: the new run refuses
+  // the page from its first moment, and the page asks for the state every two seconds. A question
+  // that fell between that moment and an announcement made after the lines was a finding, once in
+  // many runs: "HTTP 401 GET /api/state", with every step passed.
   const announced = expectOldSessionRefused();
-  await page.locator('#pair-code').waitFor({ state: 'visible', timeout: 40000 });
-  pageReachedApp();
-  await page.fill('#pair-code', walk.code);
-  await page.locator('#unlock-passphrase').waitFor({ state: 'visible', timeout: WAIT });
-  withdraw(announced);
+  try {
+    walk.app = startApp(options, { args: ['--store', walk.store, ...args], ownerSeconds, port: new URL(walk.base).port, home: walk.home, env });
+    const lines = await started(walk.app);
+    check(walk.app.url === walk.base, `the app came back at ${walk.app.url}, not at ${walk.base}`);
+    const found = /^pairing code: (\S+)\s/.exec(lines[3]);
+    check(found && found[1] !== before, `the new run has no code of its own: ${lines[3]}`);
+    walk.code = found[1];
+    await page.locator('#pair-code').waitFor({ state: 'visible', timeout: 40000 });
+    pageReachedApp();
+    await page.fill('#pair-code', walk.code);
+    await page.locator('#unlock-passphrase').waitFor({ state: 'visible', timeout: WAIT });
+  } finally {
+    // From here on a 401 is a finding again, also when the start itself failed.
+    withdraw(announced);
+  }
 }
 
 /**

@@ -894,14 +894,16 @@ run(async () => {
   });
 
   await step('started again: the page pairs anew, and the record says how the last session ended', async () => {
+    // The old session is gone: the page is told so at its next question and asks for the new code.
+    // Announced before the start: the new run refuses the page from its first moment, which can be
+    // before its start-up lines were read here.
+    const refused = expectOldSessionRefused();
     // On the same port, because the page that is still open asks there.
     app = startApp(options, { args: ['--store', store], port: new URL(base).port });
     const lines = await started(app);
     check(app.url === base, `the app came back at ${app.url}, not at ${base}`);
     const again = /^pairing code: (\S+)\s/.exec(lines[3]);
     check(again && again[1] !== code, `the second run has no code of its own: ${lines[3]}`);
-    // The old session is gone: the page is told so at its next question and asks for the new code.
-    const refused = expectOldSessionRefused();
     await page.locator('#pair-code').waitFor({ state: 'visible', timeout: 40000 });
     pageReachedApp();
     // The eighth character of the code pairs.

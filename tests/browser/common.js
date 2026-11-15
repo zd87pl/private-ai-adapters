@@ -135,8 +135,9 @@ function expectHttp(status, pathname, { times = 1, optional = false } = {}) {
 /**
  * Announce what an app that was started again answers to a page that is still open. The page has
  * the session of the run before: whatever it had already asked, and whatever it asks before it
- * has noticed, is refused with 401, its state as much as its lists. Withdraw the announcement
- * once the page has paired anew; from then on a 401 is a finding.
+ * has noticed, is refused with 401, its state as much as its lists. Announce it before the app is
+ * started: the new run refuses from its first moment, which is before its start-up lines are read.
+ * Withdraw the announcement once the page has paired anew; from then on a 401 is a finding.
  */
 function expectOldSessionRefused() {
   return expectHttp(401, /^\/api\//, { times: 50, optional: true });
