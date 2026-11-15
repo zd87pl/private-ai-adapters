@@ -196,12 +196,15 @@ function refusedInlineStyle(text) {
 }
 
 let stepNumber = 0;
+/** The name of the step that runs, or of the last one that ran: said with an HTTP error no step announced. */
+let currentStep = '';
 let shotPrefix = '';
 
 /** One step: a line that begins with "ok" or "FAIL". A failed step leaves a picture of the page. */
 async function step(name, body) {
   stepNumber += 1;
   const number = stepNumber;
+  currentStep = name;
   const began = Date.now();
   const took = () => `[${((Date.now() - began) / 1000).toFixed(1)} s]`;
   try {
@@ -511,7 +514,17 @@ function watch(page) {
     const known = expected.find((entry) => entry.left > 0 && entry.status === response.status() && (typeof entry.path === 'string' ? entry.path === pathname : entry.path.test(pathname)));
     if (known) known.left -= 1;
     else if (response.status() === 404 && ENGINE_ASKS.has(pathname)) note(`the engine itself asked for ${pathname}, which the page names nowhere, and was told 404`);
-    else problem(`HTTP ${response.status()} ${response.request().method()} ${pathname}`);
+    else {
+      problem(`HTTP ${response.status()} ${response.request().method()} ${pathname}`);
+      // Said at once, with the step it came in and what the app answered. The list at the end has the line above
+      // and no more, and an error that comes once in many runs cannot be placed without these two.
+      const during = currentStep;
+      const status = response.status();
+      response.text().then(
+        (body) => console.log(`note  HTTP ${status} ${pathname} that no step announced, during "${during}": ${String(body).slice(0, 300)}`),
+        () => {},
+      );
+    }
   });
 }
 

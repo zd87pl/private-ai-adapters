@@ -106,7 +106,7 @@ class Opened:
         self.paths.clear()
 
 
-def test_the_states_are_the_thirteen_words_and_the_sections_three() -> None:
+def test_the_states_are_the_fourteen_words_and_the_sections_three() -> None:
     assert hostcheck.STATES == (
         "present",
         "present_more",
@@ -120,6 +120,7 @@ def test_the_states_are_the_thirteen_words_and_the_sections_three() -> None:
         "no_access",
         "unreadable",
         "not_read",
+        "busy",
         "unsupported",
     )
     assert hostcheck.SECTIONS == ("none", "empty", "filled")
@@ -703,8 +704,11 @@ def test_a_file_that_changes_its_size_while_it_is_read_is_not_read(
     monkeypatch.setattr(hostcheck.os, "read", reading)
     found = seen("claude-desktop")
     assert cut == [1]
-    assert (found.state, found.raw, found.status) == ("not_read", None, None)
+    # Not "not_read", the word for a file that is no regular file or too large: this one
+    # is an ordinary file that somebody was writing.
+    assert (found.state, found.raw, found.status) == ("busy", None, None)
     monkeypatch.setattr(hostcheck.os, "read", real_read)
+    assert seen("claude-desktop").state == "empty"
 
 
 def test_a_file_that_is_written_while_it_is_read_is_not_read(
@@ -766,10 +770,10 @@ def test_a_file_that_is_written_while_it_is_read_is_not_read(
     for time_back in (False, True):
         # Between the last read and the look at the open file that follows it.
         found = looked_at_while("after the last read", old, new, time_back=time_back)
-        assert (found.state, found.raw, found.status) == ("not_read", None, None), time_back
+        assert (found.state, found.raw, found.status) == ("busy", None, None), time_back
         # Between two reads of a file that is read in pieces: half of each version.
         found = looked_at_while("before the second read", big_old, big_new, time_back=time_back)
-        assert (found.state, found.raw, found.status) == ("not_read", None, None), time_back
+        assert (found.state, found.raw, found.status) == ("busy", None, None), time_back
         # The look after that reads what is there now.
         found = seen("claude-desktop")
         assert (found.state, found.raw) == ("other", big_new.encode("utf-8"))
@@ -807,7 +811,7 @@ def test_a_file_that_is_written_while_it_is_read_is_not_read(
 
     with monkeypatch.context() as patch:
         patch.setattr(hostcheck.os, "read", chmod_then)
-        assert seen("claude-desktop").state == "not_read"
+        assert seen("claude-desktop").state == "busy"
     assert seen("claude-desktop").state == "present"
 
 

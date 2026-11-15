@@ -41,7 +41,7 @@ export function iconButton(glyph, label, options = {}) {
     "button",
     {
       type: "button",
-      class: ["icon-btn", options.kind && `icon-btn-${options.kind}`],
+      class: "icon-btn",
       onclick: options.onclick,
       disabled: options.disabled,
       title: label,
@@ -139,7 +139,7 @@ export function meterRow(label, used, limit, unit = "characters") {
 }
 
 /** A switch with its label and an optional sentence below it. `id` must be unique on the page. */
-export function toggle({ label, hint, checked, onchange, disabled, id, compact, tone, title }) {
+export function toggle({ label, hint, checked, onchange, disabled, id, compact, title }) {
   const ident = id;
   return el(
     "label",
@@ -153,7 +153,7 @@ export function toggle({ label, hint, checked, onchange, disabled, id, compact, 
     el("input", {
       type: "checkbox",
       role: "switch",
-      class: ["switch", tone && `switch-${tone}`],
+      class: "switch",
       id: ident,
       checked,
       disabled,

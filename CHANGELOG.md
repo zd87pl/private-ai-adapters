@@ -33,58 +33,120 @@ changes only when the bytes on disk do.
   which it sends in a header, and the app sets no cookie. `--demo` runs on
   invented documents in a temporary store with a played agent and without
   pairing, `--lock-after` sets when the vault locks itself (eight hours by
-  default), `--view basic` or `--view pro` opens the interface in that view
-  and keeps the choice beside the vault, and `--window` is an experimental
-  window of its own, which pairs like the browser. At start the terminal says
-  where the vault and the page are and, when no AI app could connect to this
-  installation, why. A demo that stops prints one more line, the command that
-  starts the app on a vault of your own.
-- **Two views of one vault, Basic and Pro.** Basic is one page: what waits
-  for your approval, what left the vault, with its exact text, what was
-  stopped in the last 24 hours, your documents and your apps. It changes few
-  things. You add and remove documents there, and in a vault with one group of
-  documents (a group is what Pro calls a collection) you change what an app
-  may do or remove the app. You add an app there too, unless the vault has an
-  app that runs on this computer. What Basic does not change it says in
-  sentences, with a link into Pro. Pro is six pages, Overview, Activity,
-  Approvals, Documents, Apps and Vault, with every setting. A control labelled
-  "View" switches between the two. A new vault starts in Basic, and the demo
-  opens in Basic; a vault that was made before the two views existed opens in
-  Pro until you choose "Basic". What an app is given does not depend on the
-  view.
-- **A first run in four steps**, "Passphrase", "App", "Documents" and "First
-  question", for a new vault in Basic. The second step asks which AI app you
-  use and gives it one kind of access, "Ask me each time": every passage waits
-  for your approval. The third adds a document, or an invented sample letter
-  when no file is at hand. The fourth shows how to add Locktender to that app
-  and the start of a question to copy, waits for the app's first request, and
-  shows the passage the app asks for, with its exact text and the buttons
-  "Release once" and "Don’t release". For Claude Desktop, the ChatGPT
-  desktop app and Grok Build that step has a button "Check the file". A press
-  makes Locktender read that app's one settings file and tell the page one of a
-  few fixed answers, such as whether its own entry is there, and nothing of
-  what the file holds; the page asks for that look at no other time. It is the
-  one kind of file of another program that Locktender reads. No press of
-  this page writes a file of another program or changes the settings of an AI
-  app: you copy the text and put it where the AI app reads it. (The app
-  behind the page can write its own entry into such a file from this version
-  on, when a request asks for it within ten minutes of the passphrase. No
-  page sends such a request yet.) Every step after the first can
-  be skipped or left for later; until setting up is over, a card on the Basic
-  page, "Finish setting up", names the next one.
-- **The demo has a guide.** It stands on the Basic page under "Approvals" and
-  says where the demo is: an app is about to ask, a passage waits, it was
-  released or not, it was read. The played app asks again for the passage that
-  waited when the guide's button "Have the played app ask again" is pressed,
-  and at no other time, whatever your answer was.
+  default), `--view basic` or `--view pro` opens the page on Home or on
+  Overview of the six pages under Settings and keeps the choice beside the
+  vault, and `--window` is an experimental window of its own, which pairs
+  like the browser. At start the terminal says where the vault and the page
+  are and, when no AI app could connect to this installation, why. A demo
+  that stops prints one more line, the command that starts the app on a vault
+  of your own.
+- **The page: Home, Documents, Activity and Settings.** Home shows what waits
+  for your yes, a box that asks your documents, four tiles that connect an
+  app, and the three passages that left last, each with its exact text one
+  press away. Home changes few things: it adds a document, connects an app
+  with one kind of access, "Ask me each time", and disconnects it. Documents
+  adds and removes documents and says, under what you added, which apps can
+  ask for it. Activity lists every passage that left and, under "Stopped",
+  the calls that were stopped. Settings keeps the language, the page to open
+  on and the command that starts the app again, and leads to six pages with
+  every setting, Overview, Activity, Approvals, Documents, Apps and Vault,
+  which are in English: "Can read", limits, pauses, a second group of
+  documents and apps whose model runs on this computer are set there. A page
+  "How it works and what it cannot do" says the rest in sentences. A new
+  vault and the demo open on Home; a vault that was made before the page
+  kept its choice opens on Overview until you choose Home under "Open on".
+  What an app is given does not depend on the page you look at.
+- **"Ask your documents", a trial on your own computer.** A box on Home takes
+  a question and shows the one passage an app's search would find for those
+  words, as an approval card would show it, with the words it was found by
+  and who could get it under the vault's settings. Nothing is sent, nothing
+  is counted against a limit and nothing is recorded. The box finds whole
+  words exactly as they stand and writes no answer. It needs the passphrase
+  typed within the last ten minutes and keeps its own time for that: typing
+  the passphrase for the box does not allow a change that lets more leave.
+  It answers 20 questions a minute. Home says how many were asked since the
+  vault was unlocked, and since the app was started where that is more;
+  locking does not clear the second count.
+- **"Connect" writes Locktender's entry into an AI app's settings file.**
+  Three tiles on Home stand for a program whose settings file the app can
+  write: "Claude" for Claude Desktop, "ChatGPT" for the ChatGPT desktop app
+  and Codex, which by OpenAI's documentation read one file, and "Grok" for
+  Grok Build. A press on a tile has the app read that one file and say in
+  fixed words what it found. "Connect" then adds the app to the vault, with
+  "Ask me each time" where the vault has one group of documents and with
+  nothing where it has several, and writes one entry, named `locktender`,
+  into the file: the command that starts the program which carries the
+  app's requests to Locktender. The text is edited where the entry goes and
+  nowhere else, a copy of the file as it was is kept beside it before each
+  change (its name ends in `.before-locktender` or `.last-locktender`), the
+  change is in the record before it is made, and the file is read back.
+  "Disconnect" removes the app from the vault and takes that entry out again;
+  an entry that points elsewhere is left. "Connect" needs the passphrase
+  typed within the last ten minutes, and so does a "Disconnect" that changes
+  the file. The fourth tile, "Other app", writes nothing and shows text to
+  paste, and so does "Show the text to paste" wherever the app does not
+  write. **This ends a promise**: until now Locktender wrote no file
+  outside the vault's folder and changed no setting of another program. It
+  now writes that one kind of file, on your press. It writes no file that it
+  could not read, that is a link or lies in a folder that is a link, that is
+  larger than 1 MiB, has a second name or belongs to another account, that
+  was changed in the last five seconds or while it was read; it creates no
+  folder, and it writes no entry that names a Python or a vault in a folder
+  for temporary files or in a place others can change. The write was tested
+  against settings files made for the tests. It was not tried with Claude
+  Desktop, the ChatGPT desktop app, Codex or Grok Build, and not by hand on a
+  Mac.
+- **English and Polish.** The page before the vault is open, Home, Documents,
+  Activity, Settings, the approval card, the sheets and the page "How it
+  works" are in either language, chosen with a switch on every screen and
+  kept beside the vault. Numbers, times and plural forms follow the language.
+  The six pages under Settings, the sentences the app itself answers with and
+  what an AI app is told stay in English. The Polish texts have not been read
+  by somebody who writes Polish for a living; where the two differ, the
+  English text is the one that was specified.
+- **A new vault begins with three cards on Home**, "Start here": "Add a
+  document" (or an invented sample document, a rental agreement, in the
+  language of the page), "Ask your documents", and "Connect an app". Each
+  card is the part of Home it names, so nothing has to be learnt twice. The
+  cards go when the vault has a document and an app and you have seen a
+  passage in the box or an app has called, or when you hide them. From the
+  pairing screen it takes three presses to the first passage in the box,
+  five to "Connected" and six to the first passage a caller reads through
+  the written entry; a walk-through counts them.
+- **The demo has a card on Home.** It says in one sentence where the demo is:
+  an app is about to ask, a passage waits, it was released or not, it was
+  read. The played app asks again for the passage that waited when the
+  card's button "Have the played app ask again" is pressed, and at no other
+  time, whatever your answer was. A demo connects nothing: its tiles look at
+  no file, and the three routes of a settings file refuse.
 - **A small file beside the vault**, `run/interface.json` in the store
-  directory. It holds two words, which view you use and whether setting up is
-  finished, can hold a third, a language for the page, and holds nothing from
-  the vault. It is not sealed, it is no setting of
-  the vault, and writing it leaves no entry in the record. A file that is
-  missing or holds anything else counts as no file: the vault then opens in
-  Pro, and it unlocks all the same.
+  directory. It holds two or three words: on which page the app opens,
+  whether the first steps are done, and your language once you chose one. It
+  holds nothing from the vault, it is not sealed, it is no setting of the
+  vault, and writing it leaves no entry in the record. A file that is missing
+  or holds anything else counts as no file: the vault then opens on Overview,
+  and it unlocks all the same.
   [docs/GATE_FORMAT.md](docs/GATE_FORMAT.md#the-interface-file) specifies it.
+- **New answers and words of the app's own API**, for whoever calls it
+  without the page. `POST /api/try` is the trial question; it answers 403
+  `trial_reauth_required` when the passphrase was last typed more than ten
+  minutes ago and 429 `too_many` above 20 questions a minute, and
+  `POST /api/reauth` takes `"scope": "trial"`. `POST /api/connect/<host>/look`,
+  `POST /api/connect/<host>` and `POST /api/connect/<host>/remove` deal with
+  the settings file of `claude-desktop`, `chatgpt-desktop` or `grok-build`.
+  The look answers one of fourteen words for what it found (`busy` is the
+  one for a file that was written or replaced while it was read). A connect
+  that writes nothing says why in a word of its own (`recent`, `by_hand`,
+  `no_copy`, `failed`, `expands`, `unstable`, `moved`, `other_kind`,
+  `not_ready`) or answers 409 `changed` for a file that is not what the owner
+  was shown; in a demo the three routes answer 409 `demo`. An upload that is refused carries a word for why in `reason`.
+  A `policy` entry of the record whose `by` begins with `connect` or
+  `disconnect` says that a settings file was about to be changed, or was
+  left; its policy can be the one that was in force before, which a version
+  from before this entry shows as a save without a change. And the sentence
+  an AI app is given for a passage that waits no longer names a page: "Ask
+  the user to open the Locktender page in their browser and answer the
+  request …".
 - **`wdva gate mcp`**: the program an agent application starts, a Model
   Context Protocol server on standard input and output with three read-only
   tools, `locktender_status`, `locktender_search` and `locktender_read`. It
@@ -109,11 +171,29 @@ changes only when the bytes on disk do.
 - **Tests and continuous integration for the app**: its tests run on Linux and
   macOS with Python 3.11 and 3.13. Three walk-throughs in `tests/browser/`
   drive the interface in a real browser against the real app:
-  `journey_demo.js` walks the demo with its guide, `journey_real.js` a new
-  vault in Pro from pairing to Ctrl-C, and `journey_basic.js` the first run
-  and the Basic page. The CI job "Browser" runs them in Chromium on Linux and
-  in WebKit on macOS. No AI app takes part in them. Not tested: a person at a
-  Mac, Safari itself, a real conversation in any AI app, and `--window`.
+  `journey_demo.js` walks the demo with its card, `journey_real.js` a new
+  vault on the six pages under Settings from pairing to Ctrl-C, and
+  `journey_home.js` Home, the box that asks, the four tiles with "Connect"
+  and "Disconnect" against settings files in a home made for the run, and
+  the plain pages, in English and Polish. The CI job "Browser" runs them in
+  Chromium on Linux and in WebKit on macOS. No AI app takes part in them. Not
+  tested: a person at a Mac, Safari itself, a real conversation in any AI
+  app, what an AI app does with the entry "Connect" writes, and `--window`.
+- **Gone since earlier states of this preview**, none of which was released.
+  The page had two views, "Basic" and "Pro", with a control "View" between
+  them: Home and the pages beside it stand where Basic stood, and Pro is the
+  six pages under Settings. A new vault was led through a first run in four
+  steps, "Passphrase", "App", "Documents" and "First question": the
+  passphrase screen and the three cards "Start here" took their place. The
+  last of those steps had a button "Check the file", which read an app's
+  settings file and answered one word, through the route
+  `POST /api/apps/<name>/connect/check`: the route and the button are gone,
+  and a tile's sheet looks at the file instead. The card "Finish setting up",
+  the demo's guide under "Approvals" and the walk-through `journey_basic.js`
+  went with them. Addresses of the page moved: `#/documents` and `#/activity`
+  are the plain pages now, the six pages are at `#/pro/…`, and the old
+  addresses of the six pages, of Basic and of the first run lead to where
+  their pages are.
 
 ### Changed
 

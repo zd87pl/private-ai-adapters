@@ -48,8 +48,8 @@ function servingSentence(ctx) {
   return `${first} Not answered: ${list(idle)}.`;
 }
 
-function stat(value, label, tone) {
-  return el("div", { class: ["stat", tone && `stat-${tone}`] }, el("span", { class: "stat-value" }, value), el("span", { class: "stat-label" }, label));
+function stat(value, label) {
+  return el("div", { class: "stat" }, el("span", { class: "stat-value" }, value), el("span", { class: "stat-label" }, label));
 }
 
 function stateCard(ctx) {

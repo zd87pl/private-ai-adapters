@@ -13,8 +13,9 @@ The rules it keeps:
 * **Read first.** Nothing is written that :mod:`wdva.gate.hostcheck` did not
   read a moment before. A file that cannot be parsed, is a link or a special
   file, is larger than :data:`MAX_BYTES`, has more than one name or belongs to
-  another account is never written. A folder on the way that is a link is not
-  gone through. A folder that is not there is not made. (One second name is
+  another account is never written, and neither is one that was written or
+  replaced while it was read. A folder on the way that is a link is not gone
+  through. A folder that is not there is not made. (One second name is
   no reason to call a file unread: the temporary name under which an earlier
   call of this module made it, where that call was cut before it could take
   the name away. Such a file is looked at like any other, and is written
@@ -917,7 +918,7 @@ def _may_not_last(path: str) -> bool:
     except (OSError, NotImplementedError):
         return True
     finally:
-        os.close(root)
+        _close(root)
 
 
 def _where_it_lies(path: str, *, last_part_too: bool) -> str | None:
@@ -1096,6 +1097,17 @@ def _make_temporary(
 def _unlink(folder: int, name: str) -> None:
     with suppress(OSError):
         os.unlink(name, dir_fd=folder)
+
+
+def _close(folder: int) -> None:
+    """Close a folder that a call held open. Whatever the system says to it, the call stands.
+
+    It is the last thing a call does. By then the file was looked at,
+    changed or left, and the record says which: an error of this close takes
+    nothing of that back, and must not turn the answer into an error.
+    """
+    with suppress(OSError):
+        os.close(folder)
 
 
 def _unchanged(folder: int, name: str, status: os.stat_result | None) -> bool:
@@ -1550,7 +1562,7 @@ def look(
                     {"path": _shown(place_of_copy), "made_at": _made_at(status)}
                 )
     finally:
-        os.close(folder)
+        _close(folder)
     return answer
 
 
@@ -1599,6 +1611,8 @@ def connect(
     or calling ``record`` raises is raised on, after the temporary files of
     this call were removed. No file of another program was changed then,
     unless the error came when a change that had been made was found undone.
+    The folder is closed last, and an error of that close is not raised: the
+    change was made and recorded by then, and the answer says so.
     """
     _writable(host)
     if expect not in hostcheck.STATES:
@@ -1631,7 +1645,7 @@ def connect(
             expect=expect,
             clear=_OURS + _CAN_BE_WRITTEN,
         )
-        if state in ("unreadable", "not_read", "unsupported", "no_access"):
+        if state in ("unreadable", "not_read", "busy", "unsupported", "no_access"):
             return stop(state)
         if state != expect:
             return stop("changed")
@@ -1682,7 +1696,7 @@ def connect(
     finally:
         if change is not None:
             change.discard()
-        os.close(folder)
+        _close(folder)
 
 
 def disconnect(
@@ -1708,10 +1722,11 @@ def disconnect(
     Returns ``file``, ``path`` and ``copy``. ``file`` is ``"removed"``;
     ``"differs"`` (an entry that points elsewhere was left); ``"no_entry"``;
     the word for a file that could not be looked at or read (``linked``,
-    ``no_access``, ``unreadable``, ``not_read``, ``unsupported``); the word
-    for an entry that was found and not removed (``recent``, ``by_hand``,
-    ``no_copy``, ``failed``); or ``"changed"``: the file is not in the state
-    the owner was shown, or was another one before the record was written.
+    ``no_access``, ``unreadable``, ``not_read``, ``busy``, ``unsupported``);
+    the word for an entry that was found and not removed (``recent``,
+    ``by_hand``, ``no_copy``, ``failed``); or ``"changed"``: the file is not
+    in the state the owner was shown, or was another one before the record
+    was written.
     Only then was ``record`` not called. ``copy`` is the copy this call made,
     or ``None``. With ``removed`` the answer can have ``changed_since`` or
     ``not_read_back``, as that of :func:`connect`.
@@ -1792,4 +1807,4 @@ def disconnect(
     finally:
         if change is not None:
             change.discard()
-        os.close(folder)
+        _close(folder)

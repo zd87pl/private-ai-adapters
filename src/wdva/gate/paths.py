@@ -5,7 +5,8 @@
 A store is one directory. Everything in it is a sealed file except ``run/``,
 which holds the lock file of the process that has the store open, while the
 store is unlocked the socket that agent applications are served through, and a
-small file in which the app keeps which view of its interface the owner uses.
+small file in which the app keeps on which page its interface opens, whether
+the first steps are done, and the language of the page.
 
 Nothing here creates, reads or changes a file.
 """
@@ -126,7 +127,7 @@ def socket_path(store: str | os.PathLike[str]) -> Path:
 
 
 def interface_path(store: str | os.PathLike[str]) -> Path:
-    """``<store>/run/interface.json``: which view of the interface the owner uses.
+    """``<store>/run/interface.json``: on which page the interface opens, and its language.
 
     Not sealed, and written by the app alone: it holds two or three words
     about the interface and nothing from the vault.

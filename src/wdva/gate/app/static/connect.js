@@ -10,8 +10,10 @@
 // that opens the sheet, "Look again") and at no other time, and what is sent with
 // "Connect" or "Disconnect" is the state of the file that the sheet was drawn from.
 // "Connected" means that the entry was written and read back; the sheet says in the
-// same place that this was not tried with the program itself. Where the app writes
-// nothing, the sheet says why and shows the text to paste. The fourth tile is for
+// same place that this was not tried with the program itself. Where the entry was
+// written and the system did not let the file be read back, the sheet of a connected
+// app is shown instead, with a line that says so. Where the app writes nothing, the
+// sheet says why and shows the text to paste, or offers another look. The fourth tile is for
 // any other app: it only ever shows text to copy.
 //
 // This is the only script that asks for a look at a settings file, for the write
@@ -52,8 +54,8 @@ function sentence(key, values = {}) {
 }
 
 /** One sentence of a sheet, as a paragraph. */
-function say(id, content, tone = null) {
-  return el("p", { class: ["sheet-say", tone && `sheet-say-${tone}`], id, key: id }, content);
+function say(id, content) {
+  return el("p", { class: "sheet-say", id, key: id }, content);
 }
 
 /**
@@ -122,6 +124,7 @@ async function addWithAccess(ctx, name, destination) {
 const REFUSED = {
   unreadable: "connect.refused.say.1.unreadable",
   not_read: "connect.refused.say.1.not_read",
+  busy: "connect.refused.say.1.busy",
   linked: "connect.refused.say.1.linked",
   no_access: "connect.refused.say.1.no_access",
   by_hand: "connect.refused.say.1.by_hand",
@@ -142,7 +145,7 @@ const REFUSED = {
 const PASTE_INSTEAD = ["unreadable", "not_read", "linked", "no_access", "by_hand", "no_copy", "unsupported", "unstable", "moved"];
 
 /** The words after which another look is the next thing to do. */
-const LOOK_AGAIN = ["recent", "changed", "failed", "kept"];
+const LOOK_AGAIN = ["recent", "changed", "busy", "failed", "kept"];
 
 /**
  * Which state of the sheet a look leads to: the first line of the table that applies.
@@ -160,7 +163,7 @@ function settle(ctx, view, look) {
     view.state = "refused";
     view.word = look.problem;
   } else if (look.state === "no_folder") view.state = "nofolder";
-  else if (["linked", "no_access", "unreadable", "not_read", "unsupported"].includes(look.state)) {
+  else if (["linked", "no_access", "unreadable", "not_read", "busy", "unsupported"].includes(look.state)) {
     view.state = "refused";
     view.word = look.state;
   } else if (look.state === "present_as" && own.some((app) => app.name === look.other_name)) view.state = "as";
@@ -177,6 +180,7 @@ async function lookAt(ctx, sheet, view) {
   view.state = "looking";
   view.failed = null;
   view.answer = null;
+  view.unread = false;
   view.hand = null;
   sheet.update();
   try {
@@ -294,7 +298,8 @@ async function connect(ctx, sheet, view) {
     const answer = await api.connectWrite(host, look.state);
     view.answer = answer;
     // Written, but the system did not let the file be read back: the sheet that says "read back" is not shown.
-    // The sheet of a connected app is, from what the answer says of the file and of the app; no file is looked at for it.
+    // The sheet of a connected app is, from what the answer says of the file and of the app, with a line that says what was not done; no file is looked at for it.
+    view.unread = answer.connected === true && answer.not_read_back === true;
     if (answer.connected === true && answer.not_read_back === true) settle(ctx, view, Object.assign({}, look, { state: answer.state, app: answer.app }));
     else if (answer.connected === true) view.state = "connected";
     else if (answer.state === "expands") view.state = "expands";
@@ -345,7 +350,10 @@ async function disconnect(ctx, sheet, view) {
     const answer = await api.connectRemove(host, look.state);
     const said = { removed: "disconnect.result.done", no_entry: "disconnect.result.vault", differs: "disconnect.result.differs" };
     const key = Object.prototype.hasOwnProperty.call(said, answer.file) ? said[answer.file] : "disconnect.result.kept";
-    toast(t(key, values(view, { path: answer.path || look.path })), answer.file === "removed" || answer.file === "no_entry" ? "green" : "amber");
+    const done = t(key, values(view, { path: answer.path || look.path }));
+    // Removed, but the system did not let the file be read back: the message says so, and is not the green one.
+    const unread = answer.file === "removed" && answer.not_read_back === true;
+    toast(unread ? [done, t("connect.status.unread")].join(" ") : done, !unread && (answer.file === "removed" || answer.file === "no_entry") ? "green" : "amber");
     sheet.close(null);
   } catch (error) {
     if (error.code === "changed") {
@@ -454,7 +462,9 @@ function handState(ctx, sheet, view) {
 function refusedState(ctx, sheet, view) {
   const word = view.word;
   const own = Object.prototype.hasOwnProperty;
-  const key = own.call(REFUSED, word) ? REFUSED[word] : "connect.refused.say.1.failed";
+  let key = own.call(REFUSED, word) ? REFUSED[word] : "connect.refused.say.1.failed";
+  // A linked folder whose real place the system would not tell: the sentence names no place.
+  if (word === "linked" && !values(view).real) key = "connect.refused.say.1.linked.unknown";
   const paste = PASTE_INSTEAD.includes(word);
   const again = LOOK_AGAIN.includes(word);
   // In a demo: the command that starts a vault of the owner's own.
@@ -553,6 +563,8 @@ function drawConnect(ctx, sheet, view) {
         "div",
         { class: "sheet-facts", key: "facts" },
         el("p", { class: "sheet-fact", id: "connect-on-file" }, sentence("connect.on.status.file", values(view))),
+        // After a connect whose result the system did not let the app read back.
+        view.unread ? el("p", { class: "sheet-fact", id: "connect-unread" }, t("connect.status.unread")) : null,
         look.state === "present_more" ? el("p", { class: "sheet-fact" }, t("connect.on.status.more")) : null,
         look.switched_off ? el("p", { class: "sheet-fact", id: "connect-on-off" }, t("connect.on.status.off", values(view))) : null,
         el("p", { class: "sheet-fact", id: "connect-on-seen" }, seen && seen.time ? t("tile.status.seen", { ago: agoShort(seen.time, ctx.now) }) : t("tile.status.never")),
@@ -600,7 +612,7 @@ function drawConnect(ctx, sheet, view) {
  */
 export function openConnect(ctx, tile) {
   const demo = ctx.state.demo === true;
-  const view = { tile, state: demo ? "refused" : "looking", word: demo ? "demo" : "", look: null, answer: null, hand: null, busy: false, failed: null, details: false, told: false, copied: null };
+  const view = { tile, state: demo ? "refused" : "looking", word: demo ? "demo" : "", look: null, answer: null, unread: false, hand: null, busy: false, failed: null, details: false, told: false, copied: null };
   const sheet = openSheet((self) => drawConnect(ctx, self, view), { label: title(view), wide: true });
   if (!demo) lookAt(ctx, sheet, view);
   return sheet.closed;

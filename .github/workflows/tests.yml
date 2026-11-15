@@ -156,6 +156,11 @@ jobs:
         run: npm install --no-save playwright@1.63.0
       - name: Install the browser
         run: npx playwright install ${{ matrix.playwright-install }}
+      # The demo plays its apps by a script of its own, with pauses drawn at
+      # random; its last call is made under a name that is not registered, on
+      # purpose, and the record lists it as a refusal. Where the walk checks
+      # that nothing but the played apps called, it counts that one call as
+      # theirs, once, whenever it falls.
       - name: Walk through the demo
         id: demo
         run: node tests/browser/journey_demo.js

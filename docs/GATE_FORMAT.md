@@ -36,6 +36,17 @@ in [a file beside the sealed ones](#the-interface-file).
 Elsewhere in this repository a vault is one `.wdva` file ([FORMAT.md](FORMAT.md)). A store is a
 directory of such files.
 
+Where this page says "in a run for this page", the figure comes from a run on Linux with Python
+3.11: one machine, one run. The runs about [the interface file](#the-interface-file), the
+routes of [the owner's page](#the-owners-page) and their count,
+[the trial question](#the-trial-question) and
+[the settings file of an AI application](#the-settings-file-of-an-ai-application) were made
+again on the last state of this version, and so were the two scripts under
+[Check it yourself](#check-it-yourself); what the page says of them is what the last run showed.
+The figures of the other sections (the socket, a wrong passphrase and a damaged file, the
+entries of the record, the played app of a demo) are from runs made when those sections were
+written, before the interface had Home, and were not made again.
+
 ## The directory
 
 ```text
@@ -611,7 +622,7 @@ Kept, sealed, for as long as the store exists:
 
 Not kept: the text of a passage that was refused or waits for approval (an `approval` entry has
 the hash and the length of the passage, not its text); status results; the waiting list; which
-passages the owner declined; pausing and un-pausing; which view of the owner's page was in use.
+passages the owner declined; pausing and un-pausing; on which page the owner's page opened, and in which language.
 The record cannot be pruned. Removing a document removes nothing from it.
 
 ### How it is verified
@@ -919,8 +930,8 @@ bytes.
   are not in that answer.
 - **Not part of the store.** The file is in no policy and in no entry of the record, is not
   counted among the sealed files, and states no version. Writing it changes nothing that is
-  sealed: in a run for this page the head of the record (`#27 1fc8a7c6`) and the number of sealed
-  files (32) were the same before and after.
+  sealed: in a run for this page the head of the record and the number of sealed files were
+  the same before and after each of three such writes.
 
 **In the state.** `GET /api/state` has a field `interface`. It is `null` while no store exists,
 and else `{"view": …, "setup": …, "language": "en", "pl" or null, "stored": true or false}`, for
@@ -1266,9 +1277,9 @@ and a body with a field `path` 400.
    symbolic link, a directory, a named pipe, a device) or is larger than 1 MiB is never opened.
 3. A file that passed is opened for reading only, without following a link and without waiting.
    What was opened is looked at once more before a byte is read, and again after the last byte.
-   A file that has grown past 1 MiB by the time it is read counts as not read, and so does one
+   A file that has grown past 1 MiB by the time it is read is not used, and neither is one
    that was written while it was read: its size, or one of its two times of change, is another
-   after the last byte than before the first. (A program that rewrites the file in place with
+   after the last byte than before the first. The state is then `busy`. (A program that rewrites the file in place with
    as many bytes as it had, and sets its time back, changes the time of the last change of any
    kind, which is the system's own. Two changes within one tick of the file system's clock
    cannot be told apart this way; a file that was changed a moment ago is not written, R18.)
@@ -1288,7 +1299,7 @@ registered client. (The look that came before it, and is gone, answered only for
 | Field | What it is |
 | --- | --- |
 | `host`, `label`, `readers` | The id; the name a sentence uses for the program (`Claude Desktop`, `ChatGPT`, `Grok Build`); the programs that read the file (`["ChatGPT", "Codex"]` for `chatgpt-desktop`) |
-| `state` | What the reader found: one of the thirteen words below |
+| `state` | What the reader found: one of the fourteen words below |
 | `problem` | What keeps the entry from being written, found without the file: `expands`, `unstable`, `moved`, or `null` ([the rules](#the-rules-of-the-write), R14, R17, R1) |
 | `format` | `"JSON"` or `"TOML"` |
 | `path`, `folder` | The file and its folder, written with `~` where they lie in the home directory |
@@ -1317,7 +1328,8 @@ registered client. (The look that came before it, and is gone, answered only for
 | `linked` | A folder on the way is a symbolic link. Nothing behind it was read |
 | `no_access` | The system refused to look at a folder or to open the file |
 | `unreadable` | The file is not what it should be: not UTF-8, not valid JSON or TOML, a JSON key written twice, `NaN` or `Infinity`, a byte-order mark, something other than an object at the top, or `mcpServers` (`mcp_servers`) that is not an object (a table) |
-| `not_read` | Not a regular file, or larger than 1 MiB: it was not opened; or it was written while it was read. For these three routes also a file with more than one name, and one that belongs to another account. One second name does not count: a temporary name of the writer for this file (R7), in the same folder. That is what a connect leaves that made the file and was cut before it could take the name away; the file is then looked at like any other, and the writer removes the name before it changes the file |
+| `not_read` | Not a regular file, or larger than 1 MiB: it was not opened. For these three routes also a file with more than one name, and one that belongs to another account. One second name does not count: a temporary name of the writer for this file (R7), in the same folder. That is what a connect leaves that made the file and was cut before it could take the name away; the file is then looked at like any other, and the writer removes the name before it changes the file |
+| `busy` | The file was written, cut or made longer while it was read (point 3 above). Nothing of what was read is used, and nothing is written. On Linux, on the file systems the app was run on, a file whose name was given to another file while it was read is told so too: the file that was opened has one name fewer, which changes its time of change. The page then offers another look. (Until this word existed, such a file was told as `not_read`, whose sentence on the page speaks of links, special files and size) |
 | `unsupported` | The file is TOML and the app runs on a Python older than 3.11, which has no reader for it; or the home directory cannot be told |
 
 **Nothing from the file is in an answer.** A settings file of this kind can hold the keys and
@@ -1350,7 +1362,7 @@ no place and nothing of the file ([below](#what-the-record-holds-of-it)).
 | R15 | A demo writes nothing and looks at nothing | All three routes answer 409 `demo` before any file is looked at |
 | R16 | The writer starts no program | Whether the AI application runs is not looked up. (The app starts its own Python once at each connect, to see that the command it is about to write starts.) |
 | R17 | A command that may not last is not written | The entry makes another program start this Python at each of its starts. The write is refused (`unstable`) when the path of the Python or of the store has a part that belongs to an account other than the owner's or root, or that everybody may write, or when it lies under a folder for temporary files (`tempfile.gettempdir()`, `/tmp`, `/var/tmp`, `/dev/shm`, and where these really lie). Each path is judged twice: as it is written, and where it really lies, with every symbolic link on its way followed, so that a link into such a place, or around a folder that everybody may write, does not lead past the rule. For the store a last part that is a link is followed too. A part that a group may write is not refused, and the file behind a Python that is a link is not looked at. A path of which the system does not say where it lies is refused |
-| R18 | A file that is being saved is not written | A file whose time of change is less than five seconds old is `recent`. So is a file that still has a temporary name of the writer beside its own: that name is removed once it is 60 seconds old (step 4 of the writer), and no file is replaced while it has two names |
+| R18 | A file that is being saved is not written | A file whose time of change is less than five seconds old is `recent`. So is a file that still has a temporary name of the writer beside its own: that name is removed once it is 60 seconds old (step 4 of the writer), and no file is replaced while it has two names. A file that was written while it was read is `busy`, and is not written either |
 
 #### A connect
 
@@ -1396,7 +1408,7 @@ every other hosted client, came into force with one press on "Connect".)
 **The writer**, step by step. A step that stops removes every temporary file of the call.
 
 1. The folder is opened. `no_folder`, `linked`, `no_access` and `unsupported` stop.
-2. The file is read. `unreadable`, `not_read` and `no_access` stop.
+2. The file is read. `unreadable`, `not_read`, `busy` and `no_access` stop.
 3. A state that is not `expect` stops with `changed`. Nothing in the folder was touched up to
    here.
 4. A temporary file that an earlier call left in the folder is removed: a regular file of the
@@ -1435,6 +1447,10 @@ every other hosted client, came into force with one press on "Connect".)
     being answered, so no approval and no waiting passage was withdrawn. (Before this was so,
     step 9 changed who is answered, and a write that failed gave the policy back but not the
     approvals and the waiting passages of local clients.)
+12. The folder that was held open since step 1 is closed. What the system says to that close
+    changes no answer: the change was made and recorded, or was refused, before it. (Until
+    this was so, a close that the system reported as failed turned the answer into 503
+    `unavailable`, also for a change that had been made.)
 
 The store's lock, the one that locking takes, is held in step 9 only: for two looks at the
 file's status, the record, and putting the copy and the file in place. It is not held while a
@@ -1464,7 +1480,7 @@ and a session that had ended properly. No folder that really hangs was at hand.
 
 | What happened | Answer | The store and the record | The file |
 | --- | --- | --- | --- |
-| The reader found `no_folder`, `linked`, `no_access`, `unreadable`, `not_read` or `unsupported` | 200 `{"connected": false, "state": <that word>, "path"}`; for `linked` also `real_folder` | unchanged | unchanged |
+| The reader found `no_folder`, `linked`, `no_access`, `unreadable`, `not_read`, `busy` or `unsupported` | 200 `{"connected": false, "state": <that word>, "path"}`; for `linked` also `real_folder` | unchanged | unchanged |
 | A state that can be written, but not the one in `expect`; or the file is another one at a comparison | 409 `changed` | unchanged, or put back with two entries when the record was written already | unchanged |
 | `present_as`, and the store has a client of that name | 200 `{"connected": false, "state": "present_as", "path", "other_name"}` | unchanged | unchanged |
 | `recent`, `by_hand`, `no_copy`, `failed` before the record | 200 `{"connected": false, "state": <that word>, "path"}` | unchanged | unchanged |
@@ -1487,7 +1503,8 @@ counted: a temporary file that an earlier call left behind (step 4). A call that
 `changed` because the state is not the one in `expect`, or that stops at the reader, has not
 removed it; a call that found the file in the state `expect` has, whatever it answers then.
 The page shows an answer with `not_read_back` as the sheet of a connected client, which says
-that the entry is in the file, and not as the sheet that says "Written and read back".
+that the entry is in the file and, in a line of its own, that the file was written and could
+not be read back; not as the sheet that says "Written and read back".
 
 Between the second comparison and the replace another program can still change the file; the
 time is that of one system call, and what it wrote in that time is lost.
@@ -1507,7 +1524,7 @@ looked at. Then the file is read. A state that is not the one in `expect` is ans
 | `present_more` | The entry is removed with the members and tables below it | `removed` |
 | `differs`, `present_as` | Left alone: the entry points elsewhere and is not this store's to remove | `differs` |
 | `other`, `empty`, `no_file`, `no_folder` | Left alone: there is no entry | `no_entry` |
-| `linked`, `no_access`, `unreadable`, `not_read`, `unsupported` | Left alone | that word |
+| `linked`, `no_access`, `unreadable`, `not_read`, `busy`, `unsupported` | Left alone | that word |
 | `present` or `present_more`, and the file cannot be changed now (`recent`, `by_hand`, `no_copy`, `failed`) | Left alone | that word |
 
 The answer is 200 `{"file", "app_removed", "path", "copy"}`. In every row the client is taken
@@ -1517,7 +1534,8 @@ was left. When there is neither an entry in the file nor a registered client, no
 recorded. A removal that fails after its record is answered `"file": "failed"`, with a second
 entry (`disconnect-failed:<host>`); the client stays removed. Both copies stay: the app never
 deletes one. With `"file": "removed"` the answer can have `changed_since` or `not_read_back`,
-as the answer of a connect has them. A temporary file that an earlier call left is removed
+as the answer of a connect has them; for the second the page's message says, after
+"Disconnected", that the file was written and could not be read back. A temporary file that an earlier call left is removed
 when `expect` is `present` or `present_more` and the file was found in that state, and in no
 other case.
 
@@ -1623,8 +1641,10 @@ that day wrote.
 #### What was run
 
 No AI application read a file that the app wrote, and none was installed where these runs were
-made. What follows was run on Linux, with Python 3.11, in a home directory made for the run that
-lay outside every folder for temporary files.
+made. What follows was run on Linux, with Python 3.11, as root, in a home directory made for the
+run that lay outside every folder for temporary files. The runs were first made while each part
+was built; all of them were made again on the last state of this version, and the figures here
+are those of that last time. Sizes and times are of one machine and one run.
 
 **The three routes over HTTP.** The app was started by its command (`python -m wdva gate app`
 with `--store`, `--no-browser` and `--port 0`), paired with the code it printed, and asked over
@@ -1637,13 +1657,14 @@ of tables and a table below another server, mode 0600; for Grok Build TOML of 21
 
 - Before the folder was there the look said `no_folder`, a connect was answered `no_folder`, and
   the folder was still not there.
-- The look said `other`, in two to three milliseconds, with the nineteen fields.
+- The look said `other`, in about three milliseconds, with the nineteen fields.
 - A connect with a state that had not been shown was answered 409 `changed`, and the file was
   as before.
 - The connect took about 0.2 seconds, nearly all of it the start of the second Python. The new
-  file was the old one with one piece put in: 229 bytes at byte 310 of the JSON file, after the
-  last member of `mcpServers`; 214 and 209 bytes at the end of the two TOML files, a blank line
-  and the three lines of the entry. The entry held the command the look had named. Parsed, the
+  file was the old one with one piece put in: 213 bytes at byte 310 of the JSON file, after the
+  last member of `mcpServers`; 198 and 193 bytes at the end of the two TOML files, a blank line
+  and the three lines of the entry. (How long the piece is follows from the length of the two
+  paths in the command.) The entry held the command the look had named. Parsed, the
   file without the entry equalled the old file by value, by type and by the order of its keys.
   Its mode was the old one (0644, 0600, 0640). The copy `.before-locktender` held the old
   bytes, with mode 0600. The record had one entry more, of the kind `policy`, and the store had
@@ -1661,13 +1682,10 @@ of tables and a table below another server, mode 0600; for Grok Build TOML of 21
   another entry. The record verified, with nine entries.
 
 **With a clock the run could move**, the same service behind the same server in the run's own
-process: all 33 routes that the version of that day had answered 401 without the session.
-Against the locked store four did their work, one answered 404 and one 409 `conflict` (the two
-exceptions named with [the routes](#the-owners-page)), and 27 answered 409 `locked`, the three
-routes of this part among them; the home was as before. (The 33rd was the earlier look. This
-part of the run was made again without it: 32 routes, all 401 without the session; against the
-locked store four did their work, one answered 404, one 409 `conflict` and 26 409 `locked`, and
-the address of the earlier look was answered 404 with the session and 401 without it.) Ten
+process: all 32 routes answered 401 without the session. Against the locked store four did
+their work, one answered 404 and one 409 `conflict` (the two exceptions named with
+[the routes](#the-owners-page)), and 26 answered 409 `locked`, the three routes of this part
+among them; the home was as before. Ten
 minutes after the passphrase the look was answered
 (`present`), and a connect, a removal of that entry and the registration of a client were
 refused with `reauth_required`; so were the first two after the passphrase had been given for
@@ -1687,20 +1705,39 @@ for the removal after it, and "you saved the settings without a change" for the 
 whose policy was the one before (a `disconnect-kept` with no client left to remove, and the
 `connect-kept`).
 
-**The look before these routes.** Earlier versions had one more route,
-`POST /api/apps/<name>/connect/check`, which read the same files through the same reader for a
-client that was registered, and answered one word. It is gone, and so is the shell line it
-composed. A run through it is still what two figures of this page and of the threat model rest
-on. In that run, made before the folders were reached without following a link and before Grok
-Build's file was known, a marker was written into the files as a value, as the token of another
-tool, in a comment and inside the entry itself, and every state was produced with real files,
-except `unsupported` on an older Python and a refusal by the system, which a run as root cannot
-produce. The marker was in none of the 38 answers, a named pipe that nobody wrote to was
-answered `not_read` in about a millisecond, and after the 38 looks the home directory held what
-the run itself had put there and nothing else. The reader was also run by itself: with the
-right entry in a folder that the settings folder was a link to, and again with `~/.config` as
-the link, nothing of the file behind the link was read. A version before that followed such a
-link.
+**The look by itself, in every state it could be given.** One more run asked the function
+behind the look 3,631 times, in a home it had filled with real files, and compared the home
+before and after each look: no look changed it.
+
+- For Claude Desktop, the ChatGPT desktop app and Grok Build it produced twelve of the fourteen
+  states: `no_folder`, `no_file`, `empty` (white space; a comment only), `other`, `present`,
+  `present_more` (with `enabled` false and an `env`; with a table below the entry),
+  `present_as` (an entry made for `codex`, found under the id `chatgpt-desktop`), `differs`,
+  `unreadable` (cut JSON; TOML with a line that is none; a byte-order mark), `not_read`,
+  `linked` and `busy`. Not produced: `no_access`, which a run as root does not get, and
+  `unsupported`, which needs a Python older than 3.11.
+- `not_read` was the answer for a named pipe that nobody wrote to (at the middle of 200 looks
+  in 0.8 milliseconds: the look did not wait for a writer), a directory, a symbolic link to a
+  file that held the entry, a file with a second name, and a file of 1 MiB and 11 bytes.
+- A file just under 1 MiB that held the entry was read and answered `present`, in 4.7
+  milliseconds at the middle of 200 looks; a file of 215 bytes in 0.8.
+- With the settings folder a link to a folder that held the right entry, and again with
+  `~/.config` as the link, the answer was `linked` with the place the link leads to, and
+  nothing of the file behind it. (A version before these routes followed such a link.)
+- While a second thread wrote the file in place again and again, with as many bytes as it had,
+  377 of 3,000 looks said `busy`; every other look said `present` or `other`, which is what
+  the two versions held. None said `unreadable`: no look answered from a mix of the two.
+- `GROK_HOME` naming a folder that was not there moved the place and gave `no_folder`; with
+  `CODEX_HOME` set, `problem` was `moved`. The ids `codex`, `claude-code`, `openclaw`,
+  `generic`, `grok-web` and `../../etc/passwd` were refused before any file was looked at.
+- A marker stood in the files as a value, as the token of another tool, in a comment and
+  inside the entry itself. It was in none of the 3,631 answers, and neither was the name of
+  the other entry.
+
+Earlier versions had one more route, `POST /api/apps/<name>/connect/check`, which read the
+same files through the same reader for a client that was registered, and answered one word. It
+is gone, and so is the shell line it composed. Two figures of this page and of the threat model
+once rested on a run through it; they now rest on the run above.
 
 ### The played app of a demo
 
@@ -1793,6 +1830,74 @@ pycryptodome only, from FORMAT.md and the sections above. On the demo store it d
 key from the passphrase, walked the chain to the same head as the package, recomputed the hash and
 length of every released text, and cut every document into the number of passages its `add` entry
 gives. It is not part of the repository.
+
+**What "Connect" writes.** A third check, for the one file the app writes outside the store.
+It makes a home directory for itself, `locktender-check` in your own, puts a settings file with
+other content where the ChatGPT desktop app and Codex keep theirs, and has the app's service
+connect: the same code that answers the routes, without the server in front of it. Then it
+compares the file with the copy the answer names. It touches no settings file of yours: the
+place of a settings file follows `HOME`, which the script sets to the home it made. It needs
+Python 3.11 or newer with the extra `gate` installed, and neither that Python nor your home
+directory may lie under a folder for temporary files, where the write refuses (rule R17).
+Remove `locktender-check` afterwards.
+
+```python
+import os
+import time
+from pathlib import Path
+
+home = Path.home() / "locktender-check"  # a home made for this check; not a temporary folder
+home.mkdir()  # fails if it is there already: nothing of yours is written over
+os.environ["HOME"] = str(home)  # from here on the app looks for settings files in that home
+for name in ("XDG_CONFIG_HOME", "GROK_HOME", "CODEX_HOME"):
+    os.environ.pop(name, None)
+
+from wdva.gate.app.service import GateService
+
+settings = home / ".codex" / "config.toml"  # the file of the tile "ChatGPT"
+settings.parent.mkdir()
+before = '# my settings\nmodel = "o9"\n\n[mcp_servers.notes]\ncommand = "notes-tool"\n'
+settings.write_text(before, encoding="utf-8")
+os.utime(settings, (time.time() - 60,) * 2)  # a file that changed a moment ago is not written
+
+service = GateService(home / "vault")
+service.create_store(passphrase="only-for-this-check")  # the passphrase was just typed
+look = service.connect_look(host="chatgpt-desktop")
+print("the look:", look["state"], look["path"])
+answer = service.connect_write(host="chatgpt-desktop", expect=look["state"])
+print("the connect:", answer["connected"], answer["state"])
+print("the copy:", answer["copy"])
+service.close()
+
+copy = Path(answer["copy"].replace("~", str(home), 1))
+after = settings.read_text(encoding="utf-8")
+print("the copy is the file as it was:", copy.read_text(encoding="utf-8") == before)
+print("the file begins with every byte it had:", after.startswith(before))
+print("what was added:")
+print(after[len(before) :])
+```
+
+A run on Linux with Python 3.11 printed this; the two paths in the command are those of the
+machine it ran on.
+
+```text
+the look: other ~/.codex/config.toml
+the connect: True present
+the copy: ~/.codex/config.toml.before-locktender
+the copy is the file as it was: True
+the file begins with every byte it had: True
+what was added:
+
+[mcp_servers.locktender]
+command = "/root/lt/wsv/bin/python"
+args = ["-I", "-X", "utf8", "-m", "wdva", "gate", "mcp", "--client", "chatgpt-desktop", "--store", "/root/locktender-check/vault"]
+```
+
+`~` in the first and third line is the home the script made. The file after the connect is the
+file before it with a blank line and three lines at its end, and the copy holds the bytes it
+had. Where the look says something else than `other`, or the connect is not answered `True`,
+the word says why ([the states](#the-settings-file-of-an-ai-application),
+[a connect](#a-connect)): `not_ready`, for one, on an installation without the MCP SDK.
 
 ## Versions
 

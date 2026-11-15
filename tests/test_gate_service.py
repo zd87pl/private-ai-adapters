@@ -5143,6 +5143,52 @@ def test_connect_brings_no_stored_can_read_to_life(fresh: GateService, tiles_hom
     assert apps[JSON_HOST]["grants"] == apps["other-cloud"]["grants"] == {"home": "read"}
 
 
+def test_the_older_way_to_open_a_group_brings_stored_access_into_force(
+    fresh: GateService, tiles_home: Path, gate_clock: FakeClock
+) -> None:
+    """A limit, pinned as the threat model states it; "Connect" does not have it (above).
+
+    Access of an app that sends text to a provider can lie in the settings unused, for a
+    group that was closed by the engine's own method. No press of the page leaves such
+    access: its way of closing a group takes it away. Where it lies all the same, opening
+    the group through ``set_collection`` brings it into force, "can read" included, and
+    Activity says only that the group was opened.
+    """
+    fresh.add_document(collection="home", name="lease.txt", data=gs.LEASE_TEXT.encode())
+    other = Caller("other-cloud", "some-app", "1", "2025-11-25", "stdio")
+    fresh.set_collection(name="home", allow_hosted=True)
+    fresh.add_app(name="other-cloud", hosted=True, destination="Some Provider")
+    fresh.set_grant(app="other-cloud", collection="home", mode="read")
+    session = fresh._session
+    assert session is not None
+    # Closed on the page: the access goes with it, and opening again gives nothing.
+    fresh.set_collection(name="home", allow_hosted=False)
+    assert in_force(fresh)["clients"]["other-cloud"]["grants"] == {}
+    fresh.set_collection(name="home", allow_hosted=True)
+    assert registered(fresh)["other-cloud"]["grants"] == {}
+    assert REF.findall(fresh.backend.search(other, "tenant landlord").text) == []
+    # Closed by the engine's own method, from Python: the access stays in the settings.
+    fresh.set_grant(app="other-cloud", collection="home", mode="read")
+    session.gate.set_policy(session.gate.policy().with_collection("home", allow_hosted=False))
+    assert in_force(fresh)["clients"]["other-cloud"]["grants"] == {"home": {"mode": "read"}}
+    assert registered(fresh)["other-cloud"]["grants"] == {}  # and is not in force
+    assert REF.findall(fresh.backend.search(other, "tenant landlord").text) == []
+    # Opened through the older route: it is in force again, without a word about it.
+    fresh.set_collection(name="home", allow_hosted=True)
+    assert registered(fresh)["other-cloud"]["grants"] == {"home": "read"}
+    found = REF.findall(fresh.backend.search(other, "tenant landlord").text)
+    assert found
+    assert fresh.backend.read(other, found[0]).code == "OK"
+    entry = next(item for item in fresh.activity(limit=20)["items"] if item["kind"] == "change")
+    assert entry["summary"] == "you opened home to hosted apps"
+    assert "other-cloud" not in json.dumps(fresh.activity_detail(seq=entry["seq"]))
+    # It needs owner mode, as every opening of a group does.
+    fresh.set_collection(name="home", allow_hosted=False)
+    expire_owner_mode(gate_clock)
+    with refused(403, "reauth_required"):
+        fresh.set_collection(name="home", allow_hosted=True)
+
+
 def test_connect_does_not_change_what_kind_of_app_a_name_is(
     fresh: GateService, tiles_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -5896,6 +5942,62 @@ def test_connect_twice_and_after_a_removal(fresh: GateService, tiles_home: Path)
     assert (fourth["connected"], fourth["replaced"]) == (True, True)
     assert fourth["copy"] == shown(place) + hostwrite.LAST_COPY
     assert json.loads(place.read_bytes()) == {"mcpServers": {SLUG: the_entry(fresh)}}
+
+
+def test_a_close_that_fails_after_the_change_does_not_make_the_answer_an_error(
+    fresh: GateService, tiles_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The writer closes the folder of the settings file as its last step.
+
+    The file is changed and the record written by then. Where the system reports that
+    close as failed, the press is still answered with what was done: a 503 would say that
+    nothing is known of a change the record lists.
+    """
+    place = holding(folder_of(JSON_HOST), b'{\n  "theme": "dark"\n}\n')
+    real_open_folder, real_close = hostcheck.open_folder, os.close
+    held: set[int] = set()
+    failed: list[int] = []
+
+    def open_folder(path: Path, base: Path) -> int:
+        descriptor = real_open_folder(path, base)
+        held.add(descriptor)
+        return descriptor
+
+    def close(descriptor: int) -> None:
+        real_close(descriptor)
+        if descriptor in held:
+            held.discard(descriptor)
+            failed.append(descriptor)
+            raise OSError(errno.EIO, os.strerror(errno.EIO))
+
+    monkeypatch.setattr(hostcheck, "open_folder", open_folder)
+    monkeypatch.setattr(os, "close", close)
+    look = fresh.connect_look(host=JSON_HOST)
+    assert (look["state"], len(failed)) == ("other", 1)
+    before = len(policy_records(fresh))
+    answer = fresh.connect_write(host=JSON_HOST, expect="other")
+    assert (answer["connected"], answer["state"], answer["app"]["registered"]) == (
+        True,
+        "present",
+        True,
+    )
+    assert answer["copy"] == shown(place) + hostwrite.FIRST_COPY
+    assert len(failed) == 2
+    assert json.loads(place.read_bytes())["mcpServers"] == {SLUG: the_entry(fresh)}
+    # One entry of the record for the one change, and none that says it failed.
+    assert [by for by, _ in policy_records(fresh)[before:]] == [f"connect:{JSON_HOST}"]
+    assert JSON_HOST in registered(fresh)
+    settled(place)
+    removed = fresh.connect_remove(host=JSON_HOST, expect="present")
+    assert (removed["file"], removed["app_removed"], len(failed)) == ("removed", True, 3)
+    # The entry is gone; the section the connect made for it stays, empty.
+    assert json.loads(place.read_bytes()) == {"theme": "dark", "mcpServers": {}}
+    assert [by for by, _ in policy_records(fresh)[before:]] == [
+        f"connect:{JSON_HOST}",
+        f"disconnect:{JSON_HOST}",
+    ]
+    assert JSON_HOST not in registered(fresh)
+    assert not held
 
 
 def test_disconnect_takes_the_app_out_of_the_vault(fresh: GateService, tiles_home: Path) -> None:

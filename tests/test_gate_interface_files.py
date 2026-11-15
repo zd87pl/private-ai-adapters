@@ -19,7 +19,7 @@ import pytest
 
 import wdva.gate.app
 from wdva.gate import brand, core, textproc
-from wdva.gate.app import demo
+from wdva.gate.app import demo, httpd
 
 STATIC = Path(wdva.gate.app.__file__).resolve().parent / "static"
 
@@ -483,6 +483,48 @@ def test_every_api_path_is_one_the_contract_defines() -> None:
     assert API_CALLS - made == set(), "an address of the app is never used; drop it here or use it"
 
 
+def routes_of_the_server() -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
+    """Every route the server answers, written as ``API_CALLS`` writes one.
+
+    First the routes of its table, which are answered behind the session; then the ones it
+    answers before it looks into the table, which a page without a session needs.
+    """
+    behind = {
+        (route.method, "/api/" + re.sub(r"<[^<>]*>", "<>", route.path)) for route in httpd._ROUTES
+    }
+    source = read(Path(httpd.__file__))
+    before = set(re.findall(r'\(method, path\) == \("([A-Z]+)", "(/api/[^"]*)"\)', source))
+    return behind, before
+
+
+def test_the_page_and_the_server_name_the_same_routes() -> None:
+    # ``API_CALLS`` is held against what the scripts call (above). Here it is held against
+    # what the server answers: a route the page cannot call, and a call the server does not
+    # know, both fail. The two lists are written by hand in two files, and nothing else
+    # would say that one of them was left behind.
+    behind, before = routes_of_the_server()
+    assert len(behind) == len(httpd._ROUTES), "two routes of the table are the same address"
+    assert before == {("GET", "/api/session"), ("POST", "/api/session/pair")}
+    assert not behind & before
+    served = behind | before
+    assert served - API_CALLS == set(), "the server answers a route the page has no call for"
+    assert API_CALLS - served == set(), "the page may call a route the server does not answer"
+    # No address is written out in the server but those two, and the beginning of all.
+    source = without_comments(read(Path(httpd.__file__)))
+    assert set(re.findall(r'"(/api/[^"]*)"', source)) == {"/api/", *(path for _, path in before)}
+    # A path parameter is one segment, and the page writes it as one.
+    for _method, path in sorted(served):
+        assert re.fullmatch(r"/api(?:/(?:[a-z-]+|<>))+", path), path
+
+
+def test_the_route_reader_writes_a_route_as_the_page_does() -> None:
+    behind, _ = routes_of_the_server()
+    assert ("GET", "/api/activity/<>") in behind  # ``activity/<int:seq>`` in the table
+    assert ("POST", "/api/apps/<>/limits") in behind
+    assert ("POST", "/api/connect/<>") in behind
+    assert not any("<int" in path or ">" in path.replace("<>", "") for _, path in behind)
+
+
 def test_only_one_module_talks_to_the_app() -> None:
     for name, source in scripts().items():
         code = without_comments(source)
@@ -689,6 +731,308 @@ def test_the_class_reader_tells_a_card_from_what_only_begins_like_one() -> None:
     sample = 'el("div", { class: "approval-stack" }); el("p", { class: ["x", a && "y z"] })'
     assert class_names(sample) == {"approval-stack", "x", "y", "z"}
     assert "approval" in class_names('{ class: "card approval", key: k }')
+
+
+# -- the classes of the stylesheets and of the scripts ------------------------------
+
+A_TEXT = re.compile(r""""((?:[^"\\\n]|\\.)*)"|'((?:[^'\\\n]|\\.)*)'|`((?:[^`\\]|\\.)*)`""", re.S)
+
+# A class that a script puts together from a beginning and a word of the code: the beginning,
+# and every word the scripts give it. A rule for another word of such a beginning is a rule
+# that nothing uses.
+MADE_CLASSES = {
+    "btn-": ("default", "primary", "quiet", "danger"),
+    "chip-": ("accent", "quiet", "plain", "outline", "amber", "red"),
+    "meter-": ("calm", "high", "full"),
+    "note-": ("plain", "amber", "red"),
+    "toast-": ("plain", "green", "amber", "red"),
+    "act-": ("plain", "amber", "red"),
+    "upload-": ("waiting", "sending", "done", "error"),
+    "shake-": ("0", "1"),
+}
+
+# Functions that hand a class on to the element they make: the function, and which of its
+# arguments is the class.
+CLASS_ARGUMENTS = {"icon": 1, "chip": 4}
+
+# Classes a script gives for which no stylesheet has a rule. Some are found by a script or
+# by a walk-through; the others name a part and are not styled by themselves. A class that
+# is neither styled nor listed here is a slip of the pen, or what a removed rule left behind.
+WITHOUT_A_RULE = {
+    "act-plain",
+    "app-root",
+    "approval-asked",
+    "approval-claimed",
+    "btn-default",
+    "card-start",
+    "col-title",
+    "decided-no",
+    "doc-rows",
+    "doc-title",
+    "hero-text",
+    "limits-form",
+    "link-rows",
+    "meter-calm",
+    "nav-home-label",
+    "note-plain",
+    "panel-nothing",
+    "row-chars",
+    "row-item",
+    "row-time",
+    "start-text",
+    "toast-plain",
+    "toast-text",
+    "upload-sending",
+    "upload-waiting",
+    "waiting-line",
+    "word-count",
+}
+
+
+def selectors(css: str) -> list[str]:
+    """What stands before the brace of every rule of a stylesheet. An at-rule is none."""
+    code = A_TEXT.sub('""', without_comments(css))
+    found: list[str] = []
+    start = 0
+    for mark in re.finditer(r"[{};]", code):
+        if mark.group(0) == "{":
+            prelude = code[start : mark.start()].strip()
+            if prelude and not prelude.startswith("@"):
+                found.append(prelude)
+        start = mark.end()
+    return found
+
+
+def classes_named(css: str) -> set[str]:
+    """Every class a stylesheet names in a selector."""
+    names: set[str] = set()
+    for selector in selectors(css):
+        names.update(re.findall(r"\.(-?[A-Za-z_][\w-]*)", selector))
+    return names
+
+
+def expression_at(code: str, start: int) -> str:
+    """The expression of a script that begins at ``start``.
+
+    It ends before the comma or the semicolon that follows it, or before the bracket that
+    closes what it stands in. Brackets and quoted text inside it are stepped over.
+    """
+    depth = 0
+    at = start
+    while at < len(code):
+        text = A_TEXT.match(code, at) if code[at] in "\"'`" else None
+        if text is not None:
+            at = text.end()
+            continue
+        if code[at] in "([{":
+            depth += 1
+        elif code[at] in ")]}":
+            if depth == 0:
+                break
+            depth -= 1
+        elif code[at] in ",;" and depth == 0:
+            break
+        at += 1
+    return code[start:at]
+
+
+def arguments_at(code: str, start: int) -> list[str]:
+    """The arguments of a call whose first one begins at ``start``, each as its text."""
+    found: list[str] = []
+    at = start
+    while True:
+        argument = expression_at(code, at)
+        found.append(argument.strip())
+        at += len(argument)
+        if at >= len(code) or code[at] != ",":
+            return found
+        at += 1
+
+
+def class_words(expression: str) -> tuple[set[str], set[str]]:
+    """The classes an expression holds written out, and the beginnings it completes.
+
+    Every quoted text of the expression is a list of classes, but one that something is
+    compared with (``route === "home" && "is-current"``). A word that ends in a part of
+    code (``btn-${kind}``) is the beginning of a made class.
+    """
+    whole: set[str] = set()
+    beginnings: set[str] = set()
+    for found in A_TEXT.finditer(expression):
+        before = expression[: found.start()].rstrip()
+        after = expression[found.end() :].lstrip()
+        if before.endswith(("===", "!==")) or after.startswith(("===", "!==")):
+            continue
+        for word in re.sub(r"\$\{[^{}]*\}", "\x00", "".join(found.groups(""))).split():
+            if "\x00" not in word:
+                whole.add(word)
+            elif word != "\x00":
+                assert word.endswith("\x00"), f"a class that is made in its middle: {word!r}"
+                assert word.count("\x00") == 1, f"a class made of two parts of code: {word!r}"
+                beginnings.add(word[:-1])
+    return whole, beginnings
+
+
+def classes_given(code: str) -> tuple[set[str], set[str]]:
+    """Every class one script gives an element, and every beginning of a class it completes.
+
+    A class is given where an element is made (``class:``), through the element's own list
+    of classes or its attribute, and through the functions of ``CLASS_ARGUMENTS``. Where
+    ``class:`` is given a name of the code, the classes are those of the list that name
+    was made as (``const shape = [...]``).
+    """
+    whole: set[str] = set()
+    beginnings: set[str] = set()
+
+    def take(expression: str) -> None:
+        found = class_words(expression)
+        whole.update(found[0])
+        beginnings.update(found[1])
+
+    places = (
+        r"\bclass:\s*",
+        r"\.classList\.(?:add|remove|toggle|contains)\(\s*",
+        r"\.className\s*=\s*",
+        r'\.setAttribute\(\s*"class"\s*,\s*',
+    )
+    for place in places:
+        for found in re.finditer(place, code):
+            expression = expression_at(code, found.end()).strip()
+            take(expression)
+            if re.fullmatch(r"[A-Za-z_]\w*", expression):
+                for made in re.finditer(rf"\b(?:const|let) {expression} = ", code):
+                    take(expression_at(code, made.end()))
+    for function, index in CLASS_ARGUMENTS.items():
+        for call in re.finditer(rf"(?<![\w.]){function}\(", code):
+            if code[: call.start()].endswith("function "):
+                continue
+            arguments = arguments_at(code, call.end())
+            if len(arguments) > index:
+                take(arguments[index])
+    return whole, beginnings
+
+
+def all_classes() -> tuple[set[str], set[str], set[str]]:
+    """The classes the stylesheets name; those the page gives written out; those it makes."""
+    named: set[str] = set()
+    for path in files(".css"):
+        named |= classes_named(read(path))
+    written: set[str] = set()
+    beginnings: set[str] = set()
+    for name, source in scripts().items():
+        if name in TABLES:
+            continue
+        found = classes_given(without_comments(source))
+        written |= found[0]
+        beginnings |= found[1]
+    for path in files(".html"):
+        for _tag, attributes in parsed(path).tags:
+            written.update((attributes.get("class") or "").split())
+    assert beginnings == set(MADE_CLASSES), "the scripts make classes of other beginnings"
+    made = {begin + word for begin, words in MADE_CLASSES.items() for word in words}
+    return named, written, made
+
+
+def test_every_rule_is_for_a_class_the_page_gives() -> None:
+    named, written, made = all_classes()
+    assert len(named) > 400
+    assert len(written) > 400
+    unused = sorted(named - written - made)
+    assert unused == [], f"rules for classes that no script gives: {unused}"
+
+
+def test_every_class_the_page_gives_has_a_rule_or_is_listed() -> None:
+    named, written, made = all_classes()
+    bare = (written | made) - named
+    assert bare - WITHOUT_A_RULE == set(), "a class without a rule that is not listed"
+    assert WITHOUT_A_RULE - bare == set(), "listed as without a rule, and has one or is gone"
+    for word in written | made:
+        assert re.fullmatch(r"-?[A-Za-z_][\w-]*", word), f"{word!r} is no class"
+
+
+def test_the_words_of_a_made_class_are_words_of_the_scripts() -> None:
+    code = "\n".join(
+        without_comments(source) for name, source in scripts().items() if name not in TABLES
+    )
+    for beginning, words in MADE_CLASSES.items():
+        assert f"`{beginning}${{" in code, f"no script completes {beginning!r}"
+        for word in words:
+            if word.isdigit():
+                continue
+            assert f'"{word}"' in code, f"no script holds the word {word!r} of {beginning!r}"
+    # The two numbers: a card that shakes takes one of two classes in turn.
+    assert "`shake-${form.shake % 2}`" in code
+    # The functions that hand a class on take it where this test looks for it.
+    dom = without_comments(scripts()["dom.js"])
+    parts = without_comments(scripts()["parts.js"])
+    assert "export function icon(name, extraClass" in dom
+    assert 'svg.setAttribute("class", extraClass ? `icon ${extraClass}` : "icon");' in dom
+    head = 'export function chip(label, tone = "quiet", glyph = null, title = null, extraClass'
+    assert head in parts
+    assert 'class: ["chip", `chip-${tone}`, extraClass]' in parts
+
+
+def test_no_stylesheet_defines_what_nothing_uses() -> None:
+    css = "\n".join(without_comments(read(path)) for path in files(".css"))
+    code = "\n".join(
+        without_comments(source) for name, source in scripts().items() if name not in TABLES
+    )
+    # An animation that no rule runs.
+    for name in re.findall(r"@keyframes\s+([\w-]+)", css):
+        assert re.search(rf"animation(?:-name)?\s*:[^;]*\b{re.escape(name)}\b", css), name
+    # A custom property that is set and never read, or read and never set.
+    defined = set(re.findall(r"(--[\w-]+)\s*:", css))
+    read_by_styles = set(re.findall(r"var\(\s*(--[\w-]+)", css))
+    set_by_scripts = set(re.findall(r'"(--[\w-]+)"', code))
+    assert defined - read_by_styles == set(), "a custom property nothing reads"
+    assert read_by_styles - defined - set_by_scripts == set(), "a custom property nothing sets"
+    assert set_by_scripts <= read_by_styles
+    # No rule is hung on an id: the scripts give ids to find elements, never to style them.
+    for path in files(".css"):
+        for selector in selectors(read(path)):
+            assert re.search(r"(?<![\w-])#[A-Za-z_]", selector) is None, selector
+
+
+def test_the_class_readers_do_catch_what_they_name() -> None:
+    css = (
+        ".a, .b-c:hover > .d::after { color: red; }\n"
+        '@media (min-width: 720px) { .e[data-x=".no"] .f.is-on { top: 0; } }\n'
+        "@keyframes spin { from { top: 0; } to { top: 1px; } }\n"
+        ".g { background: url(.h); margin: 0.5em; }\n"
+    )
+    assert classes_named(css) == {"a", "b-c", "d", "e", "f", "is-on", "g"}
+    code = (
+        'el("p", { class: ["note", `note-${tone}`, open && "is-open"], id: "not-a-class" });\n'
+        'el("a", { class: filled ? "btn btn-primary" : "link", href: "#/home" });\n'
+        'el("a", { class: ["nav", route === `pro/${name}` && "is-current", "x" !== y && "z"] });\n'
+        'const shape = ["act-row", `act-${tone}`, big ? null : "act-small"];\n'
+        'el("li", { class: shape, key: "row" });\n'
+        'item.classList.add("is-leaving"); area.className = "sr-only";\n'
+        'svg.setAttribute("class", extra ? `icon ${extra}` : "icon");\n'
+        'icon("lock", "lock-act"); chip(t("x.y"), "plain", "mac", null, "chip-dest");\n'
+        "export function icon(name, extraClass) {}\n"
+    )
+    whole, beginnings = classes_given(code)
+    assert whole == {
+        "note",
+        "is-open",
+        "btn",
+        "btn-primary",
+        "link",
+        "nav",
+        "is-current",
+        "z",
+        "act-row",
+        "act-small",
+        "is-leaving",
+        "sr-only",
+        "icon",
+        "lock-act",
+        "chip-dest",
+    }
+    assert beginnings == {"note-", "act-"}
+    assert arguments_at('a, f(b, "c,d"), [e, g]) + 1', 0) == ["a", 'f(b, "c,d")', "[e, g]"]
+    assert expression_at('x ? "a b" : `c-${d}`, next', 0) == 'x ? "a b" : `c-${d}`'
 
 
 # -- the name, the demo's passphrase, and what the page cannot know -----------------
@@ -1910,6 +2254,7 @@ def test_a_settings_file_is_looked_at_only_on_a_press() -> None:
         "no_access",
         "unreadable",
         "not_read",
+        "busy",
         "unsupported",
         "present_as",
         "present",
@@ -2429,11 +2774,91 @@ def test_an_answer_that_was_not_read_back_is_not_shown_as_read_back() -> None:
     assert unread in body
     assert body.index(unread) < body.index(read_back)
     assert connect.count('view.state = "connected"') == 1
-    assert connect.count("not_read_back") == 1
     assert "lookAt(" not in body
     # What that sheet says is no claim about a read: "The entry ... is in ...".
     english = table("text-en.js")
     assert english["connect.on.status.file"] == ["The entry \u201c{entry}\u201d is in {path}."]
+    # And it says what was not done, in a line of its own right under that one. The line is
+    # drawn only after such an answer: a look, which reads the file, takes it away again.
+    noted = "view.unread = answer.connected === true && answer.not_read_back === true;"
+    assert noted in body
+    assert body.index(noted) < body.index(unread)
+    draw = function_body(connect, "function drawConnect(ctx, sheet, view) {")
+    on = draw[draw.index('} else if (view.state === "on") {') :]
+    on = on[: on.index('} else if (view.state === "as") {')]
+    line = (
+        'view.unread ? el("p", { class: "sheet-fact", id: "connect-unread" }, '
+        't("connect.status.unread")) : null,'
+    )
+    assert line in on
+    assert on.index('id: "connect-on-file"') < on.index(line)
+    assert draw.count("view.unread") == 1
+    look = function_body(connect, "async function lookAt(ctx, sheet, view) {")
+    assert "view.unread = false;" in look
+    assert look.index("view.unread = false;") < look.index("api.connectLook(")
+    assert "unread: false," in function_body(connect, "export function openConnect(ctx, tile) {")
+    # A removal that was not read back: the message says so after "Disconnected", and is not
+    # the green one.
+    removal = function_body(connect, "async function disconnect(ctx, sheet, view) {")
+    assert 'const unread = answer.file === "removed" && answer.not_read_back === true;' in removal
+    assert (
+        'toast(unread ? [done, t("connect.status.unread")].join(" ") : done, '
+        '!unread && (answer.file === "removed" || answer.file === "no_entry") '
+        '? "green" : "amber");'
+    ) in removal
+    # The answer's word is read in these places and in no other.
+    assert connect.count("not_read_back") == 3
+    assert connect.count('"connect.status.unread"') == 2
+    assert english["connect.status.unread"] == [
+        "The file was written, but the system did not let it be read back."
+    ]
+
+
+def test_a_file_that_was_being_written_leads_to_another_look() -> None:
+    connect = without_comments(scripts()["connect.js"])
+    # The app has a word of its own for a file that was written or replaced while it was
+    # read. Its sentence says that, and not that the file is a link, too large or somebody
+    # else's; and what follows is another look, not the text to paste: the file is in order.
+    assert 'busy: "connect.refused.say.1.busy",' in connect
+    again = re.search(r"const LOOK_AGAIN = \[([^\]]*)\];", connect)
+    paste = re.search(r"const PASTE_INSTEAD = \[([^\]]*)\];", connect)
+    assert again is not None
+    assert paste is not None
+    assert '"busy"' in again.group(1)
+    assert '"busy"' not in paste.group(1)
+    assert '"not_read"' in paste.group(1)
+    for name in TABLES:
+        texts = table(name)
+        (busy,) = texts["connect.refused.say.1.busy"]
+        (not_read,) = texts["connect.refused.say.1.not_read"]
+        assert "{path}" in busy, name
+        assert busy != not_read, name
+        for word in ("1 MiB", "special", "specjaln"):
+            assert word not in busy, f"{name}: {word}"
+    assert table("text-en.js")["connect.refused.say.1.busy"] == [
+        "{path} was being changed while it was read, so {product} changes nothing."
+    ]
+
+
+def test_a_linked_folder_without_a_place_is_worded_without_one() -> None:
+    connect = without_comments(scripts()["connect.js"])
+    refused = function_body(connect, "function refusedState(ctx, sheet, view) {")
+    # Where the system would not say where a linked folder leads, the answer holds no place.
+    # The sentence with "{real}" would then read "is a link to , and": another one is said.
+    assert (
+        'if (word === "linked" && !values(view).real) key = "connect.refused.say.1.linked.unknown";'
+    ) in refused
+    assert refused.index("linked.unknown") < refused.index('say("connect-say-1", sentence(key,')
+    for name in TABLES:
+        texts = table(name)
+        (with_place,) = texts["connect.refused.say.1.linked"]
+        (without,) = texts["connect.refused.say.1.linked.unknown"]
+        assert "{real}" in with_place, name
+        assert "{real}" not in without, name
+        assert "{folder}" in without, name
+    assert table("text-en.js")["connect.refused.say.1.linked.unknown"] == [
+        "The settings folder {folder} is a link, and {product} does not write through a link."
+    ]
 
 
 # -- the demo's card ----------------------------------------------------------------

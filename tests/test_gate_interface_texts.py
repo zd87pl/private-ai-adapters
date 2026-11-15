@@ -356,8 +356,11 @@ SENT_ON = {"ask.sample.question", "connect.ask.start"}
 
 # How many words the English table may hold without the page "How it works" (section 1.2).
 # 2,720 until the count of trial questions since the app was started got its line (7 words)
-# and the sentence after a trial's "Release once" was made true (17 words for 16).
-WORDS_AT_MOST = 2728
+# and the sentence after a trial's "Release once" was made true (17 words for 16): 2,728.
+# Then three sentences the connect sheets lacked, raised on purpose by what they add: a file
+# that was written and could not be read back (14 words), a linked folder whose place the
+# system would not tell (15), and a file that was being written while it was read (12).
+WORDS_AT_MOST = 2769
 
 
 def unit_of(stem: str) -> list[str]:
@@ -534,6 +537,19 @@ TRIAL_COUNTS = {
     "ask.status.count.start": "{n} trial questions since {product} was started.",
 }
 
+# Three sentences of the connect sheets that say what the app's answer says and no more: the
+# file was written and could not be read back; the folder is a link and the system did not
+# say where to; the file was being written or replaced while it was read.
+SAID_OF_A_SETTINGS_FILE = {
+    "connect.status.unread": "The file was written, but the system did not let it be read back.",
+    "connect.refused.say.1.linked.unknown": (
+        "The settings folder {folder} is a link, and {product} does not write through a link."
+    ),
+    "connect.refused.say.1.busy": (
+        "{path} was being changed while it was read, so {product} changes nothing."
+    ),
+}
+
 # Keys the tests name that belong to a part of the page no stage has built yet. Each stage
 # took out what it built; the last part, Home with its tiles and sheets, is built, and the set
 # is empty.
@@ -607,6 +623,32 @@ def test_what_a_trial_says_after_a_yes_and_of_its_counts() -> None:
         assert all("pyta" in form and "próbn" in form for form in polish.values()), key
     assert all("{product}" in form for form in texts(read["pl"]["ask.status.count.start"]))
     assert all("{product}" not in form for form in texts(read["pl"]["ask.status.count"]))
+
+
+def test_what_the_sheets_say_of_a_settings_file_in_three_cases() -> None:
+    read = tables()
+    for key, text in SAID_OF_A_SETTINGS_FILE.items():
+        assert read["en"][key] == text, key
+        for language, table in read.items():
+            said = table[key]
+            assert isinstance(said, str), key
+            where = f"{TABLES[language]} {key}"
+            # One sentence of at most 20 words, without a semicolon, whatever kind its key is.
+            assert (sentences(said), ";" in said) == (1, False), where
+            assert words(said) <= 20, where
+            assert said.endswith("."), where
+        assert read["pl"][key] != text, f"{key} is not translated"
+    polish = read["pl"]
+    # The glossary: a link is "dowiązanie", and the words for reading and writing a file are
+    # those of the sentences beside them.
+    assert "dowiązaniem" in str(polish["connect.refused.say.1.linked.unknown"])
+    assert "odczyt" in str(polish["connect.refused.say.1.busy"])
+    assert "zapisany" in str(polish["connect.status.unread"])
+    # None of the three says what the other cases say.
+    assert "{real}" not in str(read["en"]["connect.refused.say.1.linked.unknown"])
+    assert "MiB" not in str(read["en"]["connect.refused.say.1.busy"])
+    assert "read back" in str(read["en"]["connect.status.unread"])
+    assert str(read["en"]["connect.done.status.tried"]).startswith("Written and read back")
 
 
 # -- the Polish ---------------------------------------------------------------------

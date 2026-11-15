@@ -18,8 +18,11 @@
 // app asks for a passage, "Don't release" is not undone by a clock, and after either
 // answer the played app asks again only when the walk presses the button that tells
 // it to. On the way it asks the box on Home a question of its own, which sends
-// nothing anywhere, and presses a tile, which in a demo connects nothing and looks at
-// no file. Then it waits until owner mode is over: "Ask" asks for the passphrase,
+// nothing anywhere: everything the record gains meanwhile must be a call of a played
+// app. The demo's own script ends with one call under a name that is not registered,
+// which the record lists as a refusal under "(not registered)"; it comes at another
+// moment in each run, and the walk counts it as a played app's call, once. Then it
+// presses a tile, which in a demo connects nothing and looks at no file. Then it waits until owner mode is over: "Ask" asks for the passphrase,
 // and so, on the six pages under Settings, does a raised limit (the passphrase is
 // shown, one click fills it in). It locks the vault, unlocks it with the passphrase
 // the page shows, and sees the played agent go on.

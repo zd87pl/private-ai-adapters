@@ -25,8 +25,9 @@ What the look is allowed to do:
   and what was opened is looked at again before a byte is read, so that a file
   that was exchanged in between is not read either. No read can block. It is
   looked at once more after the last byte: a file whose size or times of
-  change are then others than before the first byte was written while it was
-  read, and counts as not read.
+  change are then others than before the first byte was written or replaced
+  while it was read. Nothing of what was read is used then, and the look says
+  so in a word of its own, ``busy``.
 * What is found is one word from :data:`STATES`, and for a JSON file without
   the gate's entry one word from :data:`SECTIONS`. An answer to the owner's
   page holds those and nothing else of the file: no key, no value, no message
@@ -81,6 +82,7 @@ STATES = (
     "no_access",
     "unreadable",
     "not_read",
+    "busy",
     "unsupported",
 )
 """What a look can find.
@@ -96,8 +98,9 @@ a folder on the way to the file is a symbolic link, and nothing behind it was
 read. ``no_access``: the system refused to look at the folder or to open the
 file. ``unreadable``: the file could not be read as what it should be.
 ``not_read``: it is not a regular file, or too large, and was not opened.
-``unsupported``: the gate knows no settings file of this application, or cannot
-read its format here.
+``busy``: it was written, cut, or replaced by another file while it was read,
+and nothing of what was read is used. ``unsupported``: the gate knows no
+settings file of this application, or cannot read its format here.
 """
 
 SECTIONS = ("none", "empty", "filled")
@@ -169,6 +172,10 @@ class Look:
 
 class _NotRead(Exception):
     """The file is one that is not opened, or not read once it was opened."""
+
+
+class _Busy(Exception):
+    """The file was written or replaced while it was read."""
 
 
 def _no_constant(name: str) -> Any:
@@ -290,12 +297,14 @@ def _read(name: str, folder: int) -> tuple[bytes, os.stat_result]:
 
     :data:`MAX_BYTES` at most. Raises :class:`_NotRead` for anything that is
     not such a file, also when it became something else after it was looked
-    at or was written while it was read, and :class:`OSError` when the system
-    refuses.
+    at, :class:`_Busy` when it was written while it was read, and
+    :class:`OSError` when the system refuses.
 
     Written while it was read: its size or one of its two times of change is
-    another after the last byte than before the first. Without that
-    comparison a program that rewrote the file in place between two reads, or
+    another after the last byte than before the first. That is also what the
+    system says of a file whose name was given to another file in that time
+    (the one that was opened has one name fewer, which is a change). Without
+    that comparison a program that rewrote the file in place between two reads, or
     between the last read and the status handed back, would go unseen: the
     bytes would be a mix of two versions, or the status that of a version
     that was not read, and a writer that later compares with this status
@@ -323,16 +332,16 @@ def _read(name: str, folder: int) -> tuple[bytes, os.stat_result]:
             parts.append(part)
             size += len(part)
         if size > MAX_BYTES:  # it grew while it was read
-            raise _NotRead
+            raise _Busy
         after = os.fstat(descriptor)
         if after.st_size != size:  # it was cut or grew while it was read
-            raise _NotRead
+            raise _Busy
         if (after.st_size, after.st_mtime_ns, after.st_ctime_ns) != (
             status.st_size,
             status.st_mtime_ns,
             status.st_ctime_ns,
         ):  # it was written while it was read
-            raise _NotRead
+            raise _Busy
         return b"".join(parts), after
     finally:
         os.close(descriptor)
@@ -398,6 +407,8 @@ def _look(
         raw, status = _read(name, folder)
     except _NotRead:
         return Look("not_read")
+    except _Busy:
+        return Look("busy")
     except PermissionError:
         return Look("no_access")
     except (OSError, NotImplementedError):

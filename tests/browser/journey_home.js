@@ -26,7 +26,9 @@
 //      released and read; Documents, Activity with the details of a row beside the rows, Settings;
 //      Polish; a lock, and what Home and the sidebar say after it; the app stopped.
 //   B  the write against files the walk made: no folder, other servers and keys, the copies, an
-//      entry that points elsewhere, links, broken JSON, a file that changed, owner mode run out.
+//      entry that points elsewhere, links, broken JSON, a file that changed, owner mode run out;
+//      and three answers the walk cannot bring about, put into the app's answer on its way to the
+//      page: written and not read back, written while it was read, a linked folder without a place.
 //   C  ChatGPT and Grok (TOML), an entry under another name, a file written in a way the app does
 //      not change, CODEX_HOME set, and the fourth tile.
 //   D  a vault set up on the six pages: two groups, an app on this computer, a pause; what Home
@@ -1011,7 +1013,7 @@ async function runB(browser) {
     });
   });
 
-  await step('B: an answer that says the file was written and could not be read back: the sheet says that the entry is in the file, not "Written and read back", and no look is sent', async () => {
+  await step('B: an answer that says the file was written and could not be read back: the sheet says that the entry is in the file and that it was not read back, not "Written and read back", and no look is sent; a removal answered so says it in its message', async () => {
     // No walk-through can make the system refuse a read at that one moment. The word the app answers with then is put into its answer on the way to the page; everything else of the answer is the app's.
     const address = '**/api/connect/claude-desktop';
     await page.route(address, async (route) => {
@@ -1028,9 +1030,29 @@ async function runB(browser) {
     check(JSON.stringify(sent) === JSON.stringify(['POST /api/connect/claude-desktop']), `"Connect" sent ${sent.join(', ')}`);
     await saysText(walk, 'dialog[open] #connect-on-file', 'connect.on.status.file', { path: tile.path });
     check((await walk.count('dialog[open] #connect-result')) === 0, 'the sheet says "Written and read back" of a file that was not read back');
+    await saysText(walk, 'dialog[open] #connect-unread', 'connect.status.unread');
     await says(page.locator('dialog[open] h2').first(), tile.label, 'the sheet is not the one of a connected app');
     check(entryIn(walk, file).servers.includes(walk.entry), 'the entry is not in the file');
     await closeWith(walk, 'connect-done');
+    // A look reads the file: the sheet it draws says nothing of the kind.
+    aged(file);
+    await pressTile(walk, 'claude', 'on');
+    check((await walk.count('dialog[open] #connect-unread')) === 0, 'the sheet of a file that was looked at says that it was not read back');
+    // "Disconnect", answered in the same way: the message says that the app is disconnected, and what was not done.
+    const removal = '**/api/connect/claude-desktop/remove';
+    await page.route(removal, async (route) => {
+      const response = await route.fetch();
+      const answer = await response.json();
+      await route.fulfill({ response, json: Object.assign(answer, { not_read_back: true }) });
+    });
+    await page.locator('dialog[open] #connect-disconnect').click();
+    await page.locator('dialog[open]').last().locator('.btn-danger').click();
+    await walk.noSheet();
+    await page.unroute(removal);
+    await says(page.locator('#toasts .toast').last(), `${en('disconnect.result.done', { label: tile.label })} ${en('connect.status.unread')}`, 'the message does not say that the file was not read back');
+    check(!entryIn(walk, file).servers.includes(walk.entry), 'the entry is still in the file');
+    check((await walk.apps()).apps.length === 0, 'the app is still in the vault');
+    await walk.noToast();
   });
 
   await step('B: an entry that points elsewhere and holds "enabled": the offer says so; after "Connect" the other member is still there, and the sheet says the entry is switched off', async () => {
@@ -1104,6 +1126,44 @@ async function runB(browser) {
       await saysText(walk, 'dialog[open] #connect-say-1', 'connect.refused.say.1.unreadable', { path: tile.path, format: 'JSON' });
       await closeWith(walk, 'connect-close');
     });
+  });
+
+  await step('B: a file that was being written while it was looked at, and a linked folder of which the system does not say where it leads: each has a sentence of its own', async () => {
+    // Neither moment can be made from outside: the word the app answers with then is put into its answer on the way to the page.
+    put(OTHER_JSON);
+    const before = folderAsIs(folder);
+    const address = '**/api/connect/claude-desktop/look';
+    const answering = async (more) => {
+      await page.unroute(address).catch(() => {});
+      await page.route(address, async (route) => {
+        const response = await route.fetch();
+        const answer = await response.json();
+        await route.fulfill({ response, json: Object.assign(answer, more) });
+      });
+    };
+    // Written while it was read: the sentence names the file, and the next thing is another look, not the text to paste.
+    await answering({ state: 'busy' });
+    await pressTile(walk, 'claude', 'refused');
+    await saysText(walk, 'dialog[open] #connect-say-1', 'connect.refused.say.1.busy', { path: tile.path });
+    check((await walk.count('dialog[open] #connect-say-2')) === 0, 'the sheet offers the text to paste for a file that is in order');
+    check((await walk.count('dialog[open] #connect-go')) === 0, '"Connect" is offered after a refusal');
+    let filled = (await page.locator('dialog[open] .btn-primary').allTextContents()).map(trimmed);
+    check(JSON.stringify(filled) === JSON.stringify([en('connect.button.look')]), `the filled buttons are ${JSON.stringify(filled)}`);
+    // "Look again", answered by the app alone: the file is in order and is offered.
+    await page.unroute(address);
+    await page.locator('dialog[open] #connect-look').click();
+    await sheetShows(walk, 'offer');
+    await closeWith(walk, 'connect-cancel');
+    // A linked folder without a place: the sentence names the folder and no place, and does not read "a link to ,".
+    await answering({ state: 'linked', real_folder: null });
+    await pressTile(walk, 'claude', 'refused');
+    await saysText(walk, 'dialog[open] #connect-say-1', 'connect.refused.say.1.linked.unknown', { folder: path.dirname(tile.path) });
+    check(!(await walk.text('dialog[open] #connect-say-1')).includes(' to ,'), 'the sentence names a place that is not there');
+    filled = (await page.locator('dialog[open] .btn-primary').allTextContents()).map(trimmed);
+    check(JSON.stringify(filled) === JSON.stringify([en('connect.button.byhand')]), `the filled buttons are ${JSON.stringify(filled)}`);
+    await page.unroute(address);
+    await closeWith(walk, 'connect-close');
+    check(folderAsIs(folder) === before, 'the folder of the settings file does not hold what it held before');
   });
 
   await step('B: the file changed after the sheet opened: nothing is written, "Look again"; the file changed a second ago: "changed a moment ago"', async () => {

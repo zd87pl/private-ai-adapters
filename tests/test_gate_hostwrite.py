@@ -2112,7 +2112,7 @@ def test_a_file_written_while_it_is_read_is_not_written(
             answer, told = press(
                 moment, before, after, time_back, lambda told: connect(host, "other", told)
             )
-            assert answer == {"connected": False, "state": "not_read", "path": shown}, (
+            assert answer == {"connected": False, "state": "busy", "path": shown}, (
                 moment,
                 time_back,
             )
@@ -2141,7 +2141,7 @@ def test_a_file_written_while_it_is_read_is_not_written(
     assert (told.entered, told.actions) == (0, [])
     # A look at that moment says the same word, and changes nothing.
     answer, _ = press("after the last read", old, new, True, lambda told: looked(host))
-    assert answer["state"] == "not_read"
+    assert answer["state"] == "busy"
     assert state_of(host) == "other"
 
 
@@ -3633,6 +3633,108 @@ def test_a_read_back_that_cannot_read_is_not_told_as_a_failure(
     )
     assert answer == {"file": "failed", "path": shown, "copy": None}
     assert told.actions == ["disconnect", "disconnect-failed"]
+
+
+@pytest.mark.parametrize("host", HOSTS)
+def test_a_close_that_fails_at_the_end_fails_no_call(
+    host: str, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The last thing a call does is to close the folder it held open.
+
+    By then the file was changed and the record says so. If the system reports that
+    close as failed, the call must still answer what it did: an error there would tell
+    the owner that nothing is known of a change that was made and recorded.
+    """
+    place = folder_of(host)
+    shown = hostconfig.shown_path(place)
+    real_open_folder, real_close = hostcheck.open_folder, os.close
+    held: set[int] = set()  # the folders a call holds open
+    failed: list[int] = []  # each close of one of them, which the system "refused"
+
+    def open_folder(path: Path, base: Path) -> int:
+        descriptor = real_open_folder(path, base)
+        held.add(descriptor)
+        return descriptor
+
+    def close(descriptor: int) -> None:
+        real_close(descriptor)  # the descriptor is given back, as the system does on an error
+        if descriptor in held:
+            held.discard(descriptor)
+            failed.append(descriptor)
+            raise OSError(errno.EIO, os.strerror(errno.EIO))
+
+    def press(call: Callable[[Told], Any]) -> tuple[Any, Told, int]:
+        failed.clear()
+        told = Told()
+        with monkeypatch.context() as patch:
+            patch.setattr(hostcheck, "open_folder", open_folder)
+            patch.setattr(os, "close", close)
+            answer = call(told)
+        assert not held, "a folder was left open"
+        return answer, told, len(failed)
+
+    # "Connect": written, recorded once, answered as written.
+    put(place, other(host))
+    answer, told, closes = press(lambda told: connect(host, "other", told))
+    assert answer == {
+        "connected": True,
+        "state": "present",
+        "path": shown,
+        "copy": shown + hostwrite.FIRST_COPY,
+        "replaced": False,
+    }
+    assert (told.actions, told.entered, closes) == (["connect"], 1, 1)
+    assert place.read_text(encoding="utf-8") == with_ours(host)
+    assert no_temporary_file(place.parent)
+    # A look, and a connect that finds the entry there: nothing is written, and neither raises.
+    answer, _, closes = press(lambda told: looked(host))
+    assert (answer["state"], closes) == ("present", 1)
+    answer, told, closes = press(lambda told: connect(host, "present", told))
+    assert (answer["connected"], told.actions, closes) == (True, ["connect-kept"], 1)
+    # A refusal is answered as one.
+    answer, told, closes = press(lambda told: connect(host, "other", told))
+    assert (answer, told.actions, closes) == (
+        {"connected": False, "state": "changed", "path": shown},
+        [],
+        1,
+    )
+    # "Disconnect": removed, recorded once, answered as removed.
+    aged(place)
+    answer, told, closes = press(lambda told: disconnect(host, "present", told))
+    assert answer == {"file": "removed", "path": shown, "copy": shown + hostwrite.LAST_COPY}
+    assert (told.actions, told.entered, closes) == (["disconnect"], 1, 1)
+    assert state_of(host) == "other"
+    assert no_temporary_file(place.parent)
+
+
+def test_a_close_that_fails_while_a_place_is_judged_decides_nothing(
+    bare_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The judgement of where a command lies (rule R17) holds the root folder open while it
+    # walks the path. What it found stands, whatever the system says when that is closed.
+    system_folder = os.path.join(os.sep, "usr")
+    judged = hostwrite._may_not_last(system_folder)
+    real_open_folder, real_close = hostcheck.open_folder, os.close
+    held: set[int] = set()
+    failed: list[int] = []
+
+    def open_folder(path: Path, base: Path) -> int:
+        descriptor = real_open_folder(path, base)
+        held.add(descriptor)
+        return descriptor
+
+    def close(descriptor: int) -> None:
+        real_close(descriptor)
+        if descriptor in held:
+            held.discard(descriptor)
+            failed.append(descriptor)
+            raise OSError(errno.EIO, os.strerror(errno.EIO))
+
+    with monkeypatch.context() as patch:
+        patch.setattr(hostcheck, "open_folder", open_folder)
+        patch.setattr(os, "close", close)
+        assert hostwrite._may_not_last(system_folder) is judged
+    assert (len(failed), held) == (1, set())
 
 
 @pytest.mark.parametrize("host", HOSTS)

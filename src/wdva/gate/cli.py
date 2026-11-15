@@ -130,9 +130,9 @@ def add_gate_parser(subparsers: _SubParsers) -> None:
         choices=("basic", "pro"),
         default=None,
         help=(
-            "open the interface in this view and keep the choice beside the store: basic "
-            "shows what is used every day, pro shows every setting (default: a new store "
-            "starts in basic, an existing one opens as it was left)"
+            "the page the interface opens on, kept beside the store: basic is Home, pro is "
+            "Overview of the six pages with every setting (default: a new store opens on "
+            "Home, an existing one as it was left)"
         ),
     )
     p.set_defaults(func=_cmd_app)

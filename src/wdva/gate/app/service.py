@@ -63,10 +63,12 @@ app has beyond the store itself:
   gate before it waits for that lock, so that a folder that does not answer
   at all cannot keep the gate open (:meth:`GateService._end`). A demo
   refuses all three.
-* **Which view the owner uses.** Three words about the interface, kept in a
-  small file beside the vault that is not sealed (``run/interface.json``):
-  which of its two views the owner uses, whether setting up was finished,
-  and the language of the page, once the owner chose one. The service alone
+* **On which page the interface opens.** Three words about the interface,
+  kept in a small file beside the vault that is not sealed
+  (``run/interface.json``): on which page it opens (``view``: ``basic`` is
+  Home, ``pro`` is Overview of the six pages with every setting; the names
+  are those of two views the interface once had), whether the first steps
+  are done, and the language of the page, once the owner chose one. The service alone
   writes it. It is no setting of the vault and leaves no entry in the
   record; a file that is missing or holds anything else counts as no file,
   and never keeps a vault from unlocking. The language is the one thing the
@@ -203,7 +205,9 @@ without any document text. It is not a release and is counted apart from them.
 """
 
 VIEWS = ("basic", "pro")
-"""The two views of the interface: what is used every day, and every setting."""
+"""The two values of ``view``, the page the interface opens on: ``basic`` is Home, ``pro`` is
+Overview of the six pages with every setting. The words are those of two views the interface
+once had; the file and the command line keep them."""
 
 LANGUAGES = ("en", "pl")
 """The languages the owner's page can be kept in. None is kept until the owner chose one."""
@@ -1167,11 +1171,12 @@ class GateService:
     ``scrypt_n`` is the cost of the passphrase stretch of a vault created
     here (``None``: the default).
 
-    ``view`` is the view the app was started with (``--view``), ``"basic"`` or
-    ``"pro"``; ``None`` when none was named. A vault created here starts in
-    it, else in ``"basic"``. For a vault that exists already a named view is
-    stored at once; without one nothing is written at start, except for a
-    demo, whose vault is marked as set up. ``launch_command`` is the command
+    ``view`` is the page the app was started to open on (``--view``):
+    ``"basic"`` for Home, ``"pro"`` for Overview of the six pages with every
+    setting; ``None`` when none was named. A vault created here opens on it,
+    else on Home. For a vault that exists already a named page is stored at
+    once; without one nothing is written at start, except for a demo, whose
+    first steps are marked as done. ``launch_command`` is the command
     line that starts this installation again and ``port_fixed`` whether it
     names a port; the state passes both on. ``demo_again`` is what
     :meth:`demo_again` calls: the played app of a demo, told to ask once more.
@@ -1477,7 +1482,7 @@ class GateService:
             self._apply_serving(session, stored)
         return stored
 
-    # -- which view the owner uses ----------------------------------------------------
+    # -- the three words about the interface: the page to open on, the first steps, the language
 
     def _keep_interface(
         self, view: str | None, setup: str | None, language: str | None, *, rest_stays: bool = False
@@ -1506,9 +1511,9 @@ class GateService:
         self._bump()
 
     def _interface_at_start(self) -> None:
-        """What a start writes for a vault that exists: the view it named, and a demo's setup.
+        """What a start writes for a vault that exists: the page it named, and a demo's setup.
 
-        Without a view named on the command line nothing is written for a real
+        Without a page named on the command line nothing is written for a real
         vault. Where it cannot be written the app starts all the same, with
         what the file says. A language the file holds stays in it: no start
         chooses one, and none takes one away.
@@ -1526,12 +1531,12 @@ class GateService:
     def set_interface(
         self, *, view: str | None = None, setup: str | None = None, language: str | None = None
     ) -> JSONObject:
-        """Keep the view the owner uses, that setting up is finished, or the language; the state.
+        """Keep the page to open on, that the first steps are done, or the language; the state.
 
         Works on a locked vault too, and needs no owner mode: it lets nothing
         leave and changes nothing that is sealed. ``setup`` can only be set to
         ``"done"``. A word that is not given stays as it was last read, so
-        choosing a view never chooses a language, and a language that was
+        choosing a page never chooses a language, and a language that was
         chosen is never taken away again; two calls at the same moment that
         each give another word keep both. Nothing is written into the record.
         """
@@ -1623,7 +1628,7 @@ class GateService:
             "serving": None,
             "today": None,
             "warnings": None,
-            # Not sealed and not part of the vault: the view and the language, and how to
+            # Not sealed and not part of the vault: the page to open on and the language, and how to
             # start the app again.
             "interface": dict(self._interface) if info.exists else None,
             "launch": dict(self._launch),
@@ -2373,7 +2378,12 @@ class GateService:
 
         Opening it to hosted apps or showing its titles needs owner mode.
         Closing it to hosted apps also takes it away from every hosted app, so
-        that opening it again later grants nothing by itself.
+        that opening it again later grants nothing by itself. That holds for
+        a collection this method closed. A grant of a hosted app that lies in
+        the settings for a collection which was closed in another way (the
+        engine's own method leaves such grants, where they are not in force)
+        comes into force when this method opens the collection: nothing is
+        taken away here. :meth:`connect_write` takes such grants away.
         """
         session = self._unlocked()
         if not is_name(name):

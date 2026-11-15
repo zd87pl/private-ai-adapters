@@ -572,10 +572,6 @@ img {
   background: var(--accent-fill);
 }
 
-.switch-amber:checked {
-  background: var(--amber-solid);
-}
-
 .switch:checked::after {
   transform: translateX(14px);
 }

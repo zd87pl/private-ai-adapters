@@ -100,7 +100,7 @@ class Service(Protocol):
     def set_interface(
         self, *, view: str | None = None, setup: str | None = None, language: str | None = None
     ) -> JSONObject:
-        """Keep the view the owner uses, that setup is done, or the page's language; the state."""
+        """Keep the page to open on, that the first steps are done, or the language; the state."""
         ...
 
     def language(self) -> str | None:

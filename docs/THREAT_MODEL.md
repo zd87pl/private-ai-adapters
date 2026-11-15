@@ -374,14 +374,73 @@ own work, not an audit.
 Several things those reviews found were changed afterwards, and no review has
 attacked the changes yet. Everything that
 [a part of this section](#home-settings-and-what-came-with-them) describes
-was built after the reviews too: the two sets of pages, the file that keeps
-three words about the page and the routes that came with it, and the answer
-that tells the page's language before pairing. Home, the write into an AI
+was built after those three reviews: the two sets of pages, the file that
+keeps three words about the page and the routes that came with it, the answer
+that tells the page's language before pairing, Home, the write into an AI
 app's settings file, the box that asks the owner's documents, and the second
-language were built later still. No review has attacked any of them.
+language.
+
+Two more reviews were made of two parts of that, and this section calls them
+"the two later reviews". Say first what they were. Each was made by an
+automated assistant of the same kind as the one that wrote the code, told to
+break it and to change nothing; neither was made by an independent person or
+firm. They read the code as it stood before Home was built, when no page
+called the new routes yet.
+
+- **One attacked the code that writes a settings file.** It ran about
+  100,000 generated JSON and TOML files through the two edits and compared
+  the results with a reader of its own. It put a link, a second name, a pipe,
+  a folder and a file of another account in the file's place, and a link in
+  the place of each folder and each copy, 61 cases with a connect and a
+  removal for every state each. It made each call to the system fail in turn
+  (396 runs), ended the program before each call (226), exchanged the file
+  directly before each call (2,034), raced 48,000 presses against a program
+  that kept exchanging the file or its folder, and filled a disk. No run
+  damaged a settings file, wrote through a link, left a file half written or
+  changed a file without keeping a copy. It found six things: a removal that
+  was refused for an ordinary TOML file; a file that could not be read back
+  told as a change that had not happened; a new file that kept the writer's
+  temporary name and could never be written again; a file written between
+  the read and the look that followed it taken for the file that was read;
+  a look that raised when a linked folder was exchanged under it; and the
+  rule about a Python in a place that may not last passed by a link.
+- **One attacked the routes**: the look, the write and the removal, the
+  trial question, and the three words of the page. It called them over HTTP
+  without the session, with a session of an earlier start, without the
+  header, from another site and under other host names, with 29 made-up
+  names in the place of an app's, against a locked vault and against a demo;
+  it asked the trial after its ten minutes; it made a write fail after its
+  record by making the file unchangeable; and it raced a lock against a
+  connect. No request got what it should not have, no passage was read
+  without the passphrase typed in the last ten minutes, and none of 371
+  answers it kept held a byte of a settings file. It found eight things: the
+  count of trial questions erased by "Lock now"; a connect that brought
+  stored "Can read" into force; a failed connect that had already withdrawn
+  approvals; a vault that could not be locked while a write hung; a demo
+  that told the place of a settings file; one of two words of the page lost
+  when both were sent at once; Activity naming a settings file as if the
+  record held its place; and a refused request that had removed a leftover
+  file.
+
+Each of the fourteen was changed, and a test now holds each; this section
+says of each what is so now, and what is still a limit. The changes
+themselves were not reviewed again. What the two later reviews could not
+try: a Mac; any AI app; a file system other than ext4 and tmpfs (one without
+hard links, one with coarse times, a home folder on a network); a loss of
+power, as against the end of the program; and, through the routes, an
+account that is not root. They did not attack the page: Home, the sheets of
+its tiles, the pages beside it and the Polish texts were attacked by no
+review. Neither is an independent review, and none has been made.
+
 Where a sentence says "in a run for this page", the figure comes
 from a run made on Linux with Python 3.11 while this page was held against the
-code. One machine, one run: an observation, not a proof.
+code. One machine, one run: an observation, not a proof. The runs about the
+interface file, the trial question, the three routes of a settings file, the
+look and the count of routes were made again on the last state of this
+version, with the app's own Python outside a browser; their figures are the
+ones of that last run. The other figures are older: they come from runs made
+when their part of this section was written, before Home was built, and
+were not made again.
 
 ### What Locktender protects, and where it is
 
@@ -610,25 +669,29 @@ route.
   comes from it: in a run for this page the names `../../etc/passwd` and
   `codex` were answered 404, and a request with a field `path` 400.
 - **Read with care.** Only a regular file of at most 1 MiB is opened, without
-  following a link and without waiting. A symbolic link, a directory, a named
-  pipe and a larger file were each answered `not_read`, in a millisecond or
-  two, in a run of the look that came before these routes, which read through
-  the same reader. A file that another program writes while it is read is
-  not read either: what the system says of it is compared before the first
-  byte and after the last, so that the bytes that are kept, and later
-  written back with the entry, are not a mix of two versions of the file. A
-  folder is not gone through either when it is a symbolic
+  following a link and without waiting. In a run for this page a symbolic
+  link, a directory, a file with a second name, a file of 1 MiB and some
+  bytes, and a named pipe that nobody wrote to were each answered `not_read`,
+  the pipe in under a millisecond. A file that another program writes while
+  it is read is not used either: what the system says of it is compared
+  before the first byte and after the last, so that the bytes that are kept,
+  and later written back with the entry, are not a mix of two versions of
+  the file. The look has a word of its own for that, `busy`, and the page
+  then offers another look. In the same run a second thread wrote the file
+  in place, over and over, with as many bytes as it had: of 3,000 looks 377
+  said `busy`, and each of the others said what one of the two versions
+  held. A folder is not gone through either when it is a symbolic
   link: each folder below the home folder (or below the folder a variable
   names) is looked at and opened without following a link, and the file is
   reached through the folder that was opened. An earlier version followed
-  such a link, and so read whatever the link led to. In a run of the reader,
-  with the right entry behind a linked settings folder and again behind a
-  linked `~/.config`, nothing behind the link was read; the three routes say
-  `linked` there, and where the link leads. The home folder itself, and a
+  such a link, and so read whatever the link led to. In the run, with the
+  right entry behind a linked settings folder and again behind a linked
+  `~/.config`, the look said `linked` and where the link leads, and not what
+  the file behind it held. The home folder itself, and a
   folder a variable names, are taken as the system resolves them.
 - **Never a byte of the file in an answer.** The three routes answer nothing
   that is read out of the file but fixed words and two yes-or-no facts: one
-  of thirteen words about the file, one of three about why the entry could
+  of fourteen words about the file, one of three about why the entry could
   not be written, whether the entry is switched off, under which other name
   it calls. Beside these stand the place of the file, the places of up to two
   copies with the time each was last changed, and the command the entry holds
@@ -641,14 +704,19 @@ route.
   In a run for this page a marker was written into three settings files as a
   value, as the token of another tool and in a comment, and the app was asked
   through the three routes for each of them: the marker was in none of its 55
-  answers, and neither was the name of another entry.
+  answers, and neither was the name of another entry. In a second run the
+  look alone was asked 3,631 times, for files in every state it can find but
+  two (a refusal by the system, which a run as root does not get, and a
+  Python without a reader for TOML), with the marker also inside the entry
+  itself: it was in none of the answers.
 - **Written under rules.** The write changes one file per request, at the
   fixed place, and keeps at most one copy of it beside it; it touches nothing
   else outside the vault. It writes only a file it has just read through the
   code that looks, or makes the file where its folder is there and the file
   is not: never one that cannot be parsed, that is a link or a special file,
-  is larger than 1 MiB, has a second name or belongs to another account, and
-  never through a folder that is a link. (A second name that is Locktender's
+  is larger than 1 MiB, has a second name or belongs to another account, or
+  was being written while it was read, and never through a folder that is a
+  link. (A second name that is Locktender's
   own, the temporary name of a write that was cut off after it had made the
   file, is removed first.) It does not create a folder: an AI
   app that was never opened has none, and stays without. It adds Locktender's own entry, or changes the command of an
@@ -671,8 +739,11 @@ route.
   back and must hold the entry. Where the system does not let it be read at
   that moment, and its name still leads to the file that was just put there,
   the change is not called a failure: the answer says that the file was
-  written and not read back. An entry of Locktender's name that points
-  somewhere else is never removed: the owner was not shown what it holds.
+  written and not read back, and so does the page. The folder that was held
+  open is closed last, and what the system says to that close changes no
+  answer: the change is made and recorded by then. An entry of Locktender's
+  name that points somewhere else is never removed: the owner was not shown
+  what it holds.
   The write needs owner mode, always; taking the entry out needs it too.
 - **Only on a press.** The file is read when one of these routes is called,
   and the page calls them on a press and at no other time: the press that
@@ -697,8 +768,8 @@ Two more things about the look. It says what the file held at the moment of
 the request; a program of the same account can change the file afterwards,
 and with it what an AI app starts under the name `locktender`. And how long
 the answer takes grows with the size of the file (five milliseconds for a
-file of 1 MiB against one for a small file, in a run of the look that came
-before these routes); nobody measured what that tells.
+file of 1 MiB against one for a small file, at the middle of 200 looks each
+in a run for this page); nobody measured what that tells.
 
 **What the write gives an adversary.** With the session and inside owner
 mode: a request that writes Locktender's own entry, which starts Locktender's
@@ -753,7 +824,19 @@ answered 401 without the session. What is new:
    back into force. A connect that opens the group therefore gives its own
    app "Ask me each time" in its place and takes such stored access of every
    other app away, and Activity lists both. An app that had "Can read" in
-   force before the press keeps it. Where apps that run on this
+   force before the press keeps it. **The older way of opening a group does
+   not do this.** The switch "Hosted apps may be granted this collection" on
+   the page Documents under Settings, "Add" in the sheet "Other app" and "Add
+   the app and show the text" open a group through another request, which
+   takes nothing
+   away: stored access to that group, "Can read" included, comes into force
+   with it, for every app that holds some, and the entry in Activity says
+   only that the group was opened. So does `set_collection` for a program
+   that uses the service in Python. No press of the page leaves such access
+   behind, so a vault that was only ever changed through the page holds
+   none; it is found in settings that a program made through the Python
+   interface. That request needs owner mode like every opening of a group.
+   Locktender's tests hold this as it is said here. Where apps that run on this
    computer were the only ones registered, they are no longer answered
    until the owner chooses, and lose the passages they were approved and the
    ones that wait; the look says so before. That happens when the file was
@@ -1206,12 +1289,12 @@ review found, of 42 markers planted in documents, only the five that had been
 released or were shown for approval, and nowhere the passphrase, the words to
 replace or the pairing code. That review was made before Home and before
 the trial. Of the routes added since, those that deal with a settings file
-read something that must not be passed on: in a run for this page a marker
-written into settings files was in none of the 38 answers of the look that
-came first and is gone, and in a later run in none of the answers of the
-three routes that look, write and remove. The trial question is the one that passes text
-on: its answer holds the passage
-with the words to replace already replaced, and no other answer repeats it.
+read something that must not be passed on: in two runs for this page a marker
+written into settings files was in none of the 55 answers of the three routes
+that look, write and remove, and in none of 3,631 answers of the look alone.
+The trial question is the one that passes text on: its answer holds the
+passage with the words to replace already replaced, and no other answer
+repeats it.
 
 The trial question is refused once ten minutes have passed since the
 passphrase was typed, like a change that lets more leave, but by its own
@@ -1400,6 +1483,16 @@ vault cannot do, the computer has to: a screen lock and full-disk encryption.
   place after the lock was recorded. Locktender's tests hold that call up
   and lock in each of the three ways; no folder that really hangs was tried.
   (Before this was so, the vault stayed open for as long as the call hung.)
+- **Opening a group can bring stored access into force.** Access of an app
+  that sends text to a provider can lie in the settings for a group that is
+  closed to such apps, where it counts for nothing. The page never leaves
+  such access: where it closes a group it takes the access away. A program
+  that changes the settings through the Python interface can leave it.
+  "Connect" on a tile takes such access away when it opens the group. The
+  other ways of opening a group do not (the switch on the page Documents
+  under Settings, "Add" in the sheet "Other app", "Add the app and show the
+  text", and `set_collection` in Python): with them "Can read" that was
+  stored comes into force, and Activity says only that the group was opened.
 - **Activity names a settings file as it lies now.** The record holds no
   place of a settings file. The details of a connect or a disconnect name
   the file Locktender would look at today, under a label that says so. After
@@ -1546,11 +1639,18 @@ Tested:
   running demo. No conversation was held.
 - The three reviews described above, all on Linux, and all made before
   anything of the part "Home, Settings, and what came with them" was built.
+- The two later reviews described above: of the code that writes a settings
+  file, and of the routes of the look, the write, the removal and the trial
+  question. They were made by an automated assistant of the kind that wrote
+  the code, on Linux, as root, on the file systems ext4 and tmpfs, against
+  the code as it stood before Home was built.
 - The runs this page quotes as made for it, on Linux with Python 3.11 and,
   where a browser was needed, Chromium. The runs for the interface file and
   for the routes that came later used no browser: they called the page's
   API directly. So did the run for the trial question, with a clock it could
-  move, and the run for the settings files.
+  move, and the run for the settings files. These, and a run of the look
+  against files in every state it could make, were made again on the last
+  state of this version.
 - The write into a settings file: by Locktender's own tests, against files
   made for them in home folders made for them, on Linux and, in CI, on macOS;
   in one run on Linux through the three routes, in a home folder made
@@ -1569,13 +1669,22 @@ Not tested:
 - Windows. Locktender needs Unix sockets and is not offered there.
 - A real 24-hour or 30-day boundary: the reviews moved a clock they
   controlled.
-- Home, the six pages, the interface file and the routes that came with them
-  under a hostile review: none has attacked them yet. What this page says of
-  the page's own behaviour (which page opens, what Home shows and leaves out,
-  when the cards "Start here" come and go, where the command to start again
-  comes from) was read from the page's code. The walk-throughs cover a part
-  of it, and nobody tried it by hand for this page.
-- The trial question under a hostile review.
+- Home, the pages beside it, the sheets of the tiles, the six pages as they
+  are now, the interface file and the answer before pairing under a hostile
+  review: none has attacked them. The two later reviews attacked the routes
+  behind Home and the code that writes a settings file, not the page. What
+  this page says of the page's own behaviour (which page opens, what Home
+  shows and leaves out, when the cards "Start here" come and go, where the
+  command to start again comes from) was read from the page's code. The
+  walk-throughs cover a part of it, and nobody tried it by hand for this
+  page.
+- A review by an independent person or firm, of any part. The two later
+  reviews were made by an automated assistant of the same kind as the one
+  that wrote the code.
+- The changes that followed the two later reviews, under a review.
+- What the two later reviews could not try: the write on a Mac, on a file
+  system other than ext4 and tmpfs, with a loss of power in the middle, and
+  through the routes as an account that is not root.
 - The Polish texts, read by a person who writes Polish for a living.
 - The write against a settings file that an AI app made, and everything it
   rests on that comes from the makers' pages: whether Claude Desktop, the
@@ -1587,7 +1696,6 @@ Not tested:
 - The write by hand on a Mac, and whether macOS asks for a permission before
   a program started from a terminal may read or write the settings folder of
   Claude Desktop.
-- The three routes of the settings file under a hostile review.
 
 **Not audited.** Nobody outside the project has reviewed Locktender, its format
 or this page.

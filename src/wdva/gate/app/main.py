@@ -318,9 +318,10 @@ def run_app(
     when the app stops. ``window`` shows the interface in its own window when
     pywebview is installed, and falls back to the browser when it is not, unless
     ``open_browser`` is false; the window asks for the pairing code like a
-    browser does. ``view`` is the view of the interface to open in, ``"basic"``
-    or ``"pro"``: a vault that is created starts in it, and for a vault that
-    exists it is stored at once. ``None`` writes nothing at start.
+    browser does. ``view`` is the page the interface opens on, ``"basic"`` for
+    Home or ``"pro"`` for Overview of the six pages with every setting: a vault
+    that is created opens on it, and for a vault that exists it is stored at
+    once. ``None`` writes nothing at start.
 
     Ctrl-C, SIGTERM and SIGHUP lock the vault, stop the server and return 0.
     A demo that stops prints the command that starts the app for real.

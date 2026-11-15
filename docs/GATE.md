@@ -607,6 +607,12 @@ The sheet then says "Connected":
   and answer this: ". You finish the sentence in the app.
 - "A copy of the file as it was before this change:", with the place of the copy.
 
+One case has no "Connected". Where the entry was written and the system then did not let
+Locktender read the file again, the sheet does not say "Written and read back": it shows the
+sheet of an app that is in your vault, headed with the app's name, with "The entry “locktender”
+is in …." and under it "The file was written, but the system did not let it be read back." The
+change was made and is in the record; press the tile again to have the file looked at.
+
 When the app then asks for a passage, a card appears on Home under "Waiting for you"
 ([Approvals](#approvals)), and the tile says "Last asked".
 
@@ -647,8 +653,9 @@ adds "You can add the entry by hand: “Show the text to paste”."
 | The sheet says | What to do |
 | --- | --- |
 | "Locktender cannot read … as JSON, so it changes nothing." (or "as TOML") | A comma or a bracket may be missing in the file. Mend it in a plain-text editor, or paste the entry yourself. |
-| "Locktender does not change a settings file that is a link, a special file, over 1 MiB or not yours." | Paste the entry yourself. The same sentence stands for a file that another program was writing at the moment Locktender read it: press "Look again". |
-| "The settings folder … is a link to …, and Locktender does not write through a link." | The same. This is the case of somebody who keeps settings in a repository and links them into place: the file and its copies would land wherever the link leads. |
+| "Locktender does not change a settings file that is a link, a special file, over 1 MiB or not yours." | Paste the entry yourself. A file with a second name (a hard link) is refused with the same sentence. |
+| "… was being changed while it was read, so Locktender changes nothing." | The file was written or replaced at the very moment Locktender read it: by the app whose file it is, by an editor, or by a second press on "Connect". Nothing of what was read is used. The file is in order: press "Look again". |
+| "The settings folder … is a link to …, and Locktender does not write through a link." | Paste the entry yourself. This is the case of somebody who keeps settings in a repository and links them into place: the file and its copies would land wherever the link leads. Where the link was exchanged at that moment and the system did not say where it leads, the sentence names no place: "The settings folder … is a link, and Locktender does not write through a link." |
 | "The system did not let Locktender read …, so it changes nothing." | The operating system refused the look at the folder or the file. Paste the entry yourself. Whether macOS asks for a permission at this point was not tried. |
 | "… is written in a way Locktender does not change." | The file holds its servers in a form the edit does not handle, for example all of them on one line of a TOML file, or the new file would be larger than 1 MiB. Paste the entry yourself. The sheet then names no place in the file for the text. |
 | "Locktender could not keep a copy of …, so it changes nothing." | Something that is not a file of yours lies where the copy would go, or the copy could not be written. Move it away and press the tile again, or paste the entry yourself. |
@@ -679,9 +686,11 @@ no other entry, and it keeps a copy of the file as it was. An entry that points 
 left: "Claude Desktop is no longer answered. The entry in … points elsewhere and was left;
 remove it by hand." Where the file cannot be changed at that moment, for example because it was
 saved less than five seconds ago, the app is removed from your vault all the same: "Claude
-Desktop is no longer answered; the settings file could not be changed." Text the app already
-received stays where it was sent. Where "Disconnect" changes the file, it needs your passphrase
-like "Connect".
+Desktop is no longer answered; the settings file could not be changed." Where the entry was
+taken out and the system then did not let the file be read again, the message is "Disconnected
+Claude Desktop. The file was written, but the system did not let it be read back." Text the
+app already received stays where it was sent. Where "Disconnect" changes the file, it needs
+your passphrase like "Connect".
 
 **"Other app"** opens the sheet "Other app (MCP)": "You paste a short text into your app’s MCP
 settings yourself, and Locktender writes nothing there." You give the app a "Name", of
@@ -1925,11 +1934,29 @@ Tested:
   against the running demo. No conversation was held. This run was made before Home was built
   and was not repeated for this guide.
 - Three hostile reviews of the code, made before Home, "Connect", the box "Ask your documents"
-  and the second language were built. No review has attacked these. Those findings of the
-  reviews that are limits of the design, and stay, are in the list under
-  [Limits you should know](#limits-you-should-know).
+  and the second language were built. Those findings of the reviews that are limits of the
+  design, and stay, are in the list under [Limits you should know](#limits-you-should-know).
+- Two more reviews, of what came later: one of the code that writes an AI app's settings file,
+  one of the routes behind "Connect", "Disconnect" and the box "Ask your documents". Know what
+  they were. They were made by an automated assistant of the same kind as the one that wrote
+  the code, told to break it; not by an independent person or firm. The first ran about 100,000
+  generated JSON and TOML files through the two edits, put links, pipes, folders and files of
+  another account in the file's place, made each system call of a press fail in turn, ended
+  the program before each of them, exchanged the file directly before each, and filled a disk.
+  No run damaged a settings file, wrote through a link or left a file half written. The second
+  called the routes over HTTP without the session, from another site, against a locked vault
+  and against a demo, raced presses against a lock, and made a write fail after its record.
+  Nothing was handed out that should not have been. Between them they found two things in
+  which a promise of the design did not hold ("Disconnect" refused an ordinary TOML file, and
+  "Lock now" erased the count of trial questions) and twelve smaller ones. Each was changed,
+  with a test that holds it; what is still a limit after a change is in
+  [the threat model](THREAT_MODEL.md#locktender). The changes themselves were not reviewed
+  again. The reviews ran on Linux, as root, on the file systems ext4 and tmpfs. They could not
+  try a Mac, any AI app, another file system, or a loss of power in the middle of a write.
 - For this guide: the commands on this page were run on Linux, and the quoted outputs and figures
-  are from those runs. The installations were made from a local copy of the repository, so
+  are from those runs. The runs are those of the time each part was written; what the demo
+  lists under [Try it in two minutes](#try-it-in-two-minutes) was looked at again on the last
+  state of this version. The installations were made from a local copy of the repository, so
   `git clone` and the `git+https` address themselves were not exercised. The words of Home, of
   the sheets and of the demo's card are quoted from the page's English text table. The pictures
   were taken in Chromium on Linux, with the demo's invented documents, the sample document and
@@ -1960,6 +1987,10 @@ Not tested:
 - **The Polish texts read by a person who writes Polish for a living.**
 - **`--window`.**
 - **Windows.** The app relies on Unix sockets and is not offered there.
+
+- **A review by somebody independent.** Every review named above was made inside the project,
+  the last two by an automated assistant. Nobody outside the project has been asked to review
+  any of it, the code that writes into another program's settings file included.
 
 It has not been audited by anyone outside the project. The package it comes with is alpha
 software; see the [README](../README.md) for the rest of it.

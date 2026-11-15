@@ -306,3 +306,96 @@ def test_figures_quoted_from_the_recordings_match_them() -> None:
     # And they really are wrong: the notes say otherwise.
     notes = (ROOT / "examples" / "data" / "notes.txt").read_text(encoding="utf-8")
     assert not any(quote in notes for quote in wrong_answers)
+
+
+# -- the page that is gone ---------------------------------------------------------------
+
+# The app's page once had a view called "Basic", a first run in four steps whose last was
+# "First question", and in it a button "Check the file". All of it went when Home was built.
+# No document may name one of them as something the page has.
+GONE_FROM_THE_PAGE = ("Basic", "Check the file", "First question", "four steps")
+
+# A paragraph may still hold one of those words where it says, in so many words, that the
+# thing is no longer there.
+SAYS_IT_IS_GONE = ("was called", "that are gone", "is gone", "are gone", "Gone since")
+
+# In the changelog they stand in one entry, the one that says what earlier states had.
+CHANGELOG_HISTORY = "- **Gone since earlier states of this preview**"
+
+# One card of today's page really lists four steps, and is named wherever that is said.
+FOUR_STEPS_OF = '"Getting started"'
+
+WALK_THROUGHS = ROOT / "tests" / "browser" / "README.md"
+
+
+def _paragraphs(text: str) -> list[str]:
+    """The paragraphs of a page's prose; a list item with the lines under it is one."""
+    prose, _ = _split(text)
+    found: list[list[str]] = [[]]
+    for line in prose.splitlines():
+        if not line.strip():
+            found.append([])
+            continue
+        if re.match(r"^\s*(?:[-*]|\d+\.) ", line) and found[-1]:
+            found.append([])
+        found[-1].append(line)
+    return [" ".join(" ".join(lines).split()) for lines in found if lines]
+
+
+def _gone_words(paragraph: str) -> list[str]:
+    return [word for word in GONE_FROM_THE_PAGE if re.search(rf"\b{re.escape(word)}\b", paragraph)]
+
+
+def test_no_document_describes_the_page_that_is_gone() -> None:
+    pages = [*PAGES, WALK_THROUGHS] if WALK_THROUGHS.is_file() else list(PAGES)
+    assert ROOT / "docs" / "GATE.md" in pages
+    wrong: list[str] = []
+    history = 0
+    for page in pages:
+        name = str(page.relative_to(ROOT))
+        for paragraph in _paragraphs(page.read_text(encoding="utf-8")):
+            for word in _gone_words(paragraph):
+                if name == "CHANGELOG.md":
+                    allowed = paragraph.startswith(CHANGELOG_HISTORY)
+                    history += allowed
+                elif word == "four steps":
+                    allowed = FOUR_STEPS_OF in paragraph
+                else:
+                    allowed = any(mark in paragraph for mark in SAYS_IT_IS_GONE)
+                if not allowed:
+                    wrong.append(f"{name}: {word!r} in: {paragraph[:120]}")
+    assert not wrong, "a document names something the page no longer has:\n" + "\n".join(wrong)
+    # The changelog does say what went: the entry is there, and holds each of the words.
+    assert history == len(GONE_FROM_THE_PAGE)
+    # The card that has four steps has four: the page's own script lists them.
+    views = ROOT / "src" / "wdva" / "gate" / "app" / "static" / "views.js"
+    if views.is_file():
+        code = views.read_text(encoding="utf-8")
+        card = code[code.index("function startCard(") :]
+        card = card[: card.index("\n}\n")]
+        assert len(re.findall(r"^\s+title: \"", card, re.MULTILINE)) == 4
+        assert '"Getting started"' in card
+
+
+def test_the_reader_of_gone_words_tells_history_from_a_claim() -> None:
+    text = (
+        "The page has two views, Basic and Pro.\n\n"
+        "- A press on `--view basic` opens Home.\n"
+        "- The address of the page that was called Basic leads to Home.\n\n"
+        'A card "Getting started" lists four steps.\n\n'
+        "The first run has four steps.\n\n"
+        "```text\nBasic is quoted in a block of code\n```\n"
+    )
+    paragraphs = _paragraphs(text)
+    assert len(paragraphs) == 5
+    assert [_gone_words(paragraph) for paragraph in paragraphs] == [
+        ["Basic"],
+        [],
+        ["Basic"],
+        ["four steps"],
+        ["four steps"],
+    ]
+    assert not any(mark in paragraphs[0] for mark in SAYS_IT_IS_GONE)
+    assert any(mark in paragraphs[2] for mark in SAYS_IT_IS_GONE)
+    assert FOUR_STEPS_OF in paragraphs[3]
+    assert FOUR_STEPS_OF not in paragraphs[4]
