@@ -261,13 +261,21 @@ _DOCUMENTED_BY = {
     "grok-bot": "xAI's documentation",
 }
 
-# For a product that runs in its vendor's cloud: why it cannot reach a store on this
-# computer, and what the owner can use instead.
+# For a product that runs in its vendor's cloud: why it cannot be connected to a store
+# on this computer, and what the owner can use instead. "Cannot be connected" and not
+# "cannot reach": one of them can be allowed to run commands on the owner's computer,
+# and then reaches whatever the owner's account reaches, without an entry.
 _WHY_NOT = {
     "chatgpt-web": "It cannot start a program on this computer",
     "claude-web": "It cannot start a program on this computer",
     "grok-web": "It cannot start a program on this computer",
     "grok-bot": "It works on a computer in xAI's cloud, not on this one",
+}
+_REACHES_ANOTHER_WAY = {
+    "grok-bot": (
+        "By the same documentation a Bot can be allowed to run commands on this computer; "
+        "such a Bot is a program running as you and needs no entry. "
+    ),
 }
 _LOCAL_ALTERNATIVE = {
     "chatgpt-web": "Use the ChatGPT desktop app or Codex on this computer instead",
@@ -845,11 +853,12 @@ def _blocks(entry: KnownHost, command: Sequence[str]) -> tuple[tuple[Block, ...]
 
 
 def _explanation(entry: KnownHost) -> str:
-    """The paragraph for a product that cannot start a program on this computer."""
+    """The paragraph for a product that cannot be connected to a store on this computer."""
     return (
         f"{entry.label} calls only servers that {entry.destination}'s cloud can reach over the "
         f"internet, according to {_DOCUMENTED_BY[entry.id]}. {_WHY_NOT[entry.id]}, so it "
-        f"cannot reach this vault and there is nothing to configure. "
+        f"cannot be connected to this vault and there is nothing to configure. "
+        f"{_REACHES_ANOTHER_WAY.get(entry.id, '')}"
         f"{_LOCAL_ALTERNATIVE[entry.id]}, or copy the text you want it to see into the "
         f"conversation yourself. Text you paste goes to {entry.destination} like any other "
         f"message; {brand.PRODUCT} neither limits nor records it."

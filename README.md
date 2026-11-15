@@ -130,11 +130,12 @@ know, and use retrieval (RAG) when you need exact, attributable answers
 Locktender is a local app in this package that stands between your private documents and the AI
 apps on your computer: a lock, a meter and a record. It seals a copy of each document you add in
 an encrypted vault; apps such as Claude Desktop, Claude Code, Codex, the ChatGPT desktop app or a
-local model can search the vault and read single passages inside limits you set, and you see the
-exact text of everything that left. It is not a wall: text that was released to a hosted AI app
+local model can search the vault and read single passages inside limits you set (by each app's
+documentation; none was tried in a real conversation), and you see the exact text of everything
+that left. It is not a wall: text that was released to a hosted AI app
 is with that app's provider, and nothing can recall it.
 
-![Home of a new vault: a sidebar with Home, Documents, Activity and Settings, and under "Start here" three numbered cards, "Add a document" with the buttons "Choose a file" and "Use a sample document", "Ask your documents" with a box that says "Add a document first.", and "Connect an app" with the four tiles Claude, ChatGPT, Grok and Other app](docs/images/gate-home.png)
+![Home of a new vault: a sidebar with Home, Documents, Activity and Settings, and under "Start here" three numbered cards, "Add a document" with the buttons "Choose a file" and "Use a sample document", "Ask your documents" with a box that says "Add a document first.", and "Connect an app" with the four tiles Claude, ChatGPT, Grok and Other app and under them the sentence "Only apps installed on this computer can be connected, not websites, phone apps or Grok Bot."](docs/images/gate-home.png)
 
 You use it in your browser, in English or Polish. **Home** shows what waits for your yes, a box
 that asks your documents and shows the one passage an AI app would get, and buttons that connect
@@ -145,11 +146,14 @@ passphrase, add a document, ask it a question, connect an app.
 
 Try the demo. It runs on invented documents and plays an AI app against them, and a card on its
 Home says where the demo is and what you can do next. Locktender runs on macOS and Linux and
-needs Python 3.11 or newer:
+needs Python 3.11 or newer. It has to live in an environment of its own, not in a
+`pip install --user` copy, or no app can be connected to it:
 
 ```bash
-pip install "wdva[gate] @ git+https://github.com/zd87pl/private-ai-adapters"
-wdva gate app --demo
+python3 -m venv ~/.venvs/locktender
+~/.venvs/locktender/bin/python -m pip install \
+  "wdva[gate] @ git+https://github.com/zd87pl/private-ai-adapters"
+~/.venvs/locktender/bin/wdva gate app --demo
 ```
 
 **What it does**

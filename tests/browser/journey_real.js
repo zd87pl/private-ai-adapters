@@ -321,7 +321,8 @@ run(async () => {
     await page.fill('#pair-code', wrong);
     const refusal = page.locator('#pair-code-error');
     await refusal.waitFor({ state: 'visible', timeout: WAIT });
-    const words = (await refusal.textContent()).trim();
+    // The page keeps a Polish word of one letter on the line of the word after it, with a no-break space: compared as a space.
+    const words = (await refusal.textContent()).replace(/\u00a0/g, ' ').trim();
     check(words === polish['pair.error.wrong'] && /\s/.test(words) && !/wrong_code|403/.test(words), `the refusal is not the sentence of the table: ${words}`);
     // Nothing was emptied, and the code that was refused cannot be sent again as it stands.
     check((await page.inputValue('#pair-code')) === wrong, `after the refusal the field holds "${await page.inputValue('#pair-code')}"`);
@@ -708,7 +709,9 @@ run(async () => {
     await picture('19-approval-card');
     // In Polish, every text of the card is the Polish table's; what is in the box is the owner's own text.
     await chooseLanguage(page, '.sidebar-foot', 'pl');
-    await allPolish(`.approval[data-key="${key}"]`, [TAX_LINE], ['card.title', 'card.chip.hosted', 'card.status.claimed', 'card.label.text', 'card.status.meta', 'card.say.1', 'card.say.2', 'card.button.no', 'card.button.yes', 'card.button.details']);
+    // A document of one passage says "the whole document" in place of "passage 1 of 1".
+    const figures = waiting.passages === 1 ? 'card.status.meta.whole' : 'card.status.meta';
+    await allPolish(`.approval[data-key="${key}"]`, [TAX_LINE], ['card.title', 'card.chip.hosted', 'card.status.claimed', 'card.label.text', figures, 'card.say.1', 'card.say.2', 'card.button.no', 'card.button.yes', 'card.button.details']);
     // "Details" unfolds three lines, and "Release once" waits again: the cards below would have moved.
     await card.locator('button[data-key="more"]').click();
     await eventually(async () => (await card.locator('.approval-details li').count()) === 3, WAIT, '"Details" did not unfold three lines');

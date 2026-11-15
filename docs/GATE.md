@@ -17,7 +17,7 @@ that left.
 - **A record.** Every result is written down with its exact text before it is handed over. You
   read it on the same page: what left, row by row, and under Settings every entry.
 
-![Home of a new vault: a sidebar with Home, Documents, Activity and Settings, and under "Start here" three numbered cards, "Add a document" with the buttons "Choose a file" and "Use a sample document", "Ask your documents" with a box that says "Add a document first.", and "Connect an app" with the four tiles Claude, ChatGPT, Grok and Other app](images/gate-home.png)
+![Home of a new vault: a sidebar with Home, Documents, Activity and Settings, and under "Start here" three numbered cards, "Add a document" with the buttons "Choose a file" and "Use a sample document", "Ask your documents" with a box that says "Add a document first.", and "Connect an app" with the four tiles Claude, ChatGPT, Grok and Other app and under them the sentence "Only apps installed on this computer can be connected, not websites, phone apps or Grok Bot."](images/gate-home.png)
 
 The page opens on **Home**: what waits for you, a box that asks your documents, the buttons that
 connect your apps, and what left last. **Documents** and **Activity** are a press away.
@@ -36,7 +36,7 @@ Polish. The picture shows Home of a new vault, which begins with three cards.
 - **It does not understand your documents.** It cannot notice an instruction that somebody hid in
   a document, and it cannot tell a harmless passage from a sensitive one.
 - **It serves apps on this computer only.** Claude, ChatGPT or Grok in the browser or on a
-  phone, and Grok Bot, cannot use it.
+  phone, and Grok Bot, cannot be connected to it.
 - **It is a preview.** Nobody has yet used it by hand on a Mac, the forms for connecting apps were
   taken from each app's documentation and not tried in a real conversation, and nobody outside the
   project has audited it. "Connect" writes into another program's settings file. That write was
@@ -117,15 +117,18 @@ that real apps use.
 
 The demo opens on Home. Near its top stands a card marked "Demo", the demo's card. It says in
 one sentence where the demo is, and it changes as you go. It begins "Watch an app ask", with
-"Nothing here is real: the documents are invented and the apps are played by Locktender."
+"Nothing here is real: the documents are invented and the apps are played by Locktender." and,
+at this first moment only, "Some invented documents are set to be read without asking, so some
+rows appear without your yes."
 
-![Home of the demo while a passage waits: a notice about apps on this computer; under "Waiting for you" the approval card with the exact text that would be released and the buttons "Don’t release" and "Release once"; the demo's card, "Your turn"; the box "Ask your documents"; the four tiles under "Connect"; and three rows under "Recently given to apps"](images/gate-approval.png)
+![Home of the demo while a passage waits: under "Waiting for you" the approval card with the exact text that would be released and the buttons "Don’t release" and "Release once"; the demo's card, "Your turn"; the box "Ask your documents"; the four tiles under "Connect"; and three rows under "Recently given to apps"](images/gate-approval.png)
 
 Things to try:
 
 1. **Watch the page.** Under "Recently given to apps", rows arrive: "claude-desktop searched
    your documents: 4 results", then "claude-desktop read passage 4 of “lease-2025”", each with
-   how many characters left. Home shows the three newest, and "All activity" leads to all of
+   a number of characters, or with "no document text" for a search that quoted nothing. Home
+   shows the three newest, and "All activity" leads to all of
    them. Ten to twenty seconds after the start the played app asks for a passage of the tax
    note. A part "Waiting for you" appears with a card, the entry "Home" in the sidebar gets the
    number 1, and the demo's card says "Your turn". The title of the browser tab begins with
@@ -432,11 +435,13 @@ can ask for it yet." in a vault without an app, and later, for example, "Apps th
 it from now on: claude-desktop." It names the apps by the names they have in the vault, and not
 what each may do with the document: that is under Settings, on the page Apps. Adding a document
 never asks for the passphrase, so this is said where documents are added, here and on the page
-Documents. And where the file is now: "Sealed; your file is still where it was, not encrypted."
+Documents. And where the file is now: "A sealed copy is in the vault; your own file stays where
+it was, not encrypted."
 Then the two buttons give way to a line that counts, "1 document", and the box of the second
 card is ready for a question. Further documents are added on the page Documents.
 
-A file that is not added gets a line that begins "Not added:" and says why.
+A file that is not added gets a line that begins "Not added:" and says why. The line goes
+once a file you choose after it is sealed.
 
 | The line says | What to do |
 | --- | --- |
@@ -479,7 +484,7 @@ document. The six pages under Settings call it a collection and can make more of
 
 ### Ask your documents
 
-The second card is a box with the words "Ask and see what an app would get" and the button
+The second card is a box with the words "See what an app would get" and the button
 "Ask". Type a question about something that is in a document you added, in the document's own
 words, and press "Ask" or Return. Under the box a card marked "Trial" appears:
 
@@ -499,12 +504,14 @@ words, and press "Ask" or Return. Under the box a card marked "Trial" appears:
   agreement (invented)”", and the words of your question by which it was found: "Found by: the,
   rental, agreement, end". Read that line. A passage that was found by "the" alone is no
   answer. Where words you listed for replacement stand in the passage, a third line says how
-  many "were replaced by [REDACTED]".
+  many "were replaced by [REDACTED]". A short document is one passage, and the line then
+  says so in place of "passage 1 of 1": "654 characters · the whole document
+  “insurance-notes”".
 - **"This is a trial on this computer: nothing is sent and nothing is recorded."**
 - **The two buttons of a real card**, "Don’t release" and "Release once". Here they send
   nothing, and neither waits before it can be pressed. A press says what would have happened,
-  "A connected app could now read this text once, and Activity would list it when it does."
-  or "Nothing would have left the vault.", and offers "Ask something else". (A real "Release
+  "Nothing was released: this was a trial. A real request would now let the app read this
+  text once." or "Nothing would have left the vault.", and offers "Ask something else". (A real "Release
   once" sends nothing either: the text leaves when the app asks for the passage again.) While a real
   passage waits under "Waiting for you", the trial card has no buttons and says "A real request
   is waiting above.": a press that is harmless here must not become a habit for the card above
@@ -550,14 +557,14 @@ can write, and the fourth for every other app:
 | "Grok" | Grok Build, xAI's coding agent for the terminal | `~/.grok/config.toml` |
 | "Other app" | Any other app that starts local MCP servers | None. It shows text for you to paste |
 
-Under the tiles, once the vault holds a document, stands "Only apps installed on this computer
-can be connected, not websites, phone apps or Grok Bot."
+Under the tiles stands, from the first moment, "Only apps installed on this computer can be
+connected, not websites, phone apps or Grok Bot."
 [Connecting each app](#connecting-each-app) says why, and what each maker's documentation says
 about its program. None of this was tried with the apps themselves.
 
-A tile's second line is read from your vault and from nothing else. It says "Connect" while no
-app of the tile's name is in the vault, and then "Has not asked yet", "Last asked" with how long
-ago, or "Paused". No tile says that an app is connected: that would need a look at a file of
+A tile's second line is read from your vault and from nothing else. It says "Connect" (the
+fourth tile: "Connect via MCP") while no app of the tile's name is in the vault, and then
+"Waiting for its first request", "Last asked" with how long ago, or "Paused". No tile says that an app is connected: that would need a look at a file of
 another program, and such a file is looked at only when you press.
 
 **Press a tile.** A sheet opens, says "Looking at the settings file…" while Locktender reads
@@ -634,10 +641,10 @@ you press "Look again", and at no other time.
 | "Quit Claude Desktop first: Locktender creates the settings file … and adds itself to it." | The folder of the app is there and the file is not. "Connect" makes the file, with the entry alone. |
 | "Quit Claude Desktop first: the entry “locktender” in … points elsewhere, and Locktender points it here and keeps a copy." | An entry of that name starts something else: another vault, an earlier installation, another name. "Connect" changes its command and leaves what else the entry holds. |
 | "… already holds the entry “locktender”, so Locktender only starts answering Claude Desktop again." | The entry of this vault is in the file, and the app is not in your vault. "Connect" adds the app and writes nothing. |
-| "Quit Claude Desktop first: the entry “locktender” is no longer in …, and Locktender adds it again." | The app is in your vault, and the entry has gone from the file: the app wrote its file again, or somebody removed the entry. |
-| The app's name as the heading, and "The entry “locktender” is in …." | The app is in your vault and the entry is in the file. The sheet says when the app last asked and what the calling program said it is, or "Not asked yet: quit Claude Desktop fully, open it again, and start a question with the line below." It has "Disconnect" and no "Connect". Where it applies it adds "The entry also holds settings that Locktender did not write." or "The entry is switched off there (enabled = false): Claude Desktop will not start it." |
+| "Quit Claude Desktop first: the entry “locktender” is not in …, and Locktender adds it." | The app is in your vault, and the entry is not in the file: the app wrote its file again, somebody removed the entry, or the app was added with "Show the text to paste" and the text never reached this file. |
+| The app's name as the heading, and "The entry “locktender” is in …." | The app is in your vault and the entry is in the file. The sheet says when the app last asked and what the calling program said it is, or "Waiting for its first request" and under it "Quit Claude Desktop fully, open it again, and start a question with the line below." It has "Disconnect" and no "Connect". Where it applies it adds "The entry also holds settings that Locktender did not write." or "The entry is switched off there (enabled = false): Claude Desktop will not start it." |
 | "… already connects ChatGPT and Codex to this vault, under the name “codex”." | The one file of ChatGPT and Codex holds the entry under another name that is in your vault. Nothing is written. "To use this tile’s own name instead, remove the app “codex” in Settings and press the tile again." |
-| "The settings folder of Claude Desktop is not on this computer: …." | The app was never opened here, or is not installed. Locktender creates no folder. "If Claude Desktop is installed, open it once, then press “Look again”." |
+| "Claude Desktop seems not to be installed on this computer, or was never opened: its settings folder … is missing." | Locktender concludes that from the missing folder and creates none. "The website and the phone app cannot be connected, only the program installed here." Where the program is installed, open it once and press "Look again". |
 
 Under the first sentence the amber one changes with the vault. Where the app already holds "Can
 read": "Claude Desktop can read without asking you, and what it gets is sent to Anthropic and
@@ -667,15 +674,16 @@ adds "You can add the entry by hand: “Show the text to paste”."
 | "The file changed in the meantime, so nothing was written." | The file is no longer what the sheet showed you. Press "Look again" and read the sheet again. |
 | "Writing went wrong: nothing was connected, and your vault is as it was." | Press "Look again", or use "Show the text to paste". |
 | "Writing went wrong, but Claude Desktop was added to your vault and its settings file was not changed." | The sheet has "Disconnect" and "Look again". |
-| "Apps cannot connect to this installation yet, as the notice on Home says." | [Troubleshooting](#troubleshooting) has the two notices. |
+| "Apps cannot connect yet: a notice on Home says why, or Locktender is not installed in its own environment." | [Troubleshooting](#troubleshooting) has the two notices. Where Home shows neither, Locktender runs from a copy its own command cannot start (a `pip install --user` copy): `wdva gate config generic --client test` prints why, and [Install on a Mac](#install-on-a-mac) puts it right. |
 | "Your vault has an app named “claude-desktop” that is set up differently: change or remove it in Settings first." | An app of that name was added under Settings as an app on this computer, or with another receiver. A tile never changes what kind of app a name is. |
 
 **"Show the text to paste"** turns the sheet into the way by hand: "Put this text into …
 yourself: it holds no passphrase and no key." For an app that is not in your vault yet, "Add the
 app and show the text" adds it as "Connect" would, with "Ask me each time", and writes no file.
 The sheet then shows the place of the file, the text, each with "Copy", and one line that says
-where in the file the text goes, for example "Paste it inside “mcpServers”, after its opening
-brace." or "Paste it at the end of the file."
+where in the file the text goes, for example "There is no file, or it is empty: paste the text
+as the whole file.", "Paste it inside “mcpServers”, after its opening brace." or "Paste it at
+the end of the file."
 
 **"Disconnect"** is in the sheet of an app that is in your vault. It asks first, in a sheet
 "Disconnect Claude Desktop?": "Locktender removes its entry “locktender” from … and stops
@@ -692,14 +700,20 @@ Claude Desktop. The file was written, but the system did not let it be read back
 app already received stays where it was sent. Where "Disconnect" changes the file, it needs
 your passphrase like "Connect".
 
+What "Disconnect" leaves: both copies; the settings file itself, also one that "Connect" made,
+which then holds no entry and gets a copy of its own at the disconnect; and in your vault the
+group, which stays open to apps that send text to a provider although none holds it (under
+Settings, Documents, the switch "Hosted apps may be granted this collection").
+
 **"Other app"** opens the sheet "Other app (MCP)": "You paste a short text into your app’s MCP
 settings yourself, and Locktender writes nothing there." You give the app a "Name", of
 lower-case letters, digits and hyphens, and say "Who receives the text?", the company behind
-the app. Once both are filled in, the amber sentence names them, for example "Text that
+the app. A name of another form is answered under its field, "Use lower-case letters a–z,
+digits and hyphens, for example my-cursor.", and "Add" stays off. Once both are filled in, the amber sentence names them, for example "Text that
 claude-code receives from your documents is sent to Anthropic and cannot be recalled.", and
 "Add" adds the app with "Ask me each time" for your one group. The sheet then shows three texts,
 each with "Copy": "Command", "JSON for the app’s MCP settings" and "One line for Claude Code, in
-a terminal". The sheet lists the other apps of your vault under "Your other apps", each with
+a terminal". They are three forms of one thing: "Use the one your app asks for." The sheet lists the other apps of your vault under "Your other apps", each with
 "Text to paste"; behind that are the same three texts and "Remove this app". Both the name and
 the receiver are what you declared: Locktender cannot check either. An app whose model runs on
 this computer is not added here. The link "The app’s model runs on this computer" leads to the
@@ -938,7 +952,7 @@ not the one Grok Build reads. Three things to know, each from xAI's pages:
   not the program of your vault. (By OpenAI's documentation, Codex reads the settings of
   projects it trusts in the same way.)
 - "String fields such as `url`, `command`, `args`, `env`, and `headers` support `${VAR}`
-  expansion." A vault or a Python whose path holds `${` would reach Grok Build as something
+  expansion." (from the [settings reference](https://docs.x.ai/build/settings/reference)) A vault or a Python whose path holds `${` would reach Grok Build as something
   else, so for such a path the tile writes nothing and says so. Whether Grok Build also
   replaces `$NAME` or `~` is not said there, and was not tried.
 
@@ -954,10 +968,16 @@ limits, the same rows. Locktender cannot tell the two apart. The same page says 
 command in Terminal does not read that file; it is connected with the `claude-code` form.
 
 **Apps that cannot be connected.** According to their providers' documentation (`wdva gate
-config chatgpt-web` and the other three print the pages), Claude on the web or phone, ChatGPT on
-the web or phone, Grok on the web or phone, and Grok Bot only call servers that their provider's
-cloud can reach over the internet. This was not tried. If it is so, they cannot start a program
-on your computer, so they cannot reach your vault, and there is nothing to configure. The list
+config chatgpt-web` and the other three print the pages), Claude, ChatGPT and Grok on the web
+or phone only call servers that their provider's cloud can reach over the internet, and Grok
+Bot works on a computer in xAI's cloud. This was not tried. If it is so, none of them can
+start Locktender's program from an entry, and there is nothing to configure. One of them can
+reach this computer another way: by
+[xAI's page](https://docs.x.ai/grok-bot/approvals-security-and-privacy), as read on 2026-11-15,
+a Bot can be allowed to run commands on your own computer ("Execution on this computer"). A
+Bot you allow that is a program running as you, like any agent with a shell: it needs no
+entry, reads the files you can read, and can call the vault under any name that is answered
+("App names are labels" under [Limits you should know](#limits-you-should-know)). The list
 of apps on the page Apps under Settings and `wdva gate config` name them so that Locktender can
 say this; choosing one shows the explanation instead of a configuration. Home says it in the
 sentence under its tiles: "Only apps installed on this computer can be connected, not websites,
@@ -981,7 +1001,9 @@ apps. So answering both kinds at once is never what you get without asking for i
 
 Home has no such strip, and it adds no app whose model runs on this computer. It says when the
 choice is yours to make: "Apps on this computer get no answer until you choose in Settings,
-under “Apps and limits”, which apps are answered.", with the button "Settings". While "Both" is
+under “Apps and limits”, which apps are answered.", with the button "Settings". ("Apps on this
+computer" are here the apps you declared local, whose model runs on this computer, not every
+app that is installed on it. A demo does not show this line.) While "Both" is
 in force it says: "Both kinds of apps are answered together, so any program running as you can
 call under a local app’s name." And where a vault has only apps on this computer so far, the
 sheet of a tile says before the press what "Connect" brings: "After this, apps on this computer
@@ -1008,7 +1030,7 @@ Home is one column. A part that has nothing to show is not drawn. The picture un
   puts away.
 - "Apps on this computer get no answer until you choose in Settings, under “Apps and limits”,
   which apps are answered.", with the button "Settings"
-  ([Connecting each app](#connecting-each-app) says why).
+  ([Connecting each app](#connecting-each-app) says why). Not in a demo.
 - "Both kinds of apps are answered together, so any program running as you can call under a
   local app’s name."
 - "The vault’s folder looks synchronised, so its sealed files are copied to a provider and to
@@ -1026,8 +1048,9 @@ Home is one column. A part that has nothing to show is not drawn. The picture un
 beside it, three at most until you press "Show 2 more" (or however many there are).
 [Approvals](#approvals) describes the card. Under the cards, "Released, not read yet" lists what
 you released and the app has not fetched, for example "claude-desktop may read passage 2 of
-“tax-note-2025” once, until 6:10 PM", each with "Withdraw". While a passage waits, no button of
-the page is filled.
+“tax-note-2025” once, until 6:10 PM. Tell it: “try again”.", each with "Withdraw". The app gets
+nothing until it asks again. Where no card waits, that list stands under its own heading
+alone, without "Waiting for you". While a passage waits, no button of the page is filled.
 
 **"Ask your documents".** The box of [the first minutes](#ask-your-documents): a question, and
 the one passage an app would get for it. "Ask" is the one filled button of Home on a day when
@@ -1035,7 +1058,8 @@ nothing waits.
 
 **"Connect".** The four tiles, and under them "Only apps installed on this computer can be
 connected, not websites, phone apps or Grok Bot." A tile of an app that is in your vault says
-"Has not asked yet", "Last asked" with how long ago, or "Paused"; the tile "Other app" counts
+"Waiting for its first request", "Last asked" with how long ago, or "Paused"; the tile "Other
+app" counts
 the apps that are none of the three, for example "1 app". A press opens the tile's sheet, which
 looks at the app's settings file at that moment. For an app that is connected it says where the
 entry is, when the app last asked and what the calling program said it is, marked "unverified";
@@ -1047,10 +1071,16 @@ and of the ChatGPT desktop app with Codex.
 
 **"Recently given to apps".** The three newest answers that an app was given, once the vault
 has an app: a search, "claude-desktop searched your documents: 4 results", or a passage,
-"claude-desktop read passage 2 of “tax-note-2025”", with the number of characters and how long
-ago. A passage that was released by you carries the mark "After your yes". Until something
-left, the part says "Nothing has left yet." "All activity" leads to the page Activity. A press
-on a row opens the exact text that left. What is not in this list: an app's question about what
+"claude-desktop read passage 2 of “tax-note-2025”", with how much and how long ago. How much
+is counted in your own text: for a passage the characters of the passage itself, which is the
+figure its card showed; for a search the characters of its answer, or "no document text"
+where the answer held none (a search for an app that asks you each time says which passages
+hold its words and quotes nothing). A passage that was released by you carries the mark "After
+your yes". Until something left, the part says "Nothing has left yet." "All activity" leads to
+the page Activity. A press on a row opens the exact text that left. For a passage the panel
+says both figures, for example "654 characters of your document, 899 with the lines
+Locktender adds"; under a search without text of a document it says "This answer held no text
+of your documents." What is not in this list: an app's question about what
 it may use, which hands out no document text, the calls that were stopped, and your own changes.
 
 **The foot.** One link, "How it works and what it cannot do". That page is the one place of
@@ -1098,13 +1128,13 @@ buttons. "Cancel" drops the files: nothing was sent. Groups are made under Setti
 
 ### The page Activity
 
-![The page Activity in the demo with one row opened, "claude-desktop read passage 4 of “lease-2025”": beside the two rows of the list, a panel shows where the text went, what the calling program said it is, the exact text that left with its length, and the sentence "This text is with Anthropic now. Locktender cannot take it back."](images/gate-activity.png)
+![The page Activity in the demo with one row opened, "claude-desktop read passage 4 of “lease-2025”": beside the two rows of the list, a panel shows where the text went, what the calling program said it is, the exact text that left with its two lengths, "713 characters of your document, 945 with the lines Locktender adds", and the sentence "This text is with Anthropic now. Locktender cannot take it back."](images/gate-activity.png)
 
 The page has two lists and a switch between them. "Press a row to see the exact text that
-left."
+left.", and on the second list "Press a row to see what was asked and why it stopped."
 
 - **"Given to apps"**: each row is one answer that an app was given, a search or a passage, as
-  under "Recently given to apps" on Home, with the number of characters and how long ago. The
+  under "Recently given to apps" on Home, with how much and how long ago. The
   newest is on top, twenty at a time; "Show more" adds twenty, until the page says "That is
   everything."
 - **"Stopped"**: the calls that got nothing. Calls of one kind are one row, with a count such
@@ -1212,7 +1242,9 @@ The card, from top to bottom:
   you declared local "Stays here, if the app really is local"), what the calling program said it
   is ("Says it is claude-ai 1.2, unverified"), and when it asked ("Asked 5 minutes ago").
 - **"The exact text that would be released"**, in a box, and under it its size and its place in
-  the document: "661 characters · passage 2 of 3".
+  the document: "661 characters · passage 2 of 3", or for a document that is one passage "654
+  characters · the whole document". The box shows the whole text at every width of the
+  window.
 - **Two sentences that stay where you decide**: "Once released, this text is sent to Anthropic
   and cannot be recalled.", and "The name “claude-desktop” is a label: Locktender cannot check
   which program is asking." In one case a third stands under them: "The app’s limits would
@@ -1255,8 +1287,7 @@ Three details:
   46 characters left for the app, the read that followed the approval was refused as over the
   limit, and the approval stayed in the list of what was released and not read.
 - If the text of the passage changed between showing and pressing, nothing is released and the
-  card says "The text changed since it was shown, so nothing was released. Read it again before
-  you decide."
+  card says "The text changed since it was shown, so nothing was released. Read it again."
 - What you approve is what leaves, plus a few lines around it that name the document and count the
   release. [What an AI app sees](#what-an-ai-app-sees) shows them.
 
@@ -1714,10 +1745,11 @@ defects that wait for a fix.
   a vault you forgot is not open for longer than that. Change the span with `--lock-after`.
 - **Closing a collection to hosted apps takes it away from them.** Opening it again later gives it
   back to nobody. *For you:* after reopening, give the collection to each hosted app again.
-- **Web and phone assistants cannot use it.** According to their makers' documentation, Claude,
-  ChatGPT and Grok on the web or on a phone, and Grok Bot, work in their makers' clouds and
-  cannot start a program on your computer. Desktop apps and command-line agents on the same
-  computer can, according to theirs. None of this was tried.
+- **Web and phone assistants cannot be connected.** According to their makers' documentation,
+  Claude, ChatGPT and Grok on the web or on a phone, and Grok Bot, work in their makers'
+  clouds and cannot be connected. Desktop apps and command-line agents on the same computer
+  can, according to theirs. None of this was tried. A Grok Bot that you allow to run commands
+  on your computer is a program running as you (see "App names are labels" above).
 - **"Connect" changes a file that is not Locktender's.** It writes one entry into the settings
   file of an AI app and keeps up to two copies of that file beside it. The copies hold whatever
   the file held, the keys of other tools included, and they keep it after you took a key out of
@@ -1765,7 +1797,7 @@ is printed in Terminal, and the command ends.
 | You see | It means | What to do |
 | --- | --- | --- |
 | "That is not the code. Check the terminal and try again." | The pairing code was mistyped, or it is the code of an earlier start. | Type the code from the Terminal window in which Locktender runs now. |
-| "Pairing is switched off after five wrong codes." | Five wrong codes were sent since Locktender started, by you or by another program. | Quit Locktender with Ctrl-C and start it again. A tab that is paired already goes on working until then. |
+| "Pairing is off after five wrong codes. Quit Locktender in its terminal and start it again." | Five wrong codes were sent since Locktender started, by you or by another program. | Quit Locktender with Ctrl-C and start it again. A tab that is paired already goes on working until then. |
 | "Pair this browser" in a tab of a browser you paired before | The pairing belongs to the tab. A new tab or window has none. | Type the code from the Terminal window again. It is the same code until Locktender is restarted. |
 | "The session ended. Pair again." | Locktender was restarted and came back at the same address, so the open page reached it again. The pairing of the earlier run is gone. | Type the new code. The old one answers "That is not the code." |
 | A bar "Locktender is not answering, so what you see may be out of date.", and "State unknown" at the foot of the sidebar, where it said until when the vault is unlocked | The program in Terminal has stopped, or its window was closed. When it stops, the vault is locked. | Start it again. The bar has the command: "To start Locktender again, run this in a terminal:", with "Copy". A demo's bar has the first sentence alone: that command would not start a demo again. Without a fixed `--port` Locktender has a new address after a restart: open the one on the `open:` line and pair there. With the same address, the open page continues by itself and asks for the new code. |
@@ -1791,9 +1823,9 @@ is printed in Terminal, and the command ends.
 
 **The app does not see the tools, or the tools answer with a refusal.** Press the app's tile on
 Home. The sheet looks at the settings file again and says whether the entry is there; if it is
-gone, quit the app and press "Connect". If the entry is there and the sheet says "Not asked
-yet", it also says what to do: quit the app fully, open it again, and start a question with
-the line the sheet shows. For an app you connected by hand, go through these in order:
+gone, quit the app and press "Connect". If the entry is there and the sheet says "Waiting for
+its first request", it also says what to do: quit the app fully, open it again, and start a
+question with the line the sheet shows. For an app you connected by hand, go through these in order:
 
 1. **Did you restart the app** after changing its configuration? According to the
    [Model Context Protocol documentation](https://modelcontextprotocol.io/docs/2026-07-28/develop/connect-local-servers),
@@ -1856,11 +1888,11 @@ your own. It is not `wdva gate app`
 but the long form of it, which works whatever your PATH holds: the Python of the installation by
 its full path, `-m wdva gate app`, `--store` with the folder of the vault, and those of `--port`,
 `--lock-after`, `--no-browser` and `--window` that this run was started with. It never holds
-`--demo` or `--view`. For a vault in `/tmp/lt-guide/vault` that was started with `--lock-after
-2` it is this line, with the Python of the pip commands above:
+`--demo` or `--view`. For a vault in `/Users/you/vaults/tax` that was started with
+`--lock-after 2` it is this line, with the Python of the pip commands above:
 
 ```text
-/Users/you/.venvs/locktender/bin/python -m wdva gate app --store /tmp/lt-guide/vault --lock-after 2
+/Users/you/.venvs/locktender/bin/python -m wdva gate app --store /Users/you/vaults/tax --lock-after 2
 ```
 
 **`wdva gate mcp --client NAME`** is the program an AI app starts. It is not for people: it speaks
@@ -1953,6 +1985,19 @@ Tested:
   [the threat model](THREAT_MODEL.md#locktender). The changes themselves were not reviewed
   again. The reviews ran on Linux, as root, on the file systems ext4 and tmpfs. They could not
   try a Mac, any AI app, another file system, or a loss of power in the middle of a write.
+- Three more reviews, of the finished Home and the pages beside it, by automated assistants of
+  the same kind, each told to read as somebody else would: one went through the screens in
+  Chromium as a person who sees them for the first time, in both languages and in a window 400
+  px wide, with a script in the place of an AI app; one read the Polish texts key by key and on
+  pictures of the screens; one held these documents against the code and the running app. They
+  found one fault that hid text (in a window of 560 px or less the box of an approval card cut
+  off part of the text to be released, with no scrollbar in sight), figures and sentences that
+  said more than was true (a row counted the lines Locktender adds as text that left; a search
+  that quoted nothing stood there with a number of characters), and Polish sentences that were
+  wrong or could be read two ways. Each was changed, or is a decision that is left to the
+  owner of the project; the changes were not reviewed again. None of the three stands for what
+  is listed below as not tested: a person at a Mac, a person who writes Polish for a living,
+  somebody independent.
 - For this guide: the commands on this page were run on Linux, and the quoted outputs and figures
   are from those runs. The runs are those of the time each part was written; what the demo
   lists under [Try it in two minutes](#try-it-in-two-minutes) was looked at again on the last

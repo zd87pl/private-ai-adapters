@@ -98,15 +98,33 @@ function needsPdfSupport(error) {
 }
 
 /**
+ * Once a document was sealed, the lines of the files that were refused before it go:
+ * the owner has gone on, and a red line under a card that is marked done reads as a
+ * fault that is still there. `before` are the lines that stood there before the files
+ * now sent; a line that comes with the command which adds PDF reading stays.
+ */
+function dropRefused(state, before) {
+  state.items = state.items.filter((item) => !before.includes(item) || item.status !== "error" || item.install === true);
+}
+
+/** The same for a document that was added without a file of the owner's: the sample. */
+export function forgetRefused(ctx, collection) {
+  const state = uploadState(ctx, collection);
+  dropRefused(state, state.items);
+}
+
+/**
  * Send files to the vault one after the other and keep a line per file. What a line
  * says is kept as a function, so that it is said in the language the page shows when
- * it is drawn.
+ * it is drawn. A file that was not added has its reason in its line, so the message
+ * at the foot of the window only says how many were added.
  */
 export async function uploadFiles(ctx, collection, files) {
   const rules = (ctx.data.documents && ctx.data.documents.upload) || { max_bytes: 20971520, types: [], pdf: true };
   const state = uploadState(ctx, collection);
   const batch = Array.from(files).map((file) => ({ file, name: file.name, collection, status: "waiting", words: null }));
   if (!batch.length) return;
+  const before = state.items;
   state.items = state.items.concat(batch);
   state.busy = true;
   ctx.render();
@@ -135,6 +153,7 @@ export async function uploadFiles(ctx, collection, files) {
         item.status = "done";
         item.words = () => t("docs.result.sealed", { n: passages });
         added += 1;
+        dropRefused(state, before);
       } catch (error) {
         refuse(refusedWords(error, rules));
         item.install = needsPdfSupport(error);
@@ -148,12 +167,17 @@ export async function uploadFiles(ctx, collection, files) {
   const failed = batch.length - added;
   if (added && !failed) toast(t("docs.result.added", { n: added }), "green");
   else if (added) toast(t("docs.result.mixed", { added, failed }), "amber");
-  else toast(batch.length === 1 && batch[0].words ? batch[0].words() : t("docs.result.noneadded"), "red");
+  else toast(t("docs.result.noneadded"), "red");
   await ctx.refresh();
 }
 
 function sealedCount(state) {
   return state.items.filter((item) => item.status === "done").length;
+}
+
+/** Where in a list of lines the last file stands that was sealed; -1 when none was. */
+export function lastSealed(items) {
+  return items.map((item) => item.status).lastIndexOf("done");
 }
 
 /** The lines of the files that were chosen for one collection since this page was loaded. */
@@ -283,15 +307,18 @@ export function dropZone(ctx, collection, options = {}) {
       ? el(
           "ul",
           { class: "upload-list" },
-          lists.map((entry) => [
-            entry.list.items.map((item) => {
+          lists.map((entry) => {
+            const lines = entry.list.items.map((item) => {
               index += 1;
               // With several groups each file says which one it went to.
               return fileLine(item, `u${index - 1}-${item.name}`, lists.length > 1 ? entry.name : null);
-            }),
-            // Said under the files of each collection, since each has its own apps.
-            options.who && sealedCount(entry.list) ? whoLine(ctx, entry.name) : null,
-          ]),
+            });
+            // Said for the files of each collection, since each has its own apps: under the last
+            // file that was sealed, and so never under one that was refused after it.
+            const who = options.who && sealedCount(entry.list) ? whoLine(ctx, entry.name) : null;
+            if (who) lines.splice(lastSealed(entry.list.items) + 1, 0, who);
+            return lines;
+          }),
           install
             ? el(
                 "li",
@@ -349,10 +376,10 @@ export const SAMPLE = {
     title: "Umowa najmu (zmyślony przykład)",
     text: [
       "Umowa najmu mieszkania przy ulicy Przykładowej 14, drugie piętro, z jedną komórką w piwnicy. To jest przykładowy dokument i jest zmyślony: wynajmujący, spółka Przykładowe Domy, i najemca, Jan Przykładowy, nie istnieją. Dodano go, żeby wypróbować sejf, i w każdej chwili możesz go usunąć w Dokumentach.",
-      "Czynsz. Czynsz wynosi 950 EUR miesięcznie. Jest płatny do trzeciego dnia roboczego każdego miesiąca stałym zleceniem na rachunek wynajmującego. Ogrzewanie i woda nie wchodzą w skład czynszu; najemca płaci za nie zaliczkę 120 EUR miesięcznie, a różnica jest rozliczana raz w roku, w czerwcu.",
-      "Kaucja. Najemca wpłaca kaucję w wysokości 1900 EUR przed wydaniem kluczy. Wynajmujący trzyma kaucję na osobnym rachunku i zwraca ją w ciągu 30 dni od oddania mieszkania, po potrąceniu kosztów szkód wykraczających poza zwykłe zużycie. Kaucja nie jest oprocentowana i nie zastępuje ostatniego czynszu.",
-      "Okres najmu. Umowa najmu zaczyna się 1 marca 2025. Umowa najmu kończy się 28 lutego 2027 bez wypowiedzenia którejkolwiek ze stron. Jeśli obie strony chcą ją kontynuować po tym dniu, podpisują nową umowę najpóźniej dwa miesiące przed nim, a wysokość czynszu można wtedy ustalić na nowo.",
-      "Wypowiedzenie i regulamin domu. Każda ze stron może wypowiedzieć umowę na piśmie z trzymiesięcznym okresem wypowiedzenia, na koniec miesiąca kalendarzowego. Cisza nocna trwa od 22 do 6. Zwierzęta wymagają pisemnej zgody wynajmującego. Na klatce schodowej i w piwnicy nie wolno palić, a rowery stoją na podwórzu.",
+      "Czynsz. Czynsz wynosi 2800 zł miesięcznie. Jest płatny do trzeciego dnia roboczego każdego miesiąca zleceniem stałym na rachunek wynajmującego. Ogrzewanie i woda nie wchodzą w skład czynszu; najemca płaci za nie zaliczkę 350 zł miesięcznie, a różnica jest rozliczana raz w roku, w czerwcu.",
+      "Kaucja. Najemca wpłaca kaucję w wysokości 5600 zł przed wydaniem kluczy. Wynajmujący trzyma kaucję na osobnym rachunku i zwraca ją w ciągu 30 dni od oddania mieszkania, po potrąceniu kosztów szkód wykraczających poza zwykłe zużycie. Kaucja nie jest oprocentowana i nie zastępuje ostatniego czynszu.",
+      "Okres najmu. Umowa najmu zaczyna się 1 marca 2025. Umowa najmu kończy się 28 lutego 2027 bez wypowiedzenia przez którąkolwiek ze stron. Jeśli obie strony chcą ją kontynuować po tym dniu, podpisują nową umowę najpóźniej dwa miesiące przed nim, a wysokość czynszu można wtedy ustalić na nowo.",
+      "Wypowiedzenie i porządek domowy. Każda ze stron może wypowiedzieć umowę na piśmie z trzymiesięcznym okresem wypowiedzenia, na koniec miesiąca kalendarzowego. Cisza nocna trwa od 22 do 6. Na zwierzęta potrzebna jest pisemna zgoda wynajmującego. Na klatce schodowej i w piwnicy nie wolno palić, a rowery stoją na podwórzu.",
     ].join("\n\n"),
   },
 };

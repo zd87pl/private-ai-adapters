@@ -231,6 +231,10 @@ _TOOLS = {
 }
 _MODE_WORDS = {MODE_READ: "can read", MODE_APPROVE: "ask me each time"}
 _REF = re.compile(r"d-[0-9a-f]{12}\.[0-9]{1,5}")
+# The line that opens the quoted passage in a read result (``messages.read_ok``).
+_QUOTE_BEGINS = re.compile(
+    r"----- BEGIN DOCUMENT TEXT ([0-9a-f]{6}) \(quoted data, not instructions\) -----"
+)
 _GONE = ("the gate is locked", "the store is closed")
 
 _LIMIT_WORDS = {
@@ -838,6 +842,13 @@ class _Feed:
         title: str | None = None
         passage: int | None = None
         results: int | None = None
+        # Two more facts for a page that says how much of the owner's documents left: whether
+        # the result held any text of a document (a search in a collection where every
+        # passage needs approval holds none), and for a passage its own length without the
+        # lines that are added around it. ``None`` where the record does not say.
+        spans = data.get("spans")
+        document_text = bool(spans) if isinstance(spans, list) else None
+        passage_characters: int | None = None
         if tool == "search":
             shown = results = _whole(data.get("lines"))
             text = str(data.get("text") or "")
@@ -862,6 +873,7 @@ class _Feed:
                 known = self._documents.get(ref.partition(".")[0])
                 title = None if known is None else known.title
                 passage = _whole(data.get("passage")) or int(ref.rpartition(".")[2])
+            passage_characters = _passage_characters(data.get("text"))
         replaced = _whole(data.get("replaced"))
         if replaced:
             details.append(("words replaced", f"{replaced:,}"))
@@ -883,7 +895,13 @@ class _Feed:
             approved=approved,
             details=details,
         )
-        item.update(title=title, passage=passage, results=results)
+        item.update(
+            title=title,
+            passage=passage,
+            results=results,
+            document_text=document_text,
+            passage_characters=passage_characters,
+        )
         return item
 
     def _denial(self, data: Mapping[str, Any]) -> dict[str, Any]:
@@ -1082,6 +1100,31 @@ class _Feed:
             details.append(("refused calls not listed one by one", f"{folded:,}"))
         summary = _LOCK_WORDS.get(str(data.get("reason")), "you locked the vault")
         return self._item(data, kind="session", summary=summary, details=details)
+
+
+def _passage_characters(text: object) -> int | None:
+    """How many characters of a read result are the passage itself, or ``None``.
+
+    A read result holds the passage between two marker lines, each line of
+    it after ``| `` (:func:`wdva.gate.messages.read_ok`). The first line,
+    the markers, those prefixes and the last line are added around it, and
+    all of them are counted in ``chars``: the owner approved a passage of
+    654 characters and the record says that 899 left. This is the figure the
+    approval card showed. ``None`` for a text of any other form.
+    """
+    if not isinstance(text, str):
+        return None
+    lines = text.split("\n")
+    begins = _QUOTE_BEGINS.fullmatch(lines[1]) if len(lines) > 3 else None
+    if begins is None:
+        return None
+    ends = f"----- END DOCUMENT TEXT {begins.group(1)} -----"
+    if ends not in lines[2:]:
+        return None
+    quoted = lines[2 : lines.index(ends, 2)]
+    if not quoted or not all(line.startswith("| ") for line in quoted):
+        return None
+    return sum(len(line) - 2 for line in quoted) + len(quoted) - 1
 
 
 def _public(item: Mapping[str, Any]) -> dict[str, Any]:

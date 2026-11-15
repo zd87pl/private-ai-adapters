@@ -526,6 +526,12 @@
   min-width: 0;
 }
 
+/* The figures beside a heading of the panel can be a line of words: where they do not fit beside it, they stand under it. */
+.panel-section .mini-title {
+  flex-wrap: wrap;
+  gap: 2px 12px;
+}
+
 .gone {
   display: flex;
   align-items: flex-start;
@@ -2161,6 +2167,7 @@
 
   .sidebar .brand-name,
   .nav-label,
+  .nav-home-label,
   .sidebar .lock-state,
   .sidebar .lock-now .btn-label {
     position: absolute;
@@ -2540,7 +2547,8 @@ button.link {
 }
 
 @media (max-width: 560px) {
-  /* A card as narrow as a phone: the two answers share its width, and a long text scrolls inside its box. */
+  /* A card as narrow as a phone: the two answers share its width. The text keeps its whole
+     height at every width: what is released is read first, so no line of it may be out of sight. */
   .approval {
     padding: 16px 16px 10px;
   }
@@ -2548,9 +2556,5 @@ button.link {
   .approval-actions .btn {
     flex: 1 1 0;
     min-width: 0;
-  }
-
-  .approval-text .released {
-    max-height: calc(14 * 1.55em + 22px);
   }
 }

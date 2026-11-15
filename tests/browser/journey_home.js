@@ -552,9 +552,9 @@ async function runA(browser, files) {
     // Nothing is drawn twice: the box and the tiles stand in the cards, and no part of an ordinary day is there.
     check((await walk.count('#ask-input')) === 1 && (await walk.count('.tile')) === 4, 'the box or the tiles are drawn twice, or not at all');
     check((await walk.count('#home-ask-title, #home-connect-title, #home-left-title, #home-wait-title')) === 0, 'a part of an ordinary day is drawn beside the three cards');
-    // Two sentences at most: here one, since the second is about what can be connected once a document is there.
+    // Two sentences at most, and both from the first moment: the tiles can be pressed before a document is there, so what can be connected is said under them at once.
     const sentences = (await page.locator('#main .home-say').allTextContents()).map(trimmed);
-    check(JSON.stringify(sentences) === JSON.stringify([en('home.new.say.1')]), `the sentences of the new Home are ${JSON.stringify(sentences)}`);
+    check(JSON.stringify(sentences) === JSON.stringify([en('home.new.say.1'), en('home.connect.say.1')]), `the sentences of the new Home are ${JSON.stringify(sentences)}`);
     await saysText(walk, '#ask-nodocs', 'ask.say.1.nodocs');
     const all = await pressables(walk, 'body');
     const column = await pressables(walk, '#main');
@@ -583,12 +583,14 @@ async function runA(browser, files) {
     await page.locator('#first-count').waitFor({ state: 'visible', timeout: WAIT });
     await saysText(walk, '#first-count', 'home.new.card1.status', { n: 1 });
     await saysText(walk, '#first-sealed', 'home.new.result.sealed');
+    // The file that was refused before has been dealt with: no red line stays under a card that is marked done.
+    check((await walk.count('#first-add .upload-error')) === 0, 'the line of the refused Word file stays after a file was sealed');
     await says(page.locator('#first-add .upload-who'), en('docs.result.nobody'), 'the card does not say that no app can ask for the file yet');
     await eventually(() => focused(page.locator('#ask-input')), WAIT, 'the input of the box does not have the focus');
     check((await page.locator('#ask-input').inputValue()) === '', 'the box holds a question for a file of the owner\'s own');
     const filled = await page.locator('.btn-primary').evaluateAll((nodes) => nodes.filter((node) => node.getBoundingClientRect().width > 0).map((node) => node.textContent.trim()));
     check(filled.length === 0 || JSON.stringify(filled) === JSON.stringify([en('ask.button.ask')]), `the filled buttons are ${JSON.stringify(filled)}`);
-    // The second sentence of Home stands under the tiles now.
+    // The second sentence of Home stands under the tiles, as it did before the document.
     await saysText(walk, '#home-connect-say', 'home.connect.say.1');
     check((await walk.count('#main .home-say')) === 2, 'Home says more than two sentences');
     check(fs.existsSync(files.flat), 'the file the owner chose is gone');
@@ -711,7 +713,7 @@ async function runA(browser, files) {
     await escape(walk);
   });
 
-  await connectStep('A: the three cards go by themselves; the tile says "Has not asked yet", and its sheet says what to do then', async () => {
+  await connectStep('A: the three cards go by themselves; the tile says "Waiting for its first request", and its sheet says what to do then', async () => {
     await eventually(async () => (await walk.count('#first-title')) === 0, WAIT, 'the three cards are still there');
     check((await walk.state()).interface.setup === 'done', 'the app was not told that the first steps are done');
     await page.locator('#home-ask-title').waitFor({ state: 'visible', timeout: WAIT });
@@ -1559,6 +1561,9 @@ async function runE(browser, files) {
     await create(walk);
     await page.locator('#first-title').waitFor({ state: 'visible', timeout: WAIT });
     await saysText(walk, '#first-title', 'home.new.title', {}, 'pl');
+    // Polish keeps a word of one letter on the line of the word after it: the page puts a no-break space there, in the text of the table.
+    const firstSentence = (await page.locator('#first-say').textContent()) || '';
+    check(firstSentence.includes('i\u00a0dopiero'), `the first sentence does not bind "i" to the word after it: ${JSON.stringify(firstSentence)}`);
     await page.locator('#first-sample').click();
     await page.locator('#first-sample-said').waitFor({ state: 'visible', timeout: WAIT });
     await saysText(walk, '#first-sample-said', 'home.new.result.sample', {}, 'pl');
@@ -1597,6 +1602,9 @@ async function runE(browser, files) {
     await walk.counter.stop();
     judge(walk, 'connected', 'to "Connected", with the sample');
     await saysText(walk, 'dialog[open] #connect-result', 'connect.done.status.tried', { label: tile.label }, 'pl');
+    // The line the owner sends on to an AI app is the table's text as it stands: no no-break space is put into what is copied.
+    const sentOn = (await page.locator('dialog[open] .sheet-block .copy-line code').first().textContent()) || '';
+    check(sentOn.trim() === pl('connect.ask.start').trim() && !sentOn.includes('\u00a0'), `the line to copy is ${JSON.stringify(sentOn)}`);
     await walk.picture('h51-sheet-connected-polish');
     await escape(walk);
     written = entryIn(walk, file);

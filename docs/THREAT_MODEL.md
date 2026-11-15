@@ -915,8 +915,9 @@ Locktender composes it at start, from its own interpreter and the arguments it
 was started with. Nothing from a request, from the interface file, from a
 document or from an AI app goes into it. Whoever holds the session learns the
 two paths, which a program of the owner's account can see anyway; in a demo
-any program learns the path of that Python. The weak point is not what the
-command tells. It is text that the owner is asked to run, and the page shows
+any program learns the path of that Python and, where the demo was started
+with `--store`, the place of that folder, which the command carries. The weak
+point is not what the command tells. It is text that the owner is asked to run, and the page shows
 whatever command the newest answer on its address holds. So it matters who
 answers there: see "A tab left open" under [Known limits](#known-limits).
 
@@ -1035,8 +1036,9 @@ slowest after 1.02 seconds. Other ways of flooding the port were not tried. In
 the demo there is no pairing: any program on the computer is the owner at the
 demo's page, which is why the demo's vault holds invented documents and nothing
 else belongs in it. One thing there is not invented: such a program is told
-the full path of the Python that runs Locktender. A demo answers no look at a
-settings file, and neither the list of tiles nor the text to copy that it
+the full path of the Python that runs Locktender, and, where the demo was
+started with `--store`, the place of that folder, which the command carries.
+A demo answers no look at a settings file, and neither the list of tiles nor the text to copy that it
 answers names the place of one on this computer. An
 administrator is
 not "another user": root reads the files, the memory and the loopback traffic.
@@ -1416,9 +1418,11 @@ vault cannot do, the computer has to: a screen lock and full-disk encryption.
   Limits per name are meters, not walls between programs of one account.
 - **Where the original lies.** Locktender seals a copy of a document. The file
   the copy was made from stays where it was, not encrypted: adding a document
-  neither moves nor deletes it. The page says so under the files it has just
-  sealed ("A sealed copy goes into the vault, and the file you add stays where
-  it was, not encrypted."). It does not say which folders an AI app can read,
+  neither moves nor deletes it. The page says so where files are added: Home
+  under the file ("A sealed copy is in the vault; your own file stays where it
+  was, not encrypted."), the page Documents as its first sentence ("A sealed
+  copy goes into the vault, and the file you add stays where it was, not
+  encrypted."). It does not say which folders an AI app can read,
   and Locktender cannot know. An AI
   app that was given a folder reads the files in it by itself, without asking
   Locktender, and nothing it reads that way is limited, approved or recorded.
@@ -1438,8 +1442,9 @@ vault cannot do, the computer has to: a screen lock and full-disk encryption.
 - **The demo has no pairing.** Any program on the computer can act as the owner
   at the demo's page. The demo's vault holds invented documents; real documents
   do not belong in it. One thing such a program is told there is not
-  invented: the full path of the Python that runs Locktender. A demo answers
-  no look at a settings file, and neither the list of tiles nor the text to
+  invented: the full path of the Python that runs Locktender, and, where the
+  demo was started with `--store`, the place of that folder, which the command
+  carries. A demo answers no look at a settings file, and neither the list of tiles nor the text to
   copy that it answers names the place of one on this computer: a place could
   tell where `XDG_CONFIG_HOME` or `GROK_HOME` point. A
   demo that was killed leaves its temporary vault behind. A later demo removes
@@ -1503,8 +1508,8 @@ vault cannot do, the computer has to: a screen lock and full-disk encryption.
   the same name, and "a project server with the same name as a user one
   replaces it entirely": in a folder whose settings define an entry named
   like Locktender's, the program behind that name is the project's; it sees
-  the question and answers what it likes. Codex reads the settings of trusted
-  projects in the same way. Grok Build also loads the entries that Claude
+  the question and answers what it likes. By OpenAI's documentation, Codex
+  reads the settings of trusted projects in the same way. Grok Build also loads the entries that Claude
   Code keeps in `~/.claude.json`: until it has its own entry, or the owner
   sets `mcps = false` under `[compat.claude]`, a request from it arrives
   under the name `claude-code`, and the card shows Anthropic as the receiver

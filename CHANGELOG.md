@@ -42,12 +42,14 @@ changes only when the bytes on disk do.
   of your own.
 - **The page: Home, Documents, Activity and Settings.** Home shows what waits
   for your yes, a box that asks your documents, four tiles that connect an
-  app, and the three passages that left last, each with its exact text one
-  press away. Home changes few things: it adds a document, connects an app
+  app, and the three answers apps were given last, each with its exact text
+  one press away. Home changes few things: it adds a document, connects an app
   with one kind of access, "Ask me each time", and disconnects it. Documents
   adds and removes documents and says, under what you added, which apps can
-  ask for it. Activity lists every passage that left and, under "Stopped",
-  the calls that were stopped. Settings keeps the language, the page to open
+  ask for it. Activity lists every answer an app was given and, under
+  "Stopped", the calls that were stopped. A row counts in your own text: a
+  passage by its own length, which is the figure its card showed, and a
+  search whose answer held no text of a document says "no document text". Settings keeps the language, the page to open
   on and the command that starts the app again, and leads to six pages with
   every setting, Overview, Activity, Approvals, Documents, Apps and Vault,
   which are in English: "Can read", limits, pauses, a second group of
@@ -140,6 +142,9 @@ changes only when the bytes on disk do.
   `no_copy`, `failed`, `expands`, `unstable`, `moved`, `other_kind`,
   `not_ready`) or answers 409 `changed` for a file that is not what the owner
   was shown; in a demo the three routes answer 409 `demo`. An upload that is refused carries a word for why in `reason`.
+  An entry of the kind `release` in `GET /api/activity` says in two more
+  fields how much of it was text of a document: `document_text`, and for a
+  passage `passage_characters`, its length without the lines added around it.
   A `policy` entry of the record whose `by` begins with `connect` or
   `disconnect` says that a settings file was about to be changed, or was
   left; its policy can be the one that was in force before, which a version

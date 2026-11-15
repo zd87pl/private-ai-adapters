@@ -329,6 +329,7 @@ UNITS: dict[str, tuple[str, ...]] = {
     "the connect sheet, by hand": ("connect.hand",),
     'the sheet "Disconnect ...?"': ("disconnect",),
     'the sheet "Other app"': ("custom",),
+    'the sheet "Other app", the texts of one app': ("custom.texts",),
     "Settings": ("settings",),
     "the passphrase sheet": ("reauth",),
     "the demo's note": ("demo",),
@@ -360,7 +361,14 @@ SENT_ON = {"ask.sample.question", "connect.ask.start"}
 # Then three sentences the connect sheets lacked, raised on purpose by what they add: a file
 # that was written and could not be read back (14 words), a linked folder whose place the
 # system would not tell (15), and a file that was being written while it was read (12).
-WORDS_AT_MOST = 2769
+# Then 105 more for what three readers of the finished page found missing or untrue, raised on
+# purpose: nine texts that were not there (a passage that is its whole document, on the card
+# and on the trial card, 13; a search without text of a document, in its row and its panel,
+# 11; a passage's own length beside the length of what left, 11; the first moment of the demo,
+# 17; a name the fourth tile does not take, 10; which of three texts to paste, 7; what a
+# stopped row shows, 12), "Tell it: try again" in the line of a release that was not read yet
+# (4), and 20 where a sentence was made true or plain at the cost of words.
+WORDS_AT_MOST = 2874
 
 
 def unit_of(stem: str) -> list[str]:
@@ -396,6 +404,10 @@ def test_the_text_budget() -> None:
         allowed = 3 if unit == "the approval card" else 2
         if unit.startswith("the demo's card, guide."):
             allowed = 1  # with the card's second sentence: two
+        if unit == "the demo's card, guide.watch":
+            # The first moment shows no command yet, so the card's second sentence is not
+            # there: it has a second one of its own, about rows that appear without a yes.
+            allowed = 2
         assert len(held) <= allowed, f"{unit} has {len(held)} sentences: {sorted(held)}"
     for language, table in read.items():
         for key, value in table.items():
@@ -528,9 +540,12 @@ REQUIRED_TEXTS = {
 
 # What a press on "Release once" under a trial says, word for word. It must not say that the
 # text "would now be with" a provider: after a real release nothing has left until the app
-# asks again, and Activity lists the passage when it is read, not before.
+# asks again. And it says first that nothing was released: beside a real line "may read
+# passage 1 once", a sentence that began "A connected app could now read this text" was
+# taken for a fact about the app that is connected.
 AFTER_A_TRIAL_YES = (
-    "A connected app could now read this text once, and Activity would list it when it does."
+    "Nothing was released: this was a trial. "
+    "A real request would now let the app read this text once."
 )
 TRIAL_COUNTS = {
     "ask.status.count": "{n} trial questions since the vault was unlocked.",
@@ -603,13 +618,15 @@ def test_what_a_trial_says_after_a_yes_and_of_its_counts() -> None:
         said = table["ask.result.yes"]
         assert isinstance(said, str)
         where = f"{TABLES[language]} ask.result.yes"
-        # One sentence of at most 20 words, without a semicolon, as a counted sentence is.
-        assert (sentences(said), ";" in said) == (1, False), where
+        # Two sentences, 20 words at most together, without a semicolon. The first says that
+        # nothing was released, the second what a real request would have brought.
+        assert (sentences(said), ";" in said) == (2, False), where
         assert words(said) <= 20, where
         for untrue in ("would now be with", "byłby już u", "is now with", "jest już u"):
             assert untrue not in said, f"{where} says that the text has left: {untrue}"
     assert read["pl"]["ask.result.yes"] != AFTER_A_TRIAL_YES
-    assert "Aktywność" in str(read["pl"]["ask.result.yes"])
+    assert str(read["en"]["ask.result.yes"]).startswith("Nothing was released: this was a trial.")
+    assert str(read["pl"]["ask.result.yes"]).startswith("Nic nie udostępniono: to była próba.")
     # The two counts: since the unlock, and since the app was started. The same words but
     # for what they count from, with the number in each form.
     for key, text in TRIAL_COUNTS.items():
@@ -745,6 +762,7 @@ ABOUT_OTHER_PROGRAMS = {
     "connect.on.say.1.session",
     "connect.on.status.off",
     "connect.as.say.1",
+    "connect.nofolder.say.1",
     "connect.nofolder.say.2",
     "connect.expands.say.1",
     "connect.refused.say.1.moved",

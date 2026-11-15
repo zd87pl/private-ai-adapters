@@ -252,13 +252,22 @@ export function rowSentence(item, passages = null) {
   return known ? t("row.read", { app, passage: known.passage, title: known.title }) : t("row.read.plain", { app });
 }
 
+/** Whether an entry is a search whose answer held no text of a document: only which passages hold the words. */
+export function withoutDocumentText(item) {
+  return item.tool === "search" && item.document_text === false;
+}
+
 /**
  * One row of what was given to apps or of what was stopped: its sentence, then how
- * much and when. A press opens the details of its entry.
+ * much and when. How much is counted in the owner's own text: for a passage its own
+ * length, which is the figure its card showed, and for a search whose answer held no
+ * text of a document the words that say so. A press opens the details of its entry.
  */
 export function activityRow(ctx, item) {
   const selected = Boolean(ctx.panel && ctx.panel.seq === item.seq);
   const stopped = item.kind === "refusal";
+  const none = withoutDocumentText(item);
+  const characters = typeof item.passage_characters === "number" ? item.passage_characters : item.characters;
   const time = (stopped && item.last_time) || item.time;
   return el(
     "li",
@@ -278,7 +287,8 @@ export function activityRow(ctx, item) {
         { class: "row-sub" },
         item.approved === true ? chip(t("row.chip.approved"), "quiet", "check") : null,
         stopped && item.count > 1 ? el("span", { class: "row-times" }, t("row.status.times", { n: item.count })) : null,
-        !stopped && item.characters > 0 ? el("span", { class: "row-chars" }, t("row.status.chars", { n: item.characters })) : null,
+        !stopped && none ? el("span", { class: "row-chars" }, t("row.status.notext")) : null,
+        !stopped && !none && characters > 0 ? el("span", { class: "row-chars" }, t("row.status.chars", { n: characters })) : null,
         el("time", { class: "row-time", datetime: time, title: whenFull(time) }, agoShort(time, ctx.now)),
       ),
     ),
@@ -330,7 +340,8 @@ export function activityPage(ctx) {
           onchange: (tab) => ctx.showRows(tab),
         }),
       ),
-      el("div", { class: "says", key: "says" }, el("p", null, t("activity.say.1"))),
+      // What a press on a row shows: the text that left, or for a call that was stopped what was asked and why.
+      el("div", { class: "says", key: "says" }, el("p", null, t(shown === "refusal" ? "activity.say.1.stopped" : "activity.say.1"))),
       content,
       el("p", { class: "page-more", key: "full" }, el("a", { class: "link", id: "activity-full", href: "#/pro/activity" }, t("activity.button.full"))),
     ],

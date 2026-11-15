@@ -22,7 +22,7 @@ import { api } from "./api.js";
 import { openConnect, openCustom } from "./connect.js";
 import { el, icon } from "./dom.js";
 import { agoShort, megabytes, num, parseTime } from "./format.js";
-import { SAMPLE, fileLine, loadingBlock, sampleOf, sessionFiles, uploadFiles, whoLine } from "./manage.js";
+import { SAMPLE, fileLine, forgetRefused, lastSealed, loadingBlock, sampleOf, sessionFiles, uploadFiles, whoLine } from "./manage.js";
 import { activityRow, addToWhichGroup } from "./pages.js";
 import { button, chip, copyLine, errorText, pathText, toast, toastError } from "./parts.js";
 import { language, t } from "./texts.js";
@@ -174,13 +174,22 @@ function notice(ctx, warning) {
 }
 
 /**
+ * Whether Home says that apps whose model runs on this computer wait for the owner's
+ * choice. Never in a demo: its apps are played, its vault is deleted when it stops,
+ * and a warning to change a setting would be the first thing a new person reads.
+ */
+function choiceNoticed(ctx) {
+  return Boolean(ctx.state.serving && ctx.state.serving.choice_needed) && ctx.state.demo !== true;
+}
+
+/**
  * The notices: one line per warning of the state, one when apps on this computer wait
  * for the owner's choice, and one when calls were stopped in the last 24 hours.
  * Nothing is drawn when there is none.
  */
 function notices(ctx) {
   const lines = warningsShown(ctx).map((warning) => notice(ctx, warning));
-  if (ctx.state.serving && ctx.state.serving.choice_needed) {
+  if (choiceNoticed(ctx)) {
     lines.push(
       el(
         "li",
@@ -209,7 +218,7 @@ function notices(ctx) {
 /** What stands above the cards and can come or go, in one text: a change of it makes "Release once" wait again. */
 function noticesSignature(ctx) {
   const codes = warningsShown(ctx).map((warning) => `${warning.code}${ctx.ui.openWarnings.has(warning.code) ? "+" : ""}`);
-  if (ctx.state.serving && ctx.state.serving.choice_needed) codes.push("choice");
+  if (choiceNoticed(ctx)) codes.push("choice");
   if (stopsOfTheDay(ctx) > 0) codes.push("stops");
   return codes.join(",");
 }
@@ -237,8 +246,9 @@ function waitingSaid(ctx, waiting) {
 /**
  * "Waiting for you": the cards of the passages that wait, three at first, and under
  * them what was released and not read yet. Drawn only when there is one of the two.
- * The cards come from the one function that draws cards, with everything near them
- * that this page can change.
+ * Where no card waits, what was released and not read yet stands under its own
+ * heading alone: nothing waits for the owner then. The cards come from the one
+ * function that draws cards, with everything near them that this page can change.
  */
 function waitingPart(ctx, problem) {
   const data = ctx.data.approvals;
@@ -261,6 +271,7 @@ function waitingPart(ctx, problem) {
   const said = el("p", { class: "sr-only", role: "status", "aria-live": "polite", key: "said" }, waitingSaid(ctx, data ? data.waiting.length : null));
   if (drawn === null || (drawn.cards.length === 0 && !drawn.granted)) return said;
   const waiting = data.waiting.length;
+  if (drawn.cards.length === 0) return [said, el("div", { class: "approval-stack", key: "home-granted" }, drawn.granted)];
   return [
     said,
     part(
@@ -422,7 +433,8 @@ function trialCard(ctx) {
     el(
       "div",
       { class: "trial-facts" },
-      el("p", { id: "trial-meta" }, t("ask.status.meta", { n: passage.characters, passage: passage.passage, passages: passage.passages, title: passage.title })),
+      // A document of one passage: "passage 1 of 1" would hide that this is all of it.
+      el("p", { id: "trial-meta" }, t(passage.passages === 1 ? "ask.status.meta.whole" : "ask.status.meta", { n: passage.characters, passage: passage.passage, passages: passage.passages, title: passage.title })),
       // By which words of the question it was found: a passage found by "is" alone must not look like an answer.
       passage.words && passage.words.length ? el("p", { id: "trial-words" }, t("ask.status.words", { words: passage.words.join(", ") })) : null,
       passage.replaced > 0 ? el("p", { id: "trial-replaced" }, t("ask.status.replaced", { n: passage.replaced })) : null,
@@ -523,7 +535,8 @@ function tile(ctx, entry, apps) {
     on = Boolean(app);
     if (!app) line = t("tile.status.connect");
     else if (app.paused) line = t("tile.status.paused");
-    else if (app.last_seen && app.last_seen.time) line = t("tile.status.seen", { ago: agoShort(app.last_seen.time, ctx.now) });
+    // How long ago stays on one line: a number never parts from its unit.
+    else if (app.last_seen && app.last_seen.time) line = t("tile.status.seen", { ago: agoShort(app.last_seen.time, ctx.now).replace(/ /g, "\u00a0") });
     else line = t("tile.status.never");
   }
   const id = `tile-${entry.tile}`;
@@ -544,13 +557,18 @@ function tile(ctx, entry, apps) {
   );
 }
 
-/** The four tiles, in the order the app names them, and under them the sentence about what can be connected. */
-function tiles(ctx, sentence) {
+/**
+ * The four tiles, in the order the app names them, and under them the sentence about
+ * what can be connected. It stands there from the first moment: the tiles can be
+ * pressed before the vault holds a document, by a person who uses an AI app on a
+ * website and would otherwise learn from a sheet that this is no way.
+ */
+function tiles(ctx) {
   const data = ctx.data.apps;
   if (!data) return loadingBlock();
   return [
     el("div", { class: "tiles", key: "tiles" }, (data.tiles || []).map((entry) => tile(ctx, entry, data.apps))),
-    sentence ? el("p", { class: "home-say", id: "home-connect-say", key: "say" }, t("home.connect.say.1")) : null,
+    el("p", { class: "home-say", id: "home-connect-say", key: "say" }, t("home.connect.say.1")),
   ];
 }
 
@@ -663,6 +681,8 @@ async function addSample(ctx, group) {
   try {
     await api.addDocument(group, sample.file, sample.text);
     first.sample = sample.title;
+    // A file that was refused before has been dealt with: its line goes.
+    forgetRefused(ctx, group);
     // The box then holds the sample question, whatever was typed into it before.
     ctx.ui.home.ask.typed = false;
   } catch (error) {
@@ -700,6 +720,8 @@ function addCard(ctx, facts) {
     for (const item of sessionFiles(ctx, name)) chosen.push({ item, group: name });
   }
   const sealed = chosen.filter((entry) => entry.item.status === "done");
+  // How many of the lines stand above what is said of the sealed files: all up to the last file that was sealed.
+  const said = lastSealed(chosen.map((entry) => entry.item)) + 1;
   // The command that adds what reads PDFs, shown once where a file was refused for the lack of it.
   const install = chosen.some((entry) => entry.item.install) && typeof rules.install === "string" ? rules.install : "";
   const held = documentsHeld(ctx);
@@ -750,12 +772,14 @@ function addCard(ctx, facts) {
       ? el(
           "ul",
           { class: "upload-list first-files", key: "files" },
-          chosen.map((entry, index) => fileLine(entry.item, `u${index}-${entry.item.name}`, groups.length > 1 ? entry.group : null)),
+          // What is said of the sealed files stands under the last of them, never under a file that was refused after it.
+          chosen.slice(0, said).map((entry, index) => fileLine(entry.item, `u${index}-${entry.item.name}`, groups.length > 1 ? entry.group : null)),
           sample ? el("li", { class: "upload upload-done", id: "first-sample-said", key: "sample" }, icon("check"), el("span", { class: "upload-text" }, el("span", { class: "upload-note" }, t("home.new.result.sample")))) : null,
           who.map((name) => whoLine(ctx, name)),
-          install ? el("li", { class: "upload-install", key: "install" }, el("span", { class: "upload-install-label" }, t("docs.label.install")), copyLine(ctx, "install-copy-first", install, t("docs.label.install"))) : null,
           // Said once: a sealed copy is in the vault, and the file that was chosen is still where it was.
           sealed.length ? el("li", { class: "upload-said", key: "outside" }, el("p", { class: "first-sealed", id: "first-sealed" }, t("home.new.result.sealed"))) : null,
+          chosen.slice(said).map((entry, index) => fileLine(entry.item, `u${said + index}-${entry.item.name}`, groups.length > 1 ? entry.group : null)),
+          install ? el("li", { class: "upload-install", key: "install" }, el("span", { class: "upload-install-label" }, t("docs.label.install")), copyLine(ctx, "install-copy-first", install, t("docs.label.install"))) : null,
         )
       : null,
   );
@@ -793,8 +817,8 @@ function firstSteps(ctx) {
     reads ? null : el("p", { class: "home-say", id: "first-say", key: "say" }, t("home.new.say.1")),
     addCard(ctx, facts),
     el("section", { class: "first-card", id: "first-ask", key: "first-ask" }, cardHead(2, facts.asked, t("home.ask.title")), asker(ctx)),
-    // The tiles can be pressed from the first moment. The sentence under them is drawn once the vault holds a document.
-    el("section", { class: "first-card", id: "first-connect", key: "first-connect" }, cardHead(3, facts.app, t("home.new.card3.title")), tiles(ctx, facts.document)),
+    // The tiles can be pressed from the first moment, and the sentence under them says from then on what can be connected.
+    el("section", { class: "first-card", id: "first-connect", key: "first-connect" }, cardHead(3, facts.app, t("home.new.card3.title")), tiles(ctx)),
   );
 }
 
@@ -851,6 +875,13 @@ const GUIDE = {
   read: { title: "guide.read.title", say: "guide.read.say.1", again: false },
   asked: { title: "guide.asked.title", say: "guide.asked.say.1", again: true },
 };
+
+/**
+ * The second sentence of the first moment: some of the invented documents are read
+ * without asking, so rows stand under "Recently given to apps" before the owner has
+ * said yes to anything. The other moments have none of their own.
+ */
+const GUIDE_MORE = { watch: "guide.watch.say.2" };
 
 /**
  * "Have the played app ask again": what telling a real app "try again" is. The app
@@ -924,6 +955,7 @@ function demoCard(ctx) {
       }),
     ),
     words ? el("p", { class: "guide-say", id: "guide-say", key: "say" }, t(words.say)) : loadingBlock(),
+    beat === "watch" ? el("p", { class: "guide-say", id: "guide-say-2", key: "say-2" }, t(GUIDE_MORE.watch)) : null,
     words && words.again
       ? el(
           "div",
@@ -956,7 +988,7 @@ export function homePage(ctx, problem) {
         ? firstSteps(ctx)
         : [
             part("home-ask", t("home.ask.title"), null, asker(ctx)),
-            part("home-connect", t("home.connect.title"), null, tiles(ctx, true)),
+            part("home-connect", t("home.connect.title"), null, tiles(ctx)),
             // What was given to apps is not drawn while the three cards are.
             leftPart(ctx),
           ],

@@ -87,6 +87,29 @@ function written(value) {
   return String(value);
 }
 
+/** The two texts the owner sends on to an AI app: they are copied and typed exactly as the table has them. */
+const SENT_ON = ["ask.sample.question", "connect.ask.start"];
+
+/** Polish texts that were bound already, by the text of the table. */
+const bound = new Map();
+
+/**
+ * A Polish text of the table as Polish is set: a word of one letter ("i", "w", "z",
+ * "a", "o", "u") stays on the line of the word after it, and a number on the line of
+ * its noun. The space between them becomes a no-break space (U+00A0). Only the text
+ * of the table is changed, never a value that is put into it. Twice, because a word
+ * that follows one that was just bound is not seen the first time.
+ */
+function bind(text) {
+  let made = bound.get(text);
+  if (made === undefined) {
+    const one = /(^|[\s(„])([aiouwz]) /gi;
+    made = text.replace(one, "$1$2\u00a0").replace(one, "$1$2\u00a0").replace(/\{n\} /g, "{n}\u00a0");
+    bound.set(text, made);
+  }
+  return made;
+}
+
 /**
  * The text of a key in the language shown. `values` fills its places: `{app}` takes
  * `values.app`. `{product}` needs no value, and neither does `{entry}`, the name the
@@ -100,6 +123,7 @@ export function t(key, values = {}) {
   let found = own.call(TABLES[shown], key) ? TABLES[shown][key] : own.call(ENGLISH, key) ? ENGLISH[key] : null;
   if (found !== null && typeof found === "object") found = found[plural(shown, values.n)] || found.other;
   if (typeof found !== "string") return `⟦${key}⟧`;
+  if (shown === "pl" && !SENT_ON.includes(key)) found = bind(found);
   // A place is "{" and lower-case letters and "}", so a text may hold "${" untouched.
   return found.replace(/(\$?)\{([a-z]+)\}/g, (whole, dollar, name) => {
     if (dollar) return whole;

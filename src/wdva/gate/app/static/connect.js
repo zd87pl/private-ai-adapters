@@ -709,6 +709,8 @@ function drawCustom(ctx, sheet, view) {
       sheetHead(el("span", { class: "mono" }, view.name)),
       view.failed ? el("p", { class: "field-error", id: "custom-error", key: "error", role: "alert" }, errorText(view.failed)) : null,
       !texts && !view.failed ? el("p", { class: "sheet-looking", key: "looking", role: "status" }, el("span", { class: "spinner" }), t("common.status.loading")) : null,
+      // Three forms of the same thing: one of them is used, the one the app asks for.
+      texts ? say("custom-texts-say", t("custom.texts.say.1")) : null,
       texts && texts.command ? copyBlock(local, "custom-command-copy", t("custom.label.command"), texts.command.text) : null,
       texts && texts.json ? copyBlock(local, "custom-json-copy", t("custom.label.json"), texts.json.text) : null,
       texts && texts.line ? copyBlock(local, "custom-line-copy", t("custom.label.claudecode"), texts.line.text) : null,
@@ -724,6 +726,10 @@ function drawCustom(ctx, sheet, view) {
   const destination = form.destination.trim();
   const fits = NAME_PATTERN.test(form.name);
   const ready = fits && Boolean(destination);
+  // A name that does not fit keeps "Add" off: the field says so in red, with a name that would do.
+  let nameError = "";
+  if (form.taken && form.taken === form.name) nameError = t("custom.error.taken", { name: form.taken });
+  else if (form.name && !fits) nameError = t("custom.error.name");
   return el(
     "form",
     {
@@ -762,7 +768,7 @@ function drawCustom(ctx, sheet, view) {
       label: t("custom.label.name"),
       id: "custom-name",
       hint: t("custom.status.name"),
-      error: form.taken && form.taken === form.name ? t("custom.error.taken", { name: form.taken }) : "",
+      error: nameError,
       control: el("input", {
         type: "text",
         id: "custom-name",

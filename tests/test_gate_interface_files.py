@@ -773,9 +773,11 @@ WITHOUT_A_RULE = {
     "limits-form",
     "link-rows",
     "meter-calm",
-    "nav-home-label",
     "note-plain",
     "panel-nothing",
+    # The mark of a text that leaves or left, by which the walk-throughs find it. Its one rule
+    # was a greatest height on a narrow card, which hid part of the text to be released.
+    "released",
     "row-chars",
     "row-item",
     "row-time",
@@ -1583,8 +1585,13 @@ def test_adding_to_one_of_several_groups_chooses_no_group_for_the_owner() -> Non
 def test_after_a_sealed_file_the_page_says_which_apps_can_ask_for_it() -> None:
     manage = without_comments(scripts()["manage.js"])
     zone = function_body(manage, "export function dropZone(ctx, collection, options = {}) {")
-    wanted = "options.who && sealedCount(entry.list) ? whoLine(ctx, entry.name) : null,"
+    wanted = "const who = options.who && sealedCount(entry.list) ? whoLine(ctx, entry.name) : null;"
     assert wanted in zone
+    # It stands under the last file that was sealed, never under one that was refused after it.
+    assert "if (who) lines.splice(lastSealed(entry.list.items) + 1, 0, who);" in zone
+    assert 'return items.map((item) => item.status).lastIndexOf("done");' in function_body(
+        manage, "export function lastSealed(items) {"
+    )
     # It stands above the note about the file that was left outside, which is said once.
     assert zone.index(wanted) < zone.index('note("amber", t("docs.say.1"))')
     # The line is one of two texts of the tables, and it is never left out: either apps are
@@ -2299,7 +2306,7 @@ def test_setting_up_ends_by_itself_only_where_the_app_keeps_that_word() -> None:
     assert "const first = firstOpen(ctx);" in page
     assert page.index("? firstSteps(ctx)") < page.index('part("home-ask", ')
     assert home.count("asker(ctx)") == 3  # its definition, card 2, the part of an ordinary day
-    assert home.count("tiles(ctx, ") == 3  # its definition, card 3, the part of an ordinary day
+    assert home.count("tiles(ctx)") == 3  # its definition, card 3, the part of an ordinary day
     cards = function_body(home, "function firstSteps(ctx) {")
     assert 'id: "first-hide",' in cards
     assert "const failed = await firstDone(ctx);" in cards
@@ -2409,6 +2416,185 @@ def test_the_trial_card_shows_the_whole_passage() -> None:
         'el("code", null, passage.body)),'
     ) in card
     assert "white-space: pre-wrap;" in css_rules("base.css", ".code-wrap")[0]
+
+
+def test_the_approval_card_shows_the_whole_text_at_every_width() -> None:
+    # In a window of 560 px or less the box of "The exact text that would be released" had a
+    # greatest height: 448 px of text stood in 280 px with no scrollbar in sight, the last line
+    # cut in half, and "Release once" could be pressed without scrolling. No stylesheet gives
+    # the text of a card a height of its own: the card grows with its text, as the trial card.
+    for name in ("base.css", "app.css", "home.css"):
+        css = without_comments(read(STATIC / name))
+        found = re.findall(r"(?m)^\s*([^{}\n]*) \{\n([^}]*)\}", css)
+        assert found, name
+        for selector, rule in found:
+            if re.search(r"\.(released|approval|approval-text|code-wrap)(?![\w-])", selector):
+                assert "max-height" not in rule, f"{name}: {selector}"
+                assert "-webkit-line-clamp" not in rule, f"{name}: {selector}"
+    card = function_body(
+        without_comments(scripts()["views.js"]), "function approvalCard(ctx, item, index) {"
+    )
+    assert (
+        'el("pre", { class: "code code-wrap released", tabindex: 0, '
+        '"aria-label": t("card.label.text") }, el("code", null, item.body)),'
+    ) in card
+    assert css_rules("app.css", ".approval-text .released") == []
+    assert css_rules("base.css", ".released") == []
+
+
+def test_what_three_readers_of_the_finished_page_found_stays_mended() -> None:
+    sources = {name: without_comments(source) for name, source in scripts().items()}
+    home, views, pages, connect = (
+        sources[name] for name in ("home.js", "views.js", "pages.js", "connect.js")
+    )
+    # A demo opens without the warning to choose which apps are answered: its apps are played.
+    noticed = function_body(home, "function choiceNoticed(ctx) {")
+    assert "ctx.state.serving.choice_needed" in noticed
+    assert "ctx.state.demo !== true" in noticed
+    assert "if (choiceNoticed(ctx)) {" in function_body(home, "function notices(ctx) {")
+    signature = function_body(home, "function noticesSignature(ctx) {")
+    assert 'if (choiceNoticed(ctx)) codes.push("choice");' in signature
+    assert home.count("serving.choice_needed") == 1
+    # The first moment of the demo says that some rows appear without a yes, and no other does.
+    card = function_body(home, "function demoCard(ctx) {")
+    assert (
+        'beat === "watch" ? el("p", { class: "guide-say", id: "guide-say-2", key: "say-2" }' in card
+    )
+    assert 'const GUIDE_MORE = { watch: "guide.watch.say.2" };' in home
+    # What was released and not read yet says what to tell the app, and where no card waits it
+    # does not stand under "Waiting for you": nothing waits for the owner then.
+    line = function_body(views, "function grantedLine(ctx, item) {")
+    assert 't("home.granted.result.line", {' in line
+    english = scripts()["text-en.js"]
+    assert (
+        '"home.granted.result.line": "{app} may read passage {passage} of “{title}” once, '
+        'until {time}. Tell it: “try again”.",'
+    ) in english
+    waiting = function_body(home, "function waitingPart(ctx, problem) {")
+    alone = (
+        'if (drawn.cards.length === 0) return [said, el("div", { class: "approval-stack", '
+        'key: "home-granted" }, drawn.granted)];'
+    )
+    assert alone in waiting
+    assert waiting.index(alone) < waiting.index('t("home.wait.title"),')
+    # A document of one passage says "the whole document", on the card and on the trial card.
+    assert (
+        't(item.passages === 1 ? "card.status.meta.whole" : "card.status.meta", '
+        "{ n: item.characters, passage: item.passage, passages: item.passages })"
+    ) in function_body(views, "function approvalCard(ctx, item, index) {")
+    assert (
+        't(passage.passages === 1 ? "ask.status.meta.whole" : "ask.status.meta", '
+    ) in function_body(home, "function trialCard(ctx) {")
+    # A row counts in the owner's own text, from two fields of the entry: the passage's own
+    # length, and whether a search held any text of a document.
+    row = function_body(pages, "export function activityRow(ctx, item) {")
+    assert "const none = withoutDocumentText(item);" in row
+    assert (
+        'const characters = typeof item.passage_characters === "number" ? '
+        "item.passage_characters : item.characters;"
+    ) in row
+    assert (
+        '!stopped && none ? el("span", { class: "row-chars" }, t("row.status.notext")) : null,'
+        in row
+    )
+    assert ('return item.tool === "search" && item.document_text === false;') in function_body(
+        pages, "export function withoutDocumentText(item) {"
+    )
+    panel = function_body(views, "function leftBlocks(item, figure) {")
+    assert 't("panel.say.1.notext")' in panel
+    assert "hosted && !none ?" in panel
+    assert "item.hosted === false && !none ?" in panel
+    assert (
+        'typeof item.passage_characters === "number" ? t("panel.status.both", '
+        "{ n: item.passage_characters, total: item.characters })"
+    ) in function_body(views, "function simplePanelBody(ctx, panel, item) {")
+    # The tab "Stopped" does not promise "the exact text that left".
+    assert (
+        't(shown === "refusal" ? "activity.say.1.stopped" : "activity.say.1")'
+    ) in function_body(pages, "export function activityPage(ctx) {")
+    # A name the fourth tile does not take is answered under its field.
+    custom = function_body(connect, "function drawCustom(ctx, sheet, view) {")
+    assert 'else if (form.name && !fits) nameError = t("custom.error.name");' in custom
+    assert "error: nameError," in custom
+    assert 'texts ? say("custom-texts-say", t("custom.texts.say.1")) : null,' in custom
+    # The sentence under the tiles stands there from the first moment.
+    tiles = function_body(home, "function tiles(ctx) {")
+    assert (
+        'el("p", { class: "home-say", id: "home-connect-say", key: "say" }, '
+        't("home.connect.say.1")),'
+    ) in tiles
+    # A file that was refused: its line goes once a later file is sealed, and the message at
+    # the foot of the window does not say the line's sentence a second time.
+    manage = sources["manage.js"]
+    upload = function_body(manage, "export async function uploadFiles(ctx, collection, files) {")
+    assert "const before = state.items;" in upload
+    assert upload.index("const before = state.items;") < upload.index("state.items.concat(batch)")
+    assert "dropRefused(state, before);" in upload
+    assert 'else toast(t("docs.result.noneadded"), "red");' in upload
+    assert "batch[0].words()" not in upload
+    kept = function_body(manage, "function dropRefused(state, before) {")
+    assert '!before.includes(item) || item.status !== "error" || item.install === true' in kept
+    assert "forgetRefused(ctx, group);" in function_body(
+        home, "async function addSample(ctx, group) {"
+    )
+    # A sheet under another sheet is out of sight, and the way back from the six pages is its
+    # icon alone where the sidebar shows icons.
+    assert "visibility: hidden;" in css_rules("base.css", ".sheet[open]:has(~ .sheet[open])")[0]
+    narrow = without_comments(read(STATIC / "app.css"))
+    hidden = narrow[narrow.index(".sidebar .brand-name,") :]
+    assert ".nav-home-label," in hidden[: hidden.index("{")]
+    # In the narrow layout what a finger presses is at least 40 px high.
+    small = without_comments(read(STATIC / "home.css"))
+    small = small[small.index("@media (max-width: 720px) {") :]
+    rule = re.search(
+        r"\.simple \.btn,\n\s*\.sheet \.btn,\n\s*\.sheet \.input,\n\s*\.simple \.lang-option \{\n"
+        r"\s*min-height: 40px;",
+        small,
+    )
+    assert rule is not None
+    # The box and its answer are never wider than their card, whatever the button's word is.
+    assert "min-width: 0;" in css_rules("home.css", ".asker")[0]
+    assert "min-width: 0;" in css_rules("home.css", ".trial")[0]
+    assert "border: 0;" in css_rules("home.css", ".first-card .trial")[0]
+
+
+def test_polish_keeps_a_word_of_one_letter_with_the_word_after_it() -> None:
+    # Lines ended in "i", "w" and "a", and a number parted from its noun. The page binds them
+    # with a no-break space, in the text of the table and never in a value; the two texts the
+    # owner sends on to an AI app are left exactly as the table has them.
+    reader = without_comments(scripts()["texts.js"])
+    bind = function_body(reader, "function bind(text) {")
+    assert "const one = /(^|[\\s(„])([aiouwz]) /gi;" in bind
+    assert (
+        'made = text.replace(one, "$1$2\\u00a0").replace(one, "$1$2\\u00a0")'
+        '.replace(/\\{n\\} /g, "{n}\\u00a0");'
+    ) in bind
+    assert 'const SENT_ON = ["ask.sample.question", "connect.ask.start"];' in reader
+    text = function_body(reader, "export function t(key, values = {}) {")
+    bound = 'if (shown === "pl" && !SENT_ON.includes(key)) found = bind(found);'
+    assert bound in text
+    # Before the values are put in: a title or a name is never changed.
+    assert text.index(bound) < text.index("return found.replace(")
+    assert reader.count("bind(") == 2
+    # The tables themselves hold ordinary spaces, so they can be read and compared as text.
+    for name in TABLES:
+        assert "\u00a0" not in scripts()[name], name
+        assert "\\u00a0" not in scripts()[name], name
+    # The same rule, written here, on sentences of the table: every word of one letter that is
+    # followed by a space is bound, also two in a row.
+    one = re.compile(r"(^|[\s(„])([aiouwz]) ", re.I)
+
+    def as_the_page(found: str) -> str:
+        return one.sub("\\1\\2\u00a0", one.sub("\\1\\2\u00a0", found)).replace("{n} ", "{n}\u00a0")
+
+    polish = table("text-pl.js")
+    said = as_the_page(polish["home.new.say.1"][0])
+    assert "i\u00a0dopiero" in said
+    assert as_the_page("a w tym") == "a\u00a0w\u00a0tym"
+    for key, forms in polish.items():
+        for form in forms:
+            assert re.search(r"(?:^|[\s(„])[aiouwz] ", as_the_page(form), re.I) is None, key
+            assert "{n} " not in as_the_page(form), key
 
 
 def test_home_says_how_many_trial_questions_were_asked_since_the_app_was_started() -> None:
@@ -2924,7 +3110,7 @@ def test_the_demo_guide_reads_the_lists_and_the_owners_own_press() -> None:
         "demoCard(ctx),",
         "? firstSteps(ctx)",
         'part("home-ask", t("home.ask.title"), null, asker(ctx)),',
-        'part("home-connect", t("home.connect.title"), null, tiles(ctx, true)),',
+        'part("home-connect", t("home.connect.title"), null, tiles(ctx)),',
         "leftPart(ctx),",
     ]
     places = [page.index(part) for part in order]
@@ -2975,6 +3161,7 @@ def test_the_demo_guide_says_its_sentences_from_the_tables_and_names_no_time() -
                 for moment in ("watch", "turn", "released", "kept", "read", "asked")
                 for what in ("title", "say.1")
             ]
+            + ["guide.watch.say.2"]
             + ["guide.say.2", "guide.button.again", "guide.button.busy", "guide.label.hide"]
         ), name
         for key, values in said.items():

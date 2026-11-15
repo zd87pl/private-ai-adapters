@@ -1055,6 +1055,11 @@ img {
   width: min(600px, calc(100vw - 32px));
 }
 
+/* A sheet that another sheet lies over is out of sight until that one closes: its edges do not show beside it. */
+.sheet[open]:has(~ .sheet[open]) {
+  visibility: hidden;
+}
+
 .sheet::backdrop {
   background: var(--backdrop);
 }

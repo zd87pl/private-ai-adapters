@@ -525,6 +525,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  /* Never wider than its card: the input gives way, whatever the width of the button's word. */
+  min-width: 0;
   padding: 6px 6px 6px 16px;
   border: 1px solid var(--line-strong);
   border-radius: 14px;
@@ -590,9 +592,17 @@
 .trial {
   display: grid;
   gap: 12px;
+  min-width: 0;
   border-style: dashed;
   border-color: var(--line-strong);
   box-shadow: none;
+}
+
+/* Inside a numbered card it has no frame of its own: the passage would stand in three. */
+.first-card .trial {
+  padding: 0;
+  border: 0;
+  background: none;
 }
 
 .trial-head {
@@ -1024,7 +1034,7 @@ dialog.sheet:focus-visible {
   }
 
   .side-foot .lock-now {
-    width: 36px;
+    width: 40px;
     padding: 0;
   }
 
@@ -1148,6 +1158,23 @@ dialog.sheet:focus-visible {
 
   .asker {
     padding-left: 12px;
+  }
+
+  /* The words in the empty box are a size smaller here, so that the longer of the two languages is not cut. */
+  .asker-input::placeholder {
+    font-size: var(--fs-m);
+  }
+
+  /* What a finger presses is at least 40 px high: every button, the fields of a sheet, the two languages. */
+  .simple .btn,
+  .sheet .btn,
+  .sheet .input,
+  .simple .lang-option {
+    min-height: 40px;
+  }
+
+  .simple .lang-option {
+    min-width: 40px;
   }
 
   /* The two answers of the trial card stand side by side, each half its width. */

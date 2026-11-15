@@ -911,7 +911,16 @@ def test_web_only_products_get_an_explanation_and_no_configuration(host: str) ->
         f"{entry.label} calls only servers that {entry.destination}'s cloud"
     )
     assert "on this computer instead" in explanation
-    assert "cannot reach this vault" in explanation
+    # "Cannot be connected", never "cannot reach": by xAI's own page a Bot can be allowed to
+    # run commands on the owner's computer, and such a Bot reaches what the account reaches.
+    assert "cannot be connected to this vault and there is nothing to configure. " in explanation
+    assert "cannot reach" not in explanation
+    another_way = (
+        "By the same documentation a Bot can be allowed to run commands on this computer; "
+        "such a Bot is a program running as you and needs no entry. "
+    )
+    assert (another_way in explanation) is (host == "grok-bot")
+    assert "  " not in explanation
     assert f"goes to {entry.destination}" in explanation
     assert "neither limits nor records" in explanation
 
@@ -1200,5 +1209,5 @@ def test_the_config_command_exits_1_with_the_reason_when_the_start_check_fails(
     code = cli.main(["gate", "config", "chatgpt-web", "--client", "my-app", "--store", "/v"])
     shown = capsys.readouterr()
     assert code == 0
-    assert "cannot reach this vault" in shown.out.replace("\n", " ")
+    assert "cannot be connected to this vault" in shown.out.replace("\n", " ")
     assert tried == [1]

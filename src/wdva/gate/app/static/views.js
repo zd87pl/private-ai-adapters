@@ -13,7 +13,7 @@ import { PRODUCT } from "./brand.js";
 import { el, icon } from "./dom.js";
 import { ago, at, clock, count, list, num, sentence, when, whenFull } from "./format.js";
 import { loadingBlock, servingStrip } from "./manage.js";
-import { rowSentence } from "./pages.js";
+import { rowSentence, withoutDocumentText } from "./pages.js";
 import {
   UNANSWERED,
   activityRow,
@@ -639,9 +639,14 @@ function recordFold(ctx, panel, item) {
   ];
 }
 
-/** What the app searched for, and the exact text that left with where it is now: the same on every page. */
+/**
+ * What the app searched for, and the exact text that left with where it is now: the
+ * same on every page. An answer that held no text of a document says that in the
+ * place of the two sentences: they would be read as "this much of my documents left".
+ */
 function leftBlocks(item, figure) {
   const hosted = item.hosted === true;
+  const none = withoutDocumentText(item);
   return [
     item.query
       ? el("section", { class: "panel-section" }, el("h3", { class: "mini-title" }, t("panel.label.query")), el("pre", { class: "code code-wrap", tabindex: 0 }, el("code", null, item.query)))
@@ -653,8 +658,9 @@ function leftBlocks(item, figure) {
           el("h3", { class: "mini-title" }, el("span", null, t("panel.label.text")), el("span", { class: "mini-aside" }, figure)),
           el("pre", { class: "code code-wrap released", tabindex: 0, "aria-label": t("panel.label.text") }, el("code", null, item.text)),
           // Where the text is now, and that it cannot be taken back: two sentences, each an element of its own.
-          hosted ? el("p", { class: "gone" }, icon("out"), el("span", null, el("span", null, t("panel.say.1", { destination: item.destination })), " ", el("span", null, t("panel.say.2")))) : null,
-          item.hosted === false ? el("p", { class: "gone" }, icon("mac"), el("span", null, t("panel.say.1.local"))) : null,
+          none ? el("p", { class: "gone", id: "panel-notext" }, icon("info"), el("span", null, t("panel.say.1.notext"))) : null,
+          hosted && !none ? el("p", { class: "gone" }, icon("out"), el("span", null, el("span", null, t("panel.say.1", { destination: item.destination })), " ", el("span", null, t("panel.say.2")))) : null,
+          item.hosted === false && !none ? el("p", { class: "gone" }, icon("mac"), el("span", null, t("panel.say.1.local"))) : null,
         )
       : null,
   ];
@@ -687,7 +693,8 @@ function simplePanelBody(ctx, panel, item) {
       : null,
     refusal ? el("p", { class: "panel-nothing", key: "nothing" }, t("panel.status.nothing")) : null,
     refusal && item.count > 1 ? el("p", { class: "muted", key: "count" }, t("panel.status.count", { n: item.count })) : null,
-    leftBlocks(item, t("row.status.chars", { n: item.characters })),
+    // A passage: how much of it is the owner's document, and how much left with the lines added around it.
+    leftBlocks(item, typeof item.passage_characters === "number" ? t("panel.status.both", { n: item.passage_characters, total: item.characters }) : t("row.status.chars", { n: item.characters })),
     recordFold(ctx, panel, item),
   ];
 }
@@ -911,7 +918,8 @@ function approvalCard(ctx, item, index) {
       { class: "approval-text" },
       el("h3", { class: "mini-title" }, t("card.label.text")),
       el("pre", { class: "code code-wrap released", tabindex: 0, "aria-label": t("card.label.text") }, el("code", null, item.body)),
-      el("p", { class: "approval-figures" }, t("card.status.meta", { n: item.characters, passage: item.passage, passages: item.passages })),
+      // A document of one passage: "passage 1 of 1" would hide that this is all of it.
+      el("p", { class: "approval-figures" }, t(item.passages === 1 ? "card.status.meta.whole" : "card.status.meta", { n: item.characters, passage: item.passage, passages: item.passages })),
     ),
     el(
       "div",
@@ -973,7 +981,8 @@ async function withdraw(ctx, item) {
 
 /**
  * One release that was not read yet: which app may read which passage once, and until
- * when. A document the page has not heard the title of is named by its number.
+ * when, and what the owner has to tell the app: it gets nothing until it asks again.
+ * A document the page has not heard the title of is named by its number.
  */
 function grantedLine(ctx, item) {
   const known = Object.assign({}, ctx.passages.get(item.ref), item.title ? item : null);
@@ -983,7 +992,7 @@ function grantedLine(ctx, item) {
     "li",
     { key: `${item.app}-${item.ref}` },
     icon("clock"),
-    el("span", { class: "granted-text" }, t("home.granted.status.line", { app: item.app, passage, title: known.title || document, time: clock(item.valid_until, ctx.now) })),
+    el("span", { class: "granted-text" }, t("home.granted.result.line", { app: item.app, passage, title: known.title || document, time: clock(item.valid_until, ctx.now) })),
     item.withdrawable === true ? button(t("home.granted.button.withdraw"), { small: true, onclick: () => withdraw(ctx, item) }) : null,
   );
 }
