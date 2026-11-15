@@ -90,6 +90,21 @@ let currentPage = null;
 let shooting = 0;
 /** Above zero while a walk-through loads a page again. */
 let reloading = 0;
+/** Answers whose text is being read to decide whether they are a finding: the readings, and those not yet decided. */
+const judging = [];
+const undecided = new Set();
+/** What the app answers, with status 503, to a request that was on its way when it was stopped. */
+const STOPPING = 'the app is shutting down';
+
+/** Whether the body of an answer is the app's error "unavailable" with the sentence of a stop. */
+function saysItStops(body) {
+  try {
+    const error = JSON.parse(body).error;
+    return error.code === 'unavailable' && error.message === STOPPING;
+  } catch {
+    return false;
+  }
+}
 
 function check(condition, message) {
   if (!condition) throw new Error(message);
@@ -515,15 +530,40 @@ function watch(page) {
     if (known) known.left -= 1;
     else if (response.status() === 404 && ENGINE_ASKS.has(pathname)) note(`the engine itself asked for ${pathname}, which the page names nowhere, and was told 404`);
     else {
-      problem(`HTTP ${response.status()} ${response.request().method()} ${pathname}`);
-      // Said at once, with the step it came in and what the app answered. The list at the end has the line above
-      // and no more, and an error that comes once in many runs cannot be placed without these two.
+      const line = `HTTP ${response.status()} ${response.request().method()} ${pathname}`;
       const during = currentStep;
-      const status = response.status();
-      response.text().then(
-        (body) => console.log(`note  HTTP ${status} ${pathname} that no step announced, during "${during}": ${String(body).slice(0, 300)}`),
-        () => {},
-      );
+      // Said at once, with the step it came in and what the app answered. The list at the end has the line
+      // and no more, and an error that comes once in many runs cannot be placed without these two.
+      const found = (body) => {
+        problem(line);
+        console.log(`note  ${line} that no step announced, during "${during}": ${String(body).slice(0, 300)}`);
+      };
+      if (appDown && response.status() === 503) {
+        // A request that was on its way when the walk-through stopped the app is answered by the app with
+        // exactly this (tests/test_gate_httpd.py holds it). It is the stop, as a request that fails then is.
+        // Any other 503, and this one at any other time, is a finding. The summary waits for the reading.
+        const open = { line };
+        undecided.add(open);
+        judging.push(
+          response.text().then(
+            (body) => {
+              undecided.delete(open);
+              if (saysItStops(body)) note(`while the app was stopped it answered a request that was on its way: ${line}, "${STOPPING}"`);
+              else found(body);
+            },
+            () => {
+              undecided.delete(open);
+              found('(the answer could not be read)');
+            },
+          ),
+        );
+      } else {
+        problem(line);
+        response.text().then(
+          (body) => console.log(`note  ${line} that no step announced, during "${during}": ${String(body).slice(0, 300)}`),
+          () => {},
+        );
+      }
     }
   });
 }
@@ -887,6 +927,8 @@ function deadline(minutes) {
 }
 
 function summary() {
+  // An end that did not wait for a reading (the time limit, an error of the walk-through itself) decides against it.
+  for (const open of undecided) problem(`${open.line} (the walk-through ended before its answer was read)`);
   for (const entry of expected) {
     if (entry.left > 0 && !entry.optional) problem(`an announced HTTP ${entry.status} on ${entry.path} did not come`);
   }
@@ -897,6 +939,7 @@ function summary() {
 
 /** Close the browser, print the summary and end the process: 0 when nothing failed, else 1. */
 async function finish(browser) {
+  await Promise.allSettled(judging);
   hushed = true;
   if (browser) await browser.close().catch(() => {});
   await end(summary());

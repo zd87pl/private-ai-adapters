@@ -2432,6 +2432,34 @@ def test_stop_closes_the_port(service: FakeService, static_dir: Path) -> None:
         server.start()
 
 
+def test_a_request_on_its_way_when_the_app_stops_is_told_that_it_stops(
+    paired: Browser, service: FakeService
+) -> None:
+    """Stopping closes the port, not the connections it has already taken.
+
+    A page asks for the state every two seconds, so a request can be on its way at the
+    moment the app is stopped. It gets an answer, in the form every error has, and the
+    service, which is locked and closed by then, is not asked.
+    """
+    server = paired.server
+    request = head(server, "GET", "/api/state", paired.session_line)
+    cut = len(request) - 4
+    with socket.create_connection(("127.0.0.1", server.port), timeout=5) as sock:
+        sock.sendall(request[:cut])  # taken by the app and being read, the last line still open
+        before = len(service.calls)
+        time.sleep(0.2)
+        server.stop()
+        sock.sendall(request[cut:])
+        response = http.client.HTTPResponse(sock)
+        response.begin()
+        answer = Answer(response.status, response.getheaders(), response.read())
+    assert answer.status == 503
+    assert answer.error() == "unavailable"
+    assert answer.json()["error"]["message"] == "the app is shutting down"
+    assert_headers(answer)
+    assert len(service.calls) == before
+
+
 def test_a_server_that_never_started_can_be_stopped(service: FakeService, static_dir: Path) -> None:
     server = AppServer(service, version=VERSION, static_dir=static_dir)
     server.stop()
