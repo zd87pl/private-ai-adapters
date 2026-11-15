@@ -180,7 +180,7 @@ python3 -m venv ~/.venvs/locktender
   [its working folder](https://code.claude.com/docs/en/permissions) without asking. So a document
   is behind the lock only while its original is in no folder that an AI app can read.
 - Serve assistants on the web or on a phone, or Grok Bot: according to their makers'
-  documentation they work in their makers' clouds. And it is a preview: nobody has yet used it
+  documentation they work in the cloud. And it is a preview: nobody has yet used it
   by hand on a Mac or in a real conversation with one of the apps, and it has not been audited.
 
 Installing it, the first minutes, Home and Settings, connecting each app, daily use and every

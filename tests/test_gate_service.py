@@ -6815,6 +6815,44 @@ def test_activity_says_how_much_of_a_release_was_text_of_a_document(unlocked: Ga
     assert count(None) is None
 
 
+def test_a_search_that_names_a_document_and_quotes_nothing_has_no_document_text(
+    unlocked: GateService,
+) -> None:
+    # `document_text` says whether the record lists a stretch of a document, and a title is
+    # none. In a group that shows titles to apps, the search of an app that must ask each
+    # time names the document and withholds its text: the field is false, and the title is in
+    # the answer. So what a page says of `false` has to be true of an answer that names a
+    # document: "nothing quoted", and not "no text of your documents".
+    shown = {group["name"]: group["show_titles"] for group in unlocked.documents()["collections"]}
+    assert shown["tax"] is True
+    named = unlocked.backend.search(CLAUDE, "income tax", "tax")
+    assert named.code == "OK"
+    ref = REF.findall(named.text)[0]
+    session = unlocked._session
+    assert session is not None
+    title = session.store.document(ref.partition(".")[0]).title
+    assert title
+    assert f'[tax] "{title}" {messages.TEXT_WITHHELD}' in named.text
+    item = unlocked.activity(limit=1)["items"][0]
+    assert (item["tool"], item["results"], item["document_text"], item["passage_characters"]) == (
+        "search",
+        1,
+        False,
+        None,
+    )
+    detail = unlocked.activity_detail(seq=item["seq"])
+    assert detail["document_text"] is False
+    assert title in detail["text"]
+    # With the titles of the group not shown, the same search names nothing, and the field
+    # says the same: it never spoke of titles.
+    unlocked.set_collection(name="tax", show_titles=False)
+    unnamed = unlocked.backend.search(CLAUDE, "income tax", "tax")
+    assert unnamed.code == "OK"
+    assert title not in unnamed.text
+    assert f"[tax] {messages.TEXT_WITHHELD}" in unnamed.text
+    assert unlocked.activity(limit=1)["items"][0]["document_text"] is False
+
+
 # -- the two sample documents of the page ------------------------------------------------------
 
 

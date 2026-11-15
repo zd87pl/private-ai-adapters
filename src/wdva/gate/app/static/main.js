@@ -447,7 +447,10 @@ function drawInPlace() {
     anchor = hit && hit.closest ? hit.closest(".page-body [data-key]") : null;
   }
   const before = anchor ? anchor.getBoundingClientRect().top : 0;
+  // What holds the focus keeps it: a card that moves up into the place of a line that went loses it on the way.
+  const held = document.activeElement;
   render(root, screen());
+  if (held && held !== document.activeElement && root.contains(held)) held.focus({ preventScroll: true });
   if (anchor && anchor.isConnected) {
     const moved = anchor.getBoundingClientRect().top - before;
     if (Math.abs(moved) >= 1) window.scrollBy(0, moved);

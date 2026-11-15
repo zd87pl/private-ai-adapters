@@ -294,6 +294,7 @@ async function connect(ctx, sheet, view) {
   view.busy = true;
   view.failed = null;
   sheet.update();
+  let cancelled = false;
   try {
     const answer = await api.connectWrite(host, look.state);
     view.answer = answer;
@@ -315,8 +316,16 @@ async function connect(ctx, sheet, view) {
       view.state = "refused";
       view.word = error.code;
     } else view.failed = error;
+    cancelled = error.code === "cancelled";
   }
   view.busy = false;
+  if (cancelled) {
+    // The sheet that asked for the passphrase was closed while "Connect" was off, so the
+    // browser had no button to give the focus back to: the button that was pressed takes it.
+    sheet.update();
+    const pressed = document.getElementById("connect-go");
+    if (pressed) pressed.focus();
+  }
   // The tile says what the vault says: the list of apps is asked for again.
   await ctx.refresh();
   sheet.update();
@@ -779,7 +788,9 @@ function drawCustom(ctx, sheet, view) {
         autocapitalize: "off",
         spellcheck: "false",
         autofocus: true,
-        "aria-describedby": "custom-name-hint",
+        // What stands under the field is its hint, or the answer in red that takes the hint's place.
+        "aria-invalid": nameError ? "true" : null,
+        "aria-describedby": nameError ? "custom-name-error" : "custom-name-hint",
         oninput: (event) => {
           form.name = event.target.value;
           sheet.update();

@@ -107,7 +107,7 @@ class KnownHost:
     choose one. ``destination`` is where text released to it goes, and
     ``hosted`` whether that is a provider; both are suggestions for the owner,
     who declares them, and neither is checked. ``local_program`` is false for a
-    product that only runs in its vendor's cloud. ``source`` is the
+    product that only runs in the cloud. ``source`` is the
     documentation its form was taken from and ``read`` the day that was read.
     """
 
@@ -241,7 +241,7 @@ KNOWN_HOSTS: tuple[KnownHost, ...] = (
         hosted=True,
         local_program=False,
         source="https://docs.x.ai/grok-bot/computer-and-apps",
-        read=_DOCS_READ,
+        read="2026-11-15",
     ),
 )
 """Every application the gate has a form for, and the products it has an explanation for."""
@@ -258,10 +258,10 @@ _DOCUMENTED_BY = {
     "chatgpt-web": "OpenAI's documentation",
     "claude-web": "Anthropic's documentation",
     "grok-web": "xAI's documentation",
-    "grok-bot": "xAI's documentation",
+    "grok-bot": "its maker's documentation",
 }
 
-# For a product that runs in its vendor's cloud: why it cannot be connected to a store
+# For a product that runs in the cloud: why it cannot be connected to a store
 # on this computer, and what the owner can use instead. "Cannot be connected" and not
 # "cannot reach": one of them can be allowed to run commands on the owner's computer,
 # and then reaches whatever the owner's account reaches, without an entry.
@@ -269,7 +269,7 @@ _WHY_NOT = {
     "chatgpt-web": "It cannot start a program on this computer",
     "claude-web": "It cannot start a program on this computer",
     "grok-web": "It cannot start a program on this computer",
-    "grok-bot": "It works on a computer in xAI's cloud, not on this one",
+    "grok-bot": "It works on a computer in the cloud, not on this one",
 }
 _REACHES_ANOTHER_WAY = {
     "grok-bot": (
@@ -854,13 +854,28 @@ def _blocks(entry: KnownHost, command: Sequence[str]) -> tuple[tuple[Block, ...]
 
 def _explanation(entry: KnownHost) -> str:
     """The paragraph for a product that cannot be connected to a store on this computer."""
+    documented = _DOCUMENTED_BY[entry.id]
+    if entry.id == "grok-bot":
+        # No web chat. Its maker's pages say that a Bot works on a computer in the cloud and
+        # adds a server by URL or by a command that runs on that computer, and they name
+        # more than one company that its requests and prompts go to: none is named here.
+        first = (
+            f"{entry.label} works on a computer in the cloud and starts its tools there, "
+            f"according to {documented}."
+        )
+        receiver = "the service"
+    else:
+        first = (
+            f"{entry.label} calls only servers that {entry.destination}'s cloud can reach over "
+            f"the internet, according to {documented}."
+        )
+        receiver = entry.destination
     return (
-        f"{entry.label} calls only servers that {entry.destination}'s cloud can reach over the "
-        f"internet, according to {_DOCUMENTED_BY[entry.id]}. {_WHY_NOT[entry.id]}, so it "
+        f"{first} {_WHY_NOT[entry.id]}, so it "
         f"cannot be connected to this vault and there is nothing to configure. "
         f"{_REACHES_ANOTHER_WAY.get(entry.id, '')}"
         f"{_LOCAL_ALTERNATIVE[entry.id]}, or copy the text you want it to see into the "
-        f"conversation yourself. Text you paste goes to {entry.destination} like any other "
+        f"conversation yourself. Text you paste goes to {receiver} like any other "
         f"message; {brand.PRODUCT} neither limits nor records it."
     )
 

@@ -641,8 +641,9 @@ function recordFold(ctx, panel, item) {
 
 /**
  * What the app searched for, and the exact text that left with where it is now: the
- * same on every page. An answer that held no text of a document says that in the
- * place of the two sentences: they would be read as "this much of my documents left".
+ * same on every page. A search that quoted nothing says that in the place of the two
+ * sentences: they would be read as "this much of my documents left". It is true also
+ * of an answer that names a document, where the group shows titles to apps.
  */
 function leftBlocks(item, figure) {
   const hosted = item.hosted === true;

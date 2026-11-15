@@ -97,20 +97,28 @@ function needsPdfSupport(error) {
   return error.code === "invalid" && error.reason === "no_pdf_support";
 }
 
+/** Every line that stands on the page: the files chosen since it was loaded, whichever group each was chosen for. */
+function everyLine(ctx) {
+  return [].concat(...Object.values(ctx.ui.uploads).map((state) => state.items));
+}
+
 /**
  * Once a document was sealed, the lines of the files that were refused before it go:
  * the owner has gone on, and a red line under a card that is marked done reads as a
- * fault that is still there. `before` are the lines that stood there before the files
- * now sent; a line that comes with the command which adds PDF reading stays.
+ * fault that is still there. They go whichever group their file was chosen for: a
+ * vault with several groups lists them together. `before` are the lines that stood on
+ * the page before the files now sent; a line that comes with the command which adds
+ * PDF reading stays.
  */
-function dropRefused(state, before) {
-  state.items = state.items.filter((item) => !before.includes(item) || item.status !== "error" || item.install === true);
+function dropRefused(ctx, before) {
+  for (const state of Object.values(ctx.ui.uploads)) {
+    state.items = state.items.filter((item) => !before.includes(item) || item.status !== "error" || item.install === true);
+  }
 }
 
 /** The same for a document that was added without a file of the owner's: the sample. */
 export function forgetRefused(ctx, collection) {
-  const state = uploadState(ctx, collection);
-  dropRefused(state, state.items);
+  dropRefused(ctx, uploadState(ctx, collection).items);
 }
 
 /**
@@ -124,7 +132,7 @@ export async function uploadFiles(ctx, collection, files) {
   const state = uploadState(ctx, collection);
   const batch = Array.from(files).map((file) => ({ file, name: file.name, collection, status: "waiting", words: null }));
   if (!batch.length) return;
-  const before = state.items;
+  const before = everyLine(ctx);
   state.items = state.items.concat(batch);
   state.busy = true;
   ctx.render();
@@ -153,7 +161,7 @@ export async function uploadFiles(ctx, collection, files) {
         item.status = "done";
         item.words = () => t("docs.result.sealed", { n: passages });
         added += 1;
-        dropRefused(state, before);
+        dropRefused(ctx, before);
       } catch (error) {
         refuse(refusedWords(error, rules));
         item.install = needsPdfSupport(error);

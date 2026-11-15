@@ -127,7 +127,7 @@ Things to try:
 
 1. **Watch the page.** Under "Recently given to apps", rows arrive: "claude-desktop searched
    your documents: 4 results", then "claude-desktop read passage 4 of “lease-2025”", each with
-   a number of characters, or with "no document text" for a search that quoted nothing. Home
+   a number of characters, or with "nothing quoted" for a search whose answer quoted nothing. Home
    shows the three newest, and "All activity" leads to all of
    them. Ten to twenty seconds after the start the played app asks for a passage of the tax
    note. A part "Waiting for you" appears with a card, the entry "Home" in the sidebar gets the
@@ -147,7 +147,10 @@ Things to try:
    after the passage was refused, and it waited again within a second of the request that the
    button sends; after a release the passage was read after that request, not before. After a
    release the card then says "It asked again and got the passage", and the newest row under
-   "Recently given to apps" carries the mark "After your yes".
+   "Recently given to apps" carries the mark "After your yes". Once it has read that passage,
+   the played app goes on by itself: every half minute it asks a small question, a search with
+   one result, until its own limit for 24 hours stops it; from then on the number of stopped
+   requests on Home grows with every try.
 4. **Press a row** under "Recently given to apps". A panel opens with "The exact text that
    left"; "Record details" in it unfolds the entry's place in the record. Then press "Activity"
    in the sidebar, which lists everything that was given to apps, and there the row
@@ -178,8 +181,7 @@ Things to try:
    included; the row of "A name not in use" says "Asked and was refused: no app is answered under
    that name". On Overview and on Apps a strip says "Apps that run on this Mac are not answered
    yet": until you choose, only the apps that send text to a provider are answered, and
-   [Connecting each app](#connecting-each-app) says why. Home says the same in the notice at its
-   top. "Apps on this Mac only" and "Both" have
+   [Connecting each app](#connecting-each-app) says why. "Apps on this Mac only" and "Both" have
    an app answered that was not. So once ten minutes have passed since the passphrase was last
    given, which the demo does by itself at its start, either one asks for it first; the sheet
    shows the demo's passphrase. The six pages have no button that makes the played app ask
@@ -441,7 +443,9 @@ Then the two buttons give way to a line that counts, "1 document", and the box o
 card is ready for a question. Further documents are added on the page Documents.
 
 A file that is not added gets a line that begins "Not added:" and says why. The line goes
-once a file you choose after it is sealed.
+once a file you choose later is sealed (in a vault with several groups: into any of them).
+Files chosen together keep their lines until then, and a line that comes with the command
+which adds PDF reading stays.
 
 | The line says | What to do |
 | --- | --- |
@@ -706,10 +710,10 @@ group, which stays open to apps that send text to a provider although none holds
 Settings, Documents, the switch "Hosted apps may be granted this collection").
 
 **"Other app"** opens the sheet "Other app (MCP)": "You paste a short text into your app’s MCP
-settings yourself, and Locktender writes nothing there." You give the app a "Name", of
-lower-case letters, digits and hyphens, and say "Who receives the text?", the company behind
-the app. A name of another form is answered under its field, "Use lower-case letters a–z,
-digits and hyphens, for example my-cursor.", and "Add" stays off. Once both are filled in, the amber sentence names them, for example "Text that
+settings yourself, and Locktender writes nothing there." You give the app a "Name", a letter
+followed by lower-case letters, digits and hyphens, and say "Who receives the text?", the company behind
+the app. A name of another form is answered under its field, "Start with a letter a–z, then
+lower-case letters, digits and hyphens, for example my-cursor.", and "Add" stays off. Once both are filled in, the amber sentence names them, for example "Text that
 claude-code receives from your documents is sent to Anthropic and cannot be recalled.", and
 "Add" adds the app with "Ask me each time" for your one group. The sheet then shows three texts,
 each with "Copy": "Command", "JSON for the app’s MCP settings" and "One line for Claude Code, in
@@ -968,14 +972,15 @@ limits, the same rows. Locktender cannot tell the two apart. The same page says 
 command in Terminal does not read that file; it is connected with the `claude-code` form.
 
 **Apps that cannot be connected.** According to their providers' documentation (`wdva gate
-config chatgpt-web` and the other three print the pages), Claude, ChatGPT and Grok on the web
-or phone only call servers that their provider's cloud can reach over the internet, and Grok
-Bot works on a computer in xAI's cloud. This was not tried. If it is so, none of them can
+config chatgpt-web --client x` and the other three print the pages), Claude, ChatGPT and Grok
+on the web or phone only call servers that their provider's cloud can reach over the internet,
+and Grok Bot works on a computer in the cloud (by its maker's pages, in Cursor's cloud). This
+was not tried. If it is so, none of them can
 start Locktender's program from an entry, and there is nothing to configure. One of them can
 reach this computer another way: by
 [xAI's page](https://docs.x.ai/grok-bot/approvals-security-and-privacy), as read on 2026-11-15,
 a Bot can be allowed to run commands on your own computer ("Execution on this computer"). A
-Bot you allow that is a program running as you, like any agent with a shell: it needs no
+Bot that you allow to do this is a program running as you, like any agent with a shell: it needs no
 entry, reads the files you can read, and can call the vault under any name that is answered
 ("App names are labels" under [Limits you should know](#limits-you-should-know)). The list
 of apps on the page Apps under Settings and `wdva gate config` name them so that Locktender can
@@ -1071,16 +1076,17 @@ and of the ChatGPT desktop app with Codex.
 
 **"Recently given to apps".** The three newest answers that an app was given, once the vault
 has an app: a search, "claude-desktop searched your documents: 4 results", or a passage,
-"claude-desktop read passage 2 of “tax-note-2025”", with how much and how long ago. How much
-is counted in your own text: for a passage the characters of the passage itself, which is the
-figure its card showed; for a search the characters of its answer, or "no document text"
-where the answer held none (a search for an app that asks you each time says which passages
-hold its words and quotes nothing). A passage that was released by you carries the mark "After
+"claude-desktop read passage 2 of “tax-note-2025”", with how much and how long ago. How
+much: for a passage the characters of the passage itself, which is the figure its card showed;
+for a search the characters of its whole answer, the lines Locktender adds included, or
+"nothing quoted" where the answer quoted nothing (a search for an app that asks you each time
+says which passages hold its words and quotes nothing; where a group shows titles to apps, it
+names the document). A passage that was released by you carries the mark "After
 your yes". Until something left, the part says "Nothing has left yet." "All activity" leads to
 the page Activity. A press on a row opens the exact text that left. For a passage the panel
 says both figures, for example "654 characters of your document, 899 with the lines
-Locktender adds"; under a search without text of a document it says "This answer held no text
-of your documents." What is not in this list: an app's question about what
+Locktender adds"; under a search that quoted nothing it says "This answer quoted nothing
+from your documents." What is not in this list: an app's question about what
 it may use, which hands out no document text, the calls that were stopped, and your own changes.
 
 **The foot.** One link, "How it works and what it cannot do". That page is the one place of
@@ -1251,7 +1257,9 @@ The card, from top to bottom:
   refuse this passage right now, even with your yes."
 - **The two answers**, "Don’t release" first. Neither is the filled button.
 - **"Details"**, which unfolds three lines: how much of this document has already been released
-  and how much it would be after this, how much this app has used in the last 24 hours, and why
+  and how much it would be after this (counted in the document as it is stored, so a passage
+  counts with the blank line that ends it: under "570 characters" the line can say "572 after
+  this"), how much this app has used in the last 24 hours, and why
   the passage waits ("It waits because this app asks you each time.", or "It waits because it
   goes past what the app may read of this document without asking.").
 
@@ -1319,8 +1327,9 @@ declared: Locktender cannot check who is really calling."
 
 "Add app" opens a sheet with "Which app?", "Name in this vault" and "Where text goes". Its list
 has Claude Desktop, Claude Code, the ChatGPT desktop app, Codex, Grok Build, OpenClaw and
-"Another app", and, marked "Cannot reach a program on this Mac", the products that cannot be
-connected. A new app can read nothing until you give it a collection, and the page says so. The
+"Another app", and, marked "Cannot reach a program on this Mac" or, for Grok Bot, "Works on a
+computer in the cloud", the products that cannot be connected. A new app can read nothing until
+you give it a collection, and the page says so. The
 sheet "Connect" follows: it shows the text to copy and writes no file
 ([Connecting each app](#connecting-each-app)).
 
@@ -1746,8 +1755,8 @@ defects that wait for a fix.
 - **Closing a collection to hosted apps takes it away from them.** Opening it again later gives it
   back to nobody. *For you:* after reopening, give the collection to each hosted app again.
 - **Web and phone assistants cannot be connected.** According to their makers' documentation,
-  Claude, ChatGPT and Grok on the web or on a phone, and Grok Bot, work in their makers'
-  clouds and cannot be connected. Desktop apps and command-line agents on the same computer
+  Claude, ChatGPT and Grok on the web or on a phone, and Grok Bot, work in the cloud and
+  cannot be connected. Desktop apps and command-line agents on the same computer
   can, according to theirs. None of this was tried. A Grok Bot that you allow to run commands
   on your computer is a program running as you (see "App names are labels" above).
 - **"Connect" changes a file that is not Locktender's.** It writes one entry into the settings

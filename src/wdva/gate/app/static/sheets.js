@@ -355,11 +355,14 @@ export function appFormFields(form, known, update, prefix, short = false) {
             el(
               "span",
               { class: "choice-hint" },
-              !option.local_program
-                ? "Cannot reach a program on this Mac"
-                : option.id === "generic"
-                  ? "You say where its text goes"
-                  : `Sends to ${option.destination}`,
+              // Not of Grok Bot: by its maker's pages a Bot can be allowed to run commands on the owner's computer.
+              option.id === "grok-bot"
+                ? "Works on a computer in the cloud"
+                : !option.local_program
+                  ? "Cannot reach a program on this Mac"
+                  : option.id === "generic"
+                    ? "You say where its text goes"
+                    : `Sends to ${option.destination}`,
             ),
           ),
         ),
@@ -368,7 +371,10 @@ export function appFormFields(form, known, update, prefix, short = false) {
     web
       ? note(
           "plain",
-          `${entry.label} cannot use this vault. It only calls servers that ${entry.destination || "its provider"}'s cloud can reach, and ${PRODUCT} runs on your Mac only. Use the same company's desktop app instead.`,
+          // Grok Bot is no web chat: by its maker's pages it works on a computer in the cloud, and they do not say that cloud is its maker's.
+          entry.id === "grok-bot"
+            ? `${entry.label} cannot be connected to this vault. It works on a computer in the cloud, and ${PRODUCT} runs on your Mac only. Use Grok Build on this Mac instead.`
+            : `${entry.label} cannot use this vault. It only calls servers that ${entry.destination || "its provider"}'s cloud can reach, and ${PRODUCT} runs on your Mac only. Use the same company's desktop app instead.`,
         )
       : [
           generic ? kindRow(form, update, prefix) : null,

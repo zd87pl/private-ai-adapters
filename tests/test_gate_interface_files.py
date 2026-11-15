@@ -2497,6 +2497,11 @@ def test_what_three_readers_of_the_finished_page_found_stays_mended() -> None:
         '!stopped && none ? el("span", { class: "row-chars" }, t("row.status.notext")) : null,'
         in row
     )
+    # Not both: a search that quoted nothing does not show a number of characters beside it.
+    assert (
+        '!stopped && !none && characters > 0 ? el("span", { class: "row-chars" }, '
+        't("row.status.chars", { n: characters })) : null,'
+    ) in row
     assert ('return item.tool === "search" && item.document_text === false;') in function_body(
         pages, "export function withoutDocumentText(item) {"
     )
@@ -2508,6 +2513,9 @@ def test_what_three_readers_of_the_finished_page_found_stays_mended() -> None:
         'typeof item.passage_characters === "number" ? t("panel.status.both", '
         "{ n: item.passage_characters, total: item.characters })"
     ) in function_body(views, "function simplePanelBody(ctx, panel, item) {")
+    # The two figures are a line of words: where they do not fit beside the heading of the
+    # panel, they stand under it.
+    assert "flex-wrap: wrap;" in css_rules("app.css", ".panel-section .mini-title")[0]
     # The tab "Stopped" does not promise "the exact text that left".
     assert (
         't(shown === "refusal" ? "activity.say.1.stopped" : "activity.say.1")'
@@ -2527,16 +2535,30 @@ def test_what_three_readers_of_the_finished_page_found_stays_mended() -> None:
     # the foot of the window does not say the line's sentence a second time.
     manage = sources["manage.js"]
     upload = function_body(manage, "export async function uploadFiles(ctx, collection, files) {")
-    assert "const before = state.items;" in upload
-    assert upload.index("const before = state.items;") < upload.index("state.items.concat(batch)")
-    assert "dropRefused(state, before);" in upload
+    assert "const before = everyLine(ctx);" in upload
+    noted = upload.index("const before = everyLine(ctx);")
+    assert noted < upload.index("state.items.concat(batch)")
+    assert "dropRefused(ctx, before);" in upload
     assert 'else toast(t("docs.result.noneadded"), "red");' in upload
     assert "batch[0].words()" not in upload
-    kept = function_body(manage, "function dropRefused(state, before) {")
+    kept = function_body(manage, "function dropRefused(ctx, before) {")
     assert '!before.includes(item) || item.status !== "error" || item.install === true' in kept
     assert "forgetRefused(ctx, group);" in function_body(
         home, "async function addSample(ctx, group) {"
     )
+    # On Home what is said of the sealed files stands under the last of them, and a file that
+    # was refused after it under that.
+    added = function_body(home, "function addCard(ctx, facts) {")
+    assert "const said = lastSealed(chosen.map((entry) => entry.item)) + 1;" in added
+    above, said, below = (
+        added.index(part)
+        for part in (
+            "chosen.slice(0, said).map(",
+            "who.map((name) => whoLine(ctx, name)),",
+            "chosen.slice(said).map(",
+        )
+    )
+    assert above < said < below
     # A sheet under another sheet is out of sight, and the way back from the six pages is its
     # icon alone where the sidebar shows icons.
     assert "visibility: hidden;" in css_rules("base.css", ".sheet[open]:has(~ .sheet[open])")[0]
@@ -2552,10 +2574,95 @@ def test_what_three_readers_of_the_finished_page_found_stays_mended() -> None:
         small,
     )
     assert rule is not None
+    # So is the lock, which is its icon alone there: 40 px wide. And the words in the empty
+    # box are a size smaller, so that the longer of the two languages is not cut.
+    assert re.search(r"\n  \.side-foot \.lock-now \{\n    width: 40px;\n", small) is not None
+    assert (
+        re.search(r"\n  \.asker-input::placeholder \{\n    font-size: var\(--fs-m\);\n  \}", small)
+        is not None
+    )
     # The box and its answer are never wider than their card, whatever the button's word is.
     assert "min-width: 0;" in css_rules("home.css", ".asker")[0]
     assert "min-width: 0;" in css_rules("home.css", ".trial")[0]
     assert "border: 0;" in css_rules("home.css", ".first-card .trial")[0]
+
+
+def test_what_two_checks_of_the_mended_page_found_stays_mended() -> None:
+    sources = {name: without_comments(source) for name, source in scripts().items()}
+    connect, manage, main, sheets = (
+        sources[name] for name in ("connect.js", "manage.js", "main.js", "sheets.js")
+    )
+    # While the answer to a name stands under the field of "Other app", the hint is not on the
+    # page: the field is marked as not valid and points at the answer, not at the hint.
+    custom = function_body(connect, "function drawCustom(ctx, sheet, view) {")
+    assert '"aria-invalid": nameError ? "true" : null,' in custom
+    assert '"aria-describedby": nameError ? "custom-name-error" : "custom-name-hint",' in custom
+    assert '"aria-describedby": "custom-name-hint",' not in custom
+    field = function_body(sources["parts.js"], "export function field({")
+    assert 'id: `${id}-error`, role: "alert" }, error) : null,' in field
+    assert "hint && !error ? el(" in field
+    assert "id: `${id}-hint` }, hint) : null," in field
+    # A vault with several groups lists the lines of all of them together. Once a file was
+    # sealed, the refused lines that stood on the page before this selection go in every
+    # group, not only in the group of the sealed file: a line of another group stayed under a
+    # card that was marked done.
+    lines = function_body(manage, "function everyLine(ctx) {")
+    assert "Object.values(ctx.ui.uploads).map((state) => state.items)" in lines
+    dropped = function_body(manage, "function dropRefused(ctx, before) {")
+    assert "for (const state of Object.values(ctx.ui.uploads)) {" in dropped
+    assert "state.items = state.items.filter(" in dropped
+    assert "function dropRefused(state, before) {" not in manage
+    upload = function_body(manage, "export async function uploadFiles(ctx, collection, files) {")
+    assert "const before = state.items;" not in upload
+    # The sample is added to the vault's one group, and takes the refused lines of that group.
+    assert "dropRefused(ctx, uploadState(ctx, collection).items);" in function_body(
+        manage, "export function forgetRefused(ctx, collection) {"
+    )
+    # "Connect" is off while its call runs. A sheet that asked for the passphrase over it and
+    # was closed had no button to give the focus back to, and the focus fell to the page: the
+    # button takes it, before the list of apps is asked for again.
+    write = function_body(connect, "async function connect(ctx, sheet, view) {")
+    assert 'cancelled = error.code === "cancelled";' in write
+    back = (
+        "    sheet.update();\n"
+        '    const pressed = document.getElementById("connect-go");\n'
+        "    if (pressed) pressed.focus();\n"
+        "  }\n"
+    )
+    assert back in write
+    order = [
+        write.index(part)
+        for part in ("view.busy = false;", "if (cancelled) {", back, "await ctx.refresh();")
+    ]
+    assert order == sorted(order)
+    # A card that moves up into the place of a line that went is taken out of the page and put
+    # in again, and what held the focus in it lost it. A drawing of the page gives it back.
+    draw = function_body(main, "function drawInPlace() {")
+    assert (
+        "  const held = document.activeElement;\n"
+        "  render(root, screen());\n"
+        "  if (held && held !== document.activeElement && root.contains(held)) "
+        "held.focus({ preventScroll: true });\n"
+    ) in draw
+    # The form "Add app" of the six pages has a sentence of its own for Grok Bot, which is no
+    # web chat: it does not say that a Bot calls only servers a company's cloud can reach, and
+    # its line in the list does not say that it cannot reach a program on this computer, since
+    # a Bot can be allowed to run commands there.
+    fields = function_body(
+        sheets, "export function appFormFields(form, known, update, prefix, short = false) {"
+    )
+    assert (
+        'entry.id === "grok-bot"\n'
+        "            ? `${entry.label} cannot be connected to this vault. It works on a computer "
+        "in the cloud, and ${PRODUCT} runs on your Mac only. Use Grok Build on this Mac instead.`\n"
+        "            : `${entry.label} cannot use this vault. It only calls servers that "
+    ) in fields
+    assert (
+        'option.id === "grok-bot"\n'
+        '                ? "Works on a computer in the cloud"\n'
+        "                : !option.local_program\n"
+        '                  ? "Cannot reach a program on this Mac"\n'
+    ) in fields
 
 
 def test_polish_keeps_a_word_of_one_letter_with_the_word_after_it() -> None:
@@ -2576,6 +2683,15 @@ def test_polish_keeps_a_word_of_one_letter_with_the_word_after_it() -> None:
     # Before the values are put in: a title or a name is never changed.
     assert text.index(bound) < text.index("return found.replace(")
     assert reader.count("bind(") == 2
+    # How long ago a tile's app last asked is a value, which `t` leaves alone: the tile binds
+    # its number to its unit itself, in either language.
+    tile = function_body(
+        without_comments(scripts()["home.js"]), "function tile(ctx, entry, apps) {"
+    )
+    assert (
+        'line = t("tile.status.seen", { ago: agoShort(app.last_seen.time, ctx.now)'
+        '.replace(/ /g, "\\u00a0") });'
+    ) in tile
     # The tables themselves hold ordinary spaces, so they can be read and compared as text.
     for name in TABLES:
         assert "\u00a0" not in scripts()[name], name

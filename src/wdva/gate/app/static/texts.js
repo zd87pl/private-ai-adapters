@@ -95,10 +95,11 @@ const bound = new Map();
 
 /**
  * A Polish text of the table as Polish is set: a word of one letter ("i", "w", "z",
- * "a", "o", "u") stays on the line of the word after it, and a number on the line of
- * its noun. The space between them becomes a no-break space (U+00A0). Only the text
- * of the table is changed, never a value that is put into it. Twice, because a word
- * that follows one that was just bound is not seen the first time.
+ * "a", "o", "u") stays on the line of the word after it, and the number that fills
+ * `{n}` on the line of its noun: no other number is bound. The space between them
+ * becomes a no-break space (U+00A0). Only the text of the table is changed, never a
+ * value that is put into it. Twice, because a word that follows one that was just
+ * bound is not seen the first time.
  */
 function bind(text) {
   let made = bound.get(text);

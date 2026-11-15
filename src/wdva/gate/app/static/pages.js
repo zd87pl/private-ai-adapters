@@ -252,16 +252,20 @@ export function rowSentence(item, passages = null) {
   return known ? t("row.read", { app, passage: known.passage, title: known.title }) : t("row.read.plain", { app });
 }
 
-/** Whether an entry is a search whose answer held no text of a document: only which passages hold the words. */
+/**
+ * Whether an entry is a search that quoted nothing: its record lists no stretch of a
+ * document. Its answer says which passages hold the words, and names the document
+ * where the group shows titles to apps.
+ */
 export function withoutDocumentText(item) {
   return item.tool === "search" && item.document_text === false;
 }
 
 /**
  * One row of what was given to apps or of what was stopped: its sentence, then how
- * much and when. How much is counted in the owner's own text: for a passage its own
- * length, which is the figure its card showed, and for a search whose answer held no
- * text of a document the words that say so. A press opens the details of its entry.
+ * much and when. How much: for a passage its own length, which is the figure its card
+ * showed; for a search the length of its whole answer, and for one that quoted
+ * nothing the words that say so. A press opens the details of its entry.
  */
 export function activityRow(ctx, item) {
   const selected = Boolean(ctx.panel && ctx.panel.seq === item.seq);

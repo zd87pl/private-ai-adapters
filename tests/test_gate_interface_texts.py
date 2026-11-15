@@ -368,7 +368,10 @@ SENT_ON = {"ask.sample.question", "connect.ask.start"}
 # 17; a name the fourth tile does not take, 10; which of three texts to paste, 7; what a
 # stopped row shows, 12), "Tell it: try again" in the line of a release that was not read yet
 # (4), and 20 where a sentence was made true or plain at the cost of words.
-WORDS_AT_MOST = 2874
+# Then 2 more, on purpose: the answer to a name the fourth tile refuses says the whole rule,
+# a letter first (14 words for 10), and a search that quoted nothing says that in its row and
+# in its panel (2 words for 3, and 7 for 8).
+WORDS_AT_MOST = 2876
 
 
 def unit_of(stem: str) -> list[str]:
@@ -565,6 +568,43 @@ SAID_OF_A_SETTINGS_FILE = {
     ),
 }
 
+# What a row and its panel say of a search whose record lists no stretch of a document, in
+# both languages. "No document text" and "This answer held no text of your documents." stood
+# over an answer that named a document by its title, where the group shows titles to apps.
+# What they say now is true of such an answer too: it quoted nothing.
+QUOTED_NOTHING = {
+    "row.status.notext": ("nothing quoted", "bez cytatów"),
+    "panel.say.1.notext": (
+        "This answer quoted nothing from your documents.",
+        "Ta odpowiedź nie cytowała niczego z Twoich dokumentów.",
+    ),
+}
+
+# The answer to a name the fourth tile does not take. The name is a letter, then lower-case
+# letters, digits and hyphens: "2do" and "-a" are made of nothing else, and were answered
+# "Use lower-case letters a to z, digits and hyphens".
+NAME_REFUSED = (
+    "Start with a letter a\u2013z, then lower-case letters, digits and hyphens, "
+    "for example my-cursor.",
+    "Zacznij od litery a\u2013z, a dalej używaj małych liter, cyfr i łączników, "
+    "na przykład my-cursor.",
+)
+
+# Polish sentences as a second reader of the Polish corrected them: a pronoun got its noun, a
+# negated sentence its "ani", and one that could be read two ways was turned round and got
+# back the "yet" its English has.
+POLISH_AS_CORRECTED = {
+    "custom.texts.say.1": "Użyj tego tekstu, o który prosi Twoja aplikacja.",
+    "connect.nofolder.say.2": (
+        "Strony internetowej ani aplikacji na telefon nie da się połączyć, "
+        "tylko program zainstalowany tutaj."
+    ),
+    "connect.refused.say.1.not_ready": (
+        "Aplikacje jeszcze się nie połączą: program {product} nie jest zainstalowany "
+        "we własnym środowisku albo powód podaje komunikat na stronie Start."
+    ),
+}
+
 # Keys the tests name that belong to a part of the page no stage has built yet. Each stage
 # took out what it built; the last part, Home with its tiles and sheets, is built, and the set
 # is empty.
@@ -666,6 +706,65 @@ def test_what_the_sheets_say_of_a_settings_file_in_three_cases() -> None:
     assert "MiB" not in str(read["en"]["connect.refused.say.1.busy"])
     assert "read back" in str(read["en"]["connect.status.unread"])
     assert str(read["en"]["connect.done.status.tried"]).startswith("Written and read back")
+
+
+def test_a_search_that_quoted_nothing_says_so_and_no_more() -> None:
+    read = tables()
+    for key, (english, polish) in QUOTED_NOTHING.items():
+        assert read["en"][key] == english, key
+        assert read["pl"][key] == polish, key
+    # Neither says that the answer held no text or nothing of the documents: it can hold a
+    # title, and it says which passages hold the words.
+    for language, table in read.items():
+        for key in QUOTED_NOTHING:
+            said = str(table[key]).lower()
+            for wider in ("no document text", "no text", "held", "bez tekstu", "nie zawiera"):
+                assert wider not in said, f"{TABLES[language]} {key}: {wider}"
+
+
+def test_a_name_the_fourth_tile_refuses_is_told_the_whole_rule() -> None:
+    read = tables()
+    assert (read["en"]["custom.error.name"], read["pl"]["custom.error.name"]) == NAME_REFUSED
+    # The rule is the page's own pattern, and the example in the answer is a name it takes.
+    connect = (STATIC / "connect.js").read_text(encoding="utf-8")
+    assert "const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;" in connect
+    for said in NAME_REFUSED:
+        example = said.rstrip(".").split()[-1]
+        assert re.fullmatch(r"[a-z][a-z0-9-]{0,31}", example), said
+    assert NAME_REFUSED[0].startswith("Start with a letter ")
+    assert NAME_REFUSED[1].startswith("Zacznij od litery ")
+
+
+def test_polish_sentences_read_as_their_second_reader_corrected_them() -> None:
+    read = tables()
+    polish = read["pl"]
+    for key, text in POLISH_AS_CORRECTED.items():
+        assert polish[key] == text, key
+        assert words(text) <= 20, key
+    # "czeka, aż" is the pair, and "wtedy" opens the sentence.
+    works = str(polish["how.works.4"])
+    assert works.startswith(
+        "Wtedy każdy fragment czeka, aż naciśniesz „Udostępnij raz”, "
+        "a najpierw widzisz jego dokładny tekst; "
+    )
+    assert "wtedy, aż" not in works
+    # On this page "wiersz" is the row one presses: what is added around a passage is not
+    # called so. Each form has its own form of "znak".
+    assert polish["panel.status.both"] == {
+        form: f"{{n}} {noun} z Twojego dokumentu, {{total}} razem z tym, co dopisuje {{product}}"
+        for form, noun in (
+            ("one", "znak"),
+            ("few", "znaki"),
+            ("many", "znaków"),
+            ("other", "znaku"),
+        )
+    }
+    assert "wiersz" not in "".join(texts(polish["panel.status.both"]))
+    # The same place in English, unchanged.
+    assert read["en"]["panel.status.both"] == {
+        "one": "{n} character of your document, {total} with the lines {product} adds",
+        "other": "{n} characters of your document, {total} with the lines {product} adds",
+    }
 
 
 # -- the Polish ---------------------------------------------------------------------
@@ -809,6 +908,34 @@ def test_what_is_said_about_other_programs() -> None:
     for key in ("how.connect.6", "connect.done.status.tried"):
         if built(key, read["en"]):
             assert key in read["pl"]
+
+
+# What "How it works" says of the products that cannot be connected. By its maker's pages
+# Grok Bot works on a computer in the cloud, and they place that computer in the cloud of
+# another company than the one this project names for Grok: the sentence says "in the cloud"
+# and whose cloud it is of none of the four.
+IN_THE_CLOUD = {
+    "en": (
+        "Claude and ChatGPT on the web or a phone, Grok on the web or a phone and Grok Bot "
+        "work in the cloud and cannot be connected to a program on this computer."
+    ),
+    "pl": (
+        "Claude i ChatGPT w przeglądarce lub na telefonie, Grok w przeglądarce lub na telefonie "
+        "i Grok Bot działają w chmurze i nie da się ich połączyć z programem na tym komputerze."
+    ),
+}
+
+
+def test_no_text_says_whose_cloud_grok_bot_works_in() -> None:
+    read = tables()
+    for language, table in read.items():
+        assert table["how.connect.8"] == IN_THE_CLOUD[language], language
+        named = [key for key, value in table.items() if "Grok Bot" in "".join(texts(value))]
+        assert named == ["home.connect.say.1", "how.connect.8"], language
+        for key in named:
+            said = str(table[key])
+            for whose in ("makers\u2019 cloud", "maker\u2019s", "xAI", "chmurach", "producent"):
+                assert whose not in said, f"{TABLES[language]} {key}: {whose}"
 
 
 # Claims the product cannot back, in Polish.

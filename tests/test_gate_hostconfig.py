@@ -49,8 +49,13 @@ LOCAL = [
     "generic",
 ]
 WEB_ONLY = ["chatgpt-web", "claude-web", "grok-web", "grok-bot"]
-# The day each form was read on its maker's pages. Grok Build was read later than the rest.
-READ = {**dict.fromkeys(LOCAL + WEB_ONLY, "2026-11-12"), "grok-build": "2026-11-14"}
+# The day each form was read on its maker's pages. Grok Build was read later than the rest,
+# and the page about Grok Bot again when what is said of it was corrected.
+READ = {
+    **dict.fromkeys(LOCAL + WEB_ONLY, "2026-11-12"),
+    "grok-build": "2026-11-14",
+    "grok-bot": "2026-11-15",
+}
 
 # A store path with everything a configuration format has to escape.
 AWKWARD = "/srv/my vault/café \"q\" 'a' \\b $HOME `id` #x {y} 日本\ttab"
@@ -907,9 +912,13 @@ def test_web_only_products_get_an_explanation_and_no_configuration(host: str) ->
     explanation = config.explanation
     assert explanation is not None
     assert "\n" not in explanation
-    assert explanation.startswith(
-        f"{entry.label} calls only servers that {entry.destination}'s cloud"
+    # Grok Bot is no web chat and has a first sentence of its own, pinned in the next test.
+    first = (
+        "Grok Bot works on a computer in the cloud"
+        if host == "grok-bot"
+        else f"{entry.label} calls only servers that {entry.destination}'s cloud"
     )
+    assert explanation.startswith(first)
     assert "on this computer instead" in explanation
     # "Cannot be connected", never "cannot reach": by xAI's own page a Bot can be allowed to
     # run commands on the owner's computer, and such a Bot reaches what the account reaches.
@@ -921,7 +930,8 @@ def test_web_only_products_get_an_explanation_and_no_configuration(host: str) ->
     )
     assert (another_way in explanation) is (host == "grok-bot")
     assert "  " not in explanation
-    assert f"goes to {entry.destination}" in explanation
+    receiver = "the service" if host == "grok-bot" else entry.destination
+    assert f"Text you paste goes to {receiver} like any other message; " in explanation
     assert "neither limits nor records" in explanation
 
     text = render_text(host, client="my-app", store=AWKWARD)
@@ -930,7 +940,60 @@ def test_web_only_products_get_an_explanation_and_no_configuration(host: str) ->
     # No command is offered that does not exist.
     assert "wdva gate" not in text
     assert entry.source in text
-    assert "2026-11-12" in text
+    assert f"read on {READ[host]}." in text.replace("\n", " ")
+
+
+def test_what_is_said_of_grok_bot_names_no_company_and_no_cloud_of_one() -> None:
+    # Its maker's pages, as read on 2026-11-15: a Bot works on a computer in the cloud, which
+    # they place in another company's cloud than the one this project names for Grok; requests
+    # go to that company's servers and prompts to model providers; and a Bot adds a server by
+    # URL or by a command that runs on its own computer. So the paragraph does not say whose
+    # cloud it is, not that a Bot calls only servers some cloud can reach, and not who gets
+    # what is pasted.
+    config = render("grok-bot", client="my-app", store=PLAIN)
+    assert config.explanation == (
+        "Grok Bot works on a computer in the cloud and starts its tools there, according to "
+        "its maker's documentation. It works on a computer in the cloud, not on this one, so "
+        "it cannot be connected to this vault and there is nothing to configure. By the same "
+        "documentation a Bot can be allowed to run commands on this computer; such a Bot is a "
+        "program running as you and needs no entry. Use Grok Build on this computer instead: "
+        'the tile "Grok" on Home connects it, or copy the text you want it to see into the '
+        "conversation yourself. Text you paste goes to the service like any other message; "
+        f"{PRODUCT} neither limits nor records it."
+    )
+    assert config.notes == (
+        "Source: https://docs.x.ai/grok-bot/computer-and-apps, read on 2026-11-15.",
+    )
+    printed = " ".join(render_text("grok-bot", client="my-app", store=PLAIN).split())
+    for untrue in ("xAI", "'s cloud", "calls only servers", "can reach over the internet"):
+        assert untrue not in printed, untrue
+    # The three web chats keep their sentence, each with its own provider.
+    for host in ("chatgpt-web", "claude-web", "grok-web"):
+        other = render(host, client="my-app", store=PLAIN).explanation
+        assert other is not None
+        assert f"{known_host(host).destination}'s cloud can reach over the internet" in other
+        assert "works on a computer in the cloud" not in other
+        assert "the service" not in other
+    # The documents: no sentence that names Grok Bot says whose cloud it works in, unless it
+    # says so of the company its maker's pages name, and none says that what it gets goes to
+    # the maker.
+    root = Path(__file__).resolve().parent.parent
+    pages = ("README.md", "CHANGELOG.md", "docs/GATE.md", "docs/THREAT_MODEL.md")
+    said = 0
+    for page in pages:
+        whole = " ".join((root / page).read_text(encoding="utf-8").split())
+        for sentence in re.split(r"(?<=[.?]) ", whole):
+            if "Grok Bot" not in sentence:
+                continue
+            said += 1
+            for untrue in ("xAI's cloud", "makers' cloud", "maker's cloud", "to xAI"):
+                assert untrue not in sentence, f"{page}: {sentence}"
+    assert said >= 12
+    guide = " ".join((root / "docs" / "GATE.md").read_text(encoding="utf-8").split())
+    assert (
+        "and Grok Bot works on a computer in the cloud (by its maker's pages, in Cursor's cloud)."
+        in guide
+    )
 
 
 # -- names -----------------------------------------------------------------------

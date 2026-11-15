@@ -47,9 +47,9 @@ changes only when the bytes on disk do.
   with one kind of access, "Ask me each time", and disconnects it. Documents
   adds and removes documents and says, under what you added, which apps can
   ask for it. Activity lists every answer an app was given and, under
-  "Stopped", the calls that were stopped. A row counts in your own text: a
-  passage by its own length, which is the figure its card showed, and a
-  search whose answer held no text of a document says "no document text". Settings keeps the language, the page to open
+  "Stopped", the calls that were stopped. A row says how much: a passage is
+  counted by its own length, which is the figure its card showed, a search
+  by its whole answer, and a search that quoted nothing says "nothing quoted". Settings keeps the language, the page to open
   on and the command that starts the app again, and leads to six pages with
   every setting, Overview, Activity, Approvals, Documents, Apps and Vault,
   which are in English: "Can read", limits, pauses, a second group of
