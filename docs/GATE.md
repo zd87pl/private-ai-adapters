@@ -437,7 +437,8 @@ can ask for it yet." in a vault without an app, and later, for example, "Apps th
 it from now on: claude-desktop." It names the apps by the names they have in the vault, and not
 what each may do with the document: that is under Settings, on the page Apps. Adding a document
 never asks for the passphrase, so this is said where documents are added, here and on the page
-Documents. And where the file is now: "A sealed copy is in the vault; your own file stays where
+Documents. In a vault with several groups there is one such line for each group that got a
+file, and it begins with the group's name. And where the file is now: "A sealed copy is in the vault; your own file stays where
 it was, not encrypted."
 Then the two buttons give way to a line that counts, "1 document", and the box of the second
 card is ready for a question. Further documents are added on the page Documents.

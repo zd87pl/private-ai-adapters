@@ -953,11 +953,11 @@ def test_what_is_said_of_grok_bot_names_no_company_and_no_cloud_of_one() -> None
     config = render("grok-bot", client="my-app", store=PLAIN)
     assert config.explanation == (
         "Grok Bot works on a computer in the cloud and starts its tools there, according to "
-        "its maker's documentation. It works on a computer in the cloud, not on this one, so "
-        "it cannot be connected to this vault and there is nothing to configure. By the same "
-        "documentation a Bot can be allowed to run commands on this computer; such a Bot is a "
-        "program running as you and needs no entry. Use Grok Build on this computer instead: "
-        'the tile "Grok" on Home connects it, or copy the text you want it to see into the '
+        "its maker's documentation. That computer is not this one, so it cannot be connected "
+        "to this vault and there is nothing to configure. By the same documentation a Bot can "
+        "be allowed to run commands on this computer; such a Bot is a program running as you "
+        "and needs no entry. Use Grok Build on this computer instead: the tile "
+        '"Grok" on Home connects it, or copy the text you want it to see into the '
         "conversation yourself. Text you paste goes to the service like any other message; "
         f"{PRODUCT} neither limits nor records it."
     )

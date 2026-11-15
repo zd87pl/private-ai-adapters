@@ -1602,6 +1602,12 @@ def test_after_a_sealed_file_the_page_says_which_apps_can_ask_for_it() -> None:
         'names.length ? t("docs.result.who", { apps: names }) : t("docs.result.nobody")'
     ) in line
     assert ".map((app) => app.name);" in line
+    # A vault with several groups gets one line for each group that got a file, and on Home
+    # they stand together: each begins with the name of its group, as the line of a file does.
+    assert (
+        "const several = Boolean(ctx.data.documents) && ctx.data.documents.collections.length > 1;"
+    ) in line
+    assert 'several ? [el("span", { class: "upload-group" }, collection), " "] : null,' in line
     assert '["approve", "read"].includes(app.grants[collection])' in line
     assert ".label" not in line
     # The page Documents and a step of setting up ask for the line; the pages of Pro are as

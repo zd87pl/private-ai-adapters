@@ -20,8 +20,8 @@ has no key and asks for none.
 
 The form each application expects was taken from that application's
 documentation on the day recorded with it. None of them was tried with the
-application itself, and the text printed says so. Products that run in a
-vendor's cloud cannot start a program on this computer; for those there is an
+application itself, and the text printed says so. Products that run in the
+cloud cannot be connected to a store on this computer; for those there is an
 explanation instead of a configuration.
 """
 
@@ -269,7 +269,7 @@ _WHY_NOT = {
     "chatgpt-web": "It cannot start a program on this computer",
     "claude-web": "It cannot start a program on this computer",
     "grok-web": "It cannot start a program on this computer",
-    "grok-bot": "It works on a computer in the cloud, not on this one",
+    "grok-bot": "That computer is not this one",
 }
 _REACHES_ANOTHER_WAY = {
     "grok-bot": (

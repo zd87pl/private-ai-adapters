@@ -223,10 +223,17 @@ export function whoLine(ctx, collection) {
   if (!data) return null;
   // By the two words of an access and nothing else: a collection may be named like something every object has.
   const names = data.apps.filter((app) => ["approve", "read"].includes(app.grants[collection])).map((app) => app.name);
+  // In a vault with several groups the line names its group: on Home the lines of all groups stand together.
+  const several = Boolean(ctx.data.documents) && ctx.data.documents.collections.length > 1;
   return el(
     "li",
     { class: "upload-said", key: `who-${collection}` },
-    el("p", { class: "upload-who", role: "status" }, names.length ? t("docs.result.who", { apps: names }) : t("docs.result.nobody")),
+    el(
+      "p",
+      { class: "upload-who", role: "status" },
+      several ? [el("span", { class: "upload-group" }, collection), " "] : null,
+      names.length ? t("docs.result.who", { apps: names }) : t("docs.result.nobody"),
+    ),
   );
 }
 
