@@ -260,8 +260,13 @@ run(async () => {
     // In a demo the record grows by itself: the played apps call all the time. So the head of the record says
     // nothing here (journey_home.js compares it in a vault where nobody else calls). What can be seen is that
     // every entry since the first question is a call of a played app, and that nothing waits or was released for the owner.
+    // The demo's script also makes one call under a name that is not registered, on purpose (demo.py, the last
+    // thing it plays), at a moment that differs from run to run; the record lists it as a refusal under
+    // "(not registered)". When it falls between the question and this look it is a played app's call too, once.
     const since = (await activity()).filter((item) => !seen.has(item.seq));
-    check(since.every((item) => names.includes(item.app) && ['release', 'question', 'refusal'].includes(item.kind)), `since the question the record gained: ${JSON.stringify(since.filter((item) => !names.includes(item.app)).map((item) => [item.kind, item.app]))}`);
+    const stranger = (item) => item.kind === 'refusal' && item.app === '(not registered)';
+    const foreign = since.filter((item) => !stranger(item) && !(names.includes(item.app) && ['release', 'question', 'refusal'].includes(item.kind)));
+    check(foreign.length === 0 && since.filter(stranger).length <= 1, `since the question the record gained: ${JSON.stringify(since.filter((item) => stranger(item) || foreign.includes(item)).map((item) => [item.kind, item.app]))}`);
     check((await approvals()).waiting.length === 0 && (await approvals()).granted.length === 0, 'a question in the box made a passage wait, or released one');
     // The played app asks again, on a press: while its passage waits, the answer of the box has no buttons, and says why.
     await page.locator('#trial-again').click();
